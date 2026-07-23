@@ -62,3 +62,66 @@ def normalize_rows(rows: list[list[str]], mapping: dict) -> list[dict]:
             record[field] = row[i] if i < len(row) else ""
         out.append(record)
     return out
+
+
+from collections import Counter
+from dataclasses import dataclass, field
+
+from sqlalchemy import select
+
+from sdt_bot.core.models import Role, User
+
+SHEET_OWNED = (
+    "name", "handle_sheet", "gmail", "github", "codeforces", "primary_cohort",
+    "past_cohorts", "role",
+)
+
+
+def upsert_users(session, records: list[dict], key: str = "matriculation") -> None:
+    for record in records:
+        key_value = record.get(key)
+        if not key_value:
+            continue
+        user = session.scalar(
+            select(User).where(getattr(User, key) == key_value)
+        )
+        if user is None:
+            user = User(**{key: key_value})
+            session.add(user)
+        for field_name in SHEET_OWNED:
+            if field_name in record:
+                value = record[field_name]
+                if field_name == "role":
+                    if not value:
+                        continue  # blank role -> leave default/existing
+                    value = Role(value)
+                setattr(user, field_name, value)
+    session.commit()
+
+
+@dataclass
+class ReconcileReport:
+    drift: list = field(default_factory=list)
+    unmatched: list = field(default_factory=list)
+    duplicates: list = field(default_factory=list)
+
+
+def reconcile(session, records: list[dict], key: str = "matriculation") -> ReconcileReport:
+    report = ReconcileReport()
+    keys = [r.get(key) for r in records if r.get(key)]
+    report.duplicates = [k for k, n in Counter(keys).items() if n > 1]
+    for record in records:
+        key_value = record.get(key)
+        if not key_value:
+            continue
+        user = session.scalar(
+            select(User).where(getattr(User, key) == key_value)
+        )
+        if user is None:
+            report.unmatched.append(key_value)
+            continue
+        observed = user.handle_observed
+        sheet_handle = record.get("handle_sheet")
+        if observed and sheet_handle and observed != sheet_handle:
+            report.drift.append(key_value)
+    return report
