@@ -1,3 +1,5 @@
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
 from sdt_bot.core.models import User
 from sdt_bot.features.directory.visibility import visible_fields
 
@@ -27,3 +29,14 @@ def render_profile(viewer: User, target: User) -> str:
             value = value.value
         lines.append(f"{_LABELS[key]}: {value}")
     return "\n".join(lines)
+
+
+def admin_keyboard(target: User) -> InlineKeyboardMarkup | None:
+    if not target.matriculation:
+        return None
+    m = target.matriculation
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Issue link", callback_data=f"dir:link:{m}"),
+        InlineKeyboardButton(text="Reset telegram_id",
+                             callback_data=f"dir:reset:{m}"),
+    ]])
