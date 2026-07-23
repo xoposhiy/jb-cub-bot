@@ -58,3 +58,12 @@ def apply_bootstrap(principal, telegram_id, username, bootstrap_ids):
         )
     principal.role = Role.ADMIN
     return principal
+
+
+def bind_by_token(session, telegram_id: int, username: str | None, user: User) -> User:
+    user.telegram_id = telegram_id
+    if username:
+        user.handle_observed = username
+    user.link_nonce = None  # single-use
+    session.commit()
+    return user
