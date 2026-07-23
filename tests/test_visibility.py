@@ -67,3 +67,16 @@ def test_student_never_sees_admin_only():
     viewer = _u(role=Role.STUDENT, primary_cohort="2024")
     target = _u(role=Role.STUDENT, primary_cohort="2024", matriculation="30000001")
     assert "matriculation" not in visible_fields(viewer, target)
+
+
+def test_teacher_never_sees_admin_only():
+    viewer = _u(role=Role.TEACHER, primary_cohort="9999")
+    target = _u(role=Role.STUDENT, primary_cohort="2021", matriculation="30000001")
+    assert "matriculation" not in visible_fields(viewer, target)
+
+
+def test_admin_overrides_nobody_configurable():
+    viewer = _u(role=Role.ADMIN)
+    target = _u(role=Role.STUDENT, primary_cohort="2021", gmail="t@gmail.com",
+                visibility={"gmail": "nobody"})
+    assert visible_fields(viewer, target)["gmail"] == "t@gmail.com"
