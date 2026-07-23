@@ -78,6 +78,10 @@ async def test_cb_issue_link_denied_for_non_admin(session):
     cb.message.answer.assert_not_awaited()
     cb.bot.me.assert_not_awaited()
 
+    cb2 = SimpleNamespace(data="dir:link:30000001", answer=AsyncMock())
+    await cb_issue_link(cb2, principal=None, session=session)
+    cb2.answer.assert_awaited_once_with("Admins only.", show_alert=True)
+
 
 async def test_cb_issue_link_not_found(session):
     admin = User(name="Admin", role=Role.ADMIN, telegram_id=999)
