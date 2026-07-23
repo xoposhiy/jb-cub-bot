@@ -66,7 +66,11 @@ async def cb_issue_link(cb: CallbackQuery, principal: User, session):
         await cb.answer("Admins only.", show_alert=True)
         return
     matriculation = cb.data.split(":", 2)[2]
-    token = issue_link_token(session, matriculation, get_settings().link_secret)
+    try:
+        token = issue_link_token(session, matriculation, get_settings().link_secret)
+    except ValueError:
+        await cb.answer("Not found.", show_alert=True)
+        return
     bot_user = await cb.bot.me()
     await cb.message.answer(
         f"One-time link:\nhttps://t.me/{bot_user.username}?start={token}"
