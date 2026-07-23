@@ -124,9 +124,8 @@ async def cmd_sync(message: Message, principal: User, session):
         return
     settings = get_settings()
     sa = settings.google_service_account_file
-    lines = ["Sync done."]
 
-    # 1. Read the Cohorts index tab and import each linked cohort data sheet.
+    # --- Parse phase: fetch + normalize everything; write nothing yet. ---
     try:
         index_rows = fetch_rows(settings.rights_sheet_id, sa,
                                 f"{settings.cohorts_tab}!A:Z")
@@ -135,29 +134,20 @@ async def cmd_sync(message: Message, principal: User, session):
         await message.answer(f"Sync aborted (Cohorts tab): {exc}")
         return
 
+    parsed_cohorts = []  # (cohort_name, records)
     for entry in cohorts:
         sheet_id = sheets.extract_sheet_id(entry["link"])
         try:
             rows = fetch_rows(sheet_id, sa)
-            mapping = sheets.load_mapping(
-                f"{settings.mapping_dir}/{entry['mapping']}"
-            )
+            mapping = sheets.load_mapping(f"{settings.mapping_dir}/{entry['mapping']}")
             records = sheets.normalize_rows(rows, mapping)
         except (sheets.MappingError, FileNotFoundError) as exc:
-            await message.answer(
-                f"Sync aborted (cohort {entry['cohort']}): {exc}"
-            )
+            await message.answer(f"Sync aborted (cohort {entry['cohort']}): {exc}")
             return
         for record in records:
-            record["primary_cohort"] = entry["cohort"]  # cohorts tab is authoritative
-        sheets.upsert_users(session, records)
-        rep = sheets.reconcile(session, records)
-        lines.append(
-            f"{entry['cohort']}: {len(records)} rows, drift={rep.drift or '-'}, "
-            f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}"
-        )
+            record["primary_cohort"] = entry["cohort"]
+        parsed_cohorts.append((entry["cohort"], records))
 
-    # 2. Read the Rights tab and apply role grants to existing users.
     try:
         rights_rows = fetch_rows(settings.rights_sheet_id, sa,
                                  f"{settings.rights_tab}!A:Z")
@@ -168,11 +158,16 @@ async def cmd_sync(message: Message, principal: User, session):
     except (sheets.MappingError, FileNotFoundError) as exc:
         await message.answer(f"Sync aborted (Rights tab): {exc}")
         return
+
+    # --- Write phase: everything parsed OK, now upsert + reconcile. ---
+    lines = ["Sync done."]
+    for cohort_name, records in parsed_cohorts:
+        sheets.upsert_users(session, records)
+        rep = sheets.reconcile(session, records)
+        lines.append(f"{cohort_name}: {len(records)} rows, drift={rep.drift or '-'}, "
+                     f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}")
     sheets.upsert_users(session, rights_records)
     rep = sheets.reconcile(session, rights_records)
-    lines.append(
-        f"rights: {len(rights_records)} rows, drift={rep.drift or '-'}, "
-        f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}"
-    )
-
+    lines.append(f"rights: {len(rights_records)} rows, drift={rep.drift or '-'}, "
+                 f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}")
     await message.answer("\n".join(lines))
