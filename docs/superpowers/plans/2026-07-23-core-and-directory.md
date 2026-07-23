@@ -16,7 +16,12 @@
 - Google Sheets access via **service account + Sheets API**; the bot **never writes to a sheet**.
 - **No self-registration.** Admins maintain all roster data.
 - **One role per user**; roles are `Admin` / `Student` now, `Teacher` reserved.
-- `matriculation` is the only stable key for students; staff use a stable key (email/id) from the rights sheet.
+- `matriculation` is the only stable key for students. Role grants come from the
+  `Rights` tab (keyed by matriculation). First/standalone admins are bootstrapped
+  via `BOOTSTRAP_ADMIN_IDS` (Telegram ids always treated as `Admin`).
+- The `rights_sheet_id` spreadsheet holds a `Cohorts` tab (cohort → data-sheet
+  link) and a `Rights` tab. `/sync` imports every linked cohort sheet, then the
+  `Rights` tab; per-cohort formats are normalized by per-cohort YAML mappings.
 - **Field ownership:** sheet-owned fields flow one-way sheet→bot; bot-owned fields (`telegram_id`, `handle_observed`, `status_line`, `visibility`) survive re-import (upsert keyed by matriculation/staff key).
 - **No audit logs, no binding revoke lists, no snapshots/rollback.**
 - Secrets via `.env` / environment.
@@ -75,8 +80,11 @@ tests/
 **Interfaces:**
 - Produces: `sdt_bot.core.config.Settings` (pydantic-settings) with fields
   `bot_token: str`, `database_url: str`, `google_service_account_file: str`,
-  `rights_sheet_id: str`, `mapping_dir: str`, `link_secret: str`,
-  `link_ttl_seconds: int`. Produces `get_settings() -> Settings`.
+  `rights_sheet_id: str` (the spreadsheet holding the `Cohorts` and `Rights`
+  tabs), `mapping_dir: str`, `link_secret: str`, `link_ttl_seconds: int`,
+  `bootstrap_admin_ids: str` (comma-separated Telegram ids), `cohorts_tab: str`,
+  `rights_tab: str`, `rights_mapping: str`, plus a property
+  `bootstrap_admin_id_set -> set[int]`. Produces `get_settings() -> Settings`.
 
 - [ ] **Step 1: Initialize project, git, and dependencies**
 
@@ -95,10 +103,15 @@ Expected: `pyproject.toml`, `uv.lock`, and `src/sdt_bot/` created; dependencies 
 Add to `pyproject.toml`:
 ```toml
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 ```
+
+The `.` on `pythonpath` plus a `tests` package (next step) lets Task 6's loader
+test import a fixture package via `import tests.fixtures_features`.
+
+Create an empty `tests/__init__.py` (makes `tests` an importable package).
 
 Create `.gitignore`:
 ```
@@ -127,6 +140,27 @@ def test_settings_load_from_env(monkeypatch):
     assert s.link_secret == "s3cret"
     assert s.database_url == "sqlite:///sdt_bot.db"  # default
     assert s.link_ttl_seconds == 86400  # default
+    assert s.cohorts_tab == "Cohorts"  # default
+    assert s.rights_tab == "Rights"  # default
+
+
+def test_bootstrap_admin_id_set_parsed(monkeypatch):
+    monkeypatch.setenv("BOT_TOKEN", "123:abc")
+    monkeypatch.setenv("LINK_SECRET", "s3cret")
+    monkeypatch.setenv("RIGHTS_SHEET_ID", "sheet-xyz")
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_FILE", "sa.json")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_IDS", "111, 222 ,333")
+    s = Settings()
+    assert s.bootstrap_admin_id_set == {111, 222, 333}
+
+
+def test_bootstrap_admin_id_set_empty_by_default(monkeypatch):
+    monkeypatch.setenv("BOT_TOKEN", "123:abc")
+    monkeypatch.setenv("LINK_SECRET", "s3cret")
+    monkeypatch.setenv("RIGHTS_SHEET_ID", "sheet-xyz")
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_FILE", "sa.json")
+    monkeypatch.delenv("BOOTSTRAP_ADMIN_IDS", raising=False)
+    assert Settings().bootstrap_admin_id_set == set()
 
 
 def test_settings_missing_required_raises(monkeypatch):
@@ -157,11 +191,20 @@ class Settings(BaseSettings):
 
     bot_token: str
     link_secret: str
-    rights_sheet_id: str
+    rights_sheet_id: str  # spreadsheet holding the Cohorts and Rights tabs
     google_service_account_file: str
     database_url: str = "sqlite:///sdt_bot.db"
     mapping_dir: str = "mapping"
     link_ttl_seconds: int = 86400
+    # comma-separated Telegram ids that are always treated as Admin (bootstrap).
+    bootstrap_admin_ids: str = ""
+    cohorts_tab: str = "Cohorts"
+    rights_tab: str = "Rights"
+    rights_mapping: str = "rights.yaml"
+
+    @property
+    def bootstrap_admin_id_set(self) -> set[int]:
+        return {int(x) for x in self.bootstrap_admin_ids.split(",") if x.strip()}
 
 
 @lru_cache
@@ -185,11 +228,15 @@ Create `.env.example`:
 ```
 BOT_TOKEN=123456:replace-me
 LINK_SECRET=generate-a-long-random-string
-RIGHTS_SHEET_ID=google-sheet-id-of-rights-sheet
+RIGHTS_SHEET_ID=spreadsheet-id-holding-Cohorts-and-Rights-tabs
 GOOGLE_SERVICE_ACCOUNT_FILE=service-account.json
 DATABASE_URL=sqlite:///sdt_bot.db
 MAPPING_DIR=mapping
 LINK_TTL_SECONDS=86400
+BOOTSTRAP_ADMIN_IDS=111111111,222222222
+COHORTS_TAB=Cohorts
+RIGHTS_TAB=Rights
+RIGHTS_MAPPING=rights.yaml
 ```
 
 Note: `sdt_bot.main` does not exist yet — `__main__.py` is wired now but only runs after Task 14. Tests do not import it.
@@ -197,7 +244,7 @@ Note: `sdt_bot.main` does not exist yet — `__main__.py` is wired now but only 
 - [ ] **Step 7: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_config.py -v`
-Expected: PASS (2 passed)
+Expected: PASS (4 passed)
 
 - [ ] **Step 8: Commit**
 
@@ -405,12 +452,16 @@ git commit -m "feat: add User model, db session, and initial migration"
 - Create: `tests/test_identity.py`
 
 **Interfaces:**
-- Consumes: `User` from `sdt_bot.core.models`.
+- Consumes: `User`, `Role` from `sdt_bot.core.models`.
 - Produces:
   - `find_by_telegram_id(session, telegram_id: int) -> User | None`
   - `try_claim_by_handle(session, telegram_id: int, username: str | None) -> User | None`
   - `resolve(session, telegram_id: int, username: str | None) -> User | None`
   - `reset_binding(session, matriculation: str) -> bool`
+  - `apply_bootstrap(principal: User | None, telegram_id: int, username: str | None, bootstrap_ids: set[int]) -> User | None`
+    — if `telegram_id` is in `bootstrap_ids`, guarantees an `Admin` principal
+    (elevating an existing one in-memory, or returning a transient unsaved
+    `User(role=Admin)` when none exists); otherwise returns `principal` unchanged.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -457,6 +508,25 @@ def test_reset_binding(session):
     assert identity.reset_binding(session, "30000001") is True
     session.refresh(u)
     assert u.telegram_id is None
+
+
+def test_bootstrap_creates_transient_admin_when_unknown():
+    from sdt_bot.core.models import Role
+    p = identity.apply_bootstrap(None, 999, "adm", {999})
+    assert p is not None
+    assert p.role is Role.ADMIN
+    assert p.telegram_id == 999
+
+
+def test_bootstrap_elevates_existing_principal():
+    from sdt_bot.core.models import Role
+    u = User(name="X", role=Role.STUDENT)
+    p = identity.apply_bootstrap(u, 999, "adm", {999})
+    assert p.role is Role.ADMIN
+
+
+def test_bootstrap_noop_for_non_admin_id():
+    assert identity.apply_bootstrap(None, 1, "x", {999}) is None
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -470,7 +540,7 @@ Create `src/sdt_bot/core/identity.py`:
 ```python
 from sqlalchemy import select
 
-from sdt_bot.core.models import User
+from sdt_bot.core.models import Role, User
 
 
 def find_by_telegram_id(session, telegram_id: int) -> User | None:
@@ -513,12 +583,27 @@ def reset_binding(session, matriculation: str) -> bool:
     user.telegram_id = None
     session.commit()
     return True
+
+
+def apply_bootstrap(principal, telegram_id, username, bootstrap_ids):
+    if telegram_id not in bootstrap_ids:
+        return principal
+    if principal is None:
+        # Transient (unsaved) admin so /sync works on an empty DB.
+        return User(
+            role=Role.ADMIN,
+            name="(bootstrap admin)",
+            telegram_id=telegram_id,
+            handle_observed=username,
+        )
+    principal.role = Role.ADMIN
+    return principal
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_identity.py -v`
-Expected: PASS (5 passed)
+Expected: PASS (8 passed)
 
 - [ ] **Step 5: Commit**
 
@@ -678,10 +763,12 @@ git commit -m "feat: signed single-use one-time link tokens for binding"
 - Create: `tests/test_middleware.py`
 
 **Interfaces:**
-- Consumes: `identity.resolve`, `Role`, a session factory.
+- Consumes: `identity.resolve`, `identity.apply_bootstrap`, `Role`, a session factory.
 - Produces:
-  - `PrincipalMiddleware(session_factory)` — aiogram `BaseMiddleware`; injects
-    `data["principal"]` (a `User` or `None`) and `data["session"]`.
+  - `PrincipalMiddleware(session_factory, bootstrap_ids: set[int] | None = None)` —
+    aiogram `BaseMiddleware`; injects `data["principal"]` (a `User` or `None`) and
+    `data["session"]`. Applies `apply_bootstrap` so configured bootstrap ids
+    resolve to an `Admin` principal.
   - `HasRole(min_role: Role)` — a callable filter returning `bool`, using the
     ordering `STUDENT < TEACHER < ADMIN`.
   - `role_rank(role: Role) -> int`.
@@ -723,6 +810,19 @@ async def test_middleware_injects_principal(session):
     event = SimpleNamespace(from_user=SimpleNamespace(id=777, username="ivan"))
     await mw(handler, event, {})
     assert captured["principal"].telegram_id == 777
+
+
+async def test_middleware_bootstrap_admin(session):
+    mw = PrincipalMiddleware(session_factory=lambda: session,
+                             bootstrap_ids={4242})
+    captured = {}
+
+    async def handler(event, data):
+        captured["principal"] = data["principal"]
+
+    event = SimpleNamespace(from_user=SimpleNamespace(id=4242, username="boss"))
+    await mw(handler, event, {})
+    assert captured["principal"].role is Role.ADMIN
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -757,15 +857,20 @@ class HasRole:
 
 
 class PrincipalMiddleware(BaseMiddleware):
-    def __init__(self, session_factory):
+    def __init__(self, session_factory, bootstrap_ids: set | None = None):
         self.session_factory = session_factory
+        self.bootstrap_ids = bootstrap_ids or set()
 
     async def __call__(self, handler, event, data):
         session = self.session_factory()
         data["session"] = session
         user = getattr(event, "from_user", None)
         if user is not None:
-            data["principal"] = identity.resolve(session, user.id, user.username)
+            principal = identity.resolve(session, user.id, user.username)
+            principal = identity.apply_bootstrap(
+                principal, user.id, user.username, self.bootstrap_ids
+            )
+            data["principal"] = principal
         else:
             data["principal"] = None
         return await handler(event, data)
@@ -774,7 +879,7 @@ class PrincipalMiddleware(BaseMiddleware):
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_middleware.py -v`
-Expected: PASS (4 passed)
+Expected: PASS (5 passed)
 
 - [ ] **Step 5: Commit**
 
@@ -1024,6 +1129,12 @@ git commit -m "feat: NL intent router with regex matchers"
   - `normalize_rows(rows: list[list[str]], mapping: dict) -> list[dict]` — the
     first row is the header; each data row becomes `{canonical_field: value}`.
     Raises `MappingError` if any mapped column header is absent.
+  - `extract_sheet_id(link: str) -> str` — pulls the spreadsheet id out of a
+    Google Sheets URL; returns the input stripped if it is already a bare id.
+  - `parse_cohort_index(rows: list[list[str]]) -> list[dict]` — parses the
+    `Cohorts` tab (headers `Cohort`, `Link`, optional `Mapping`) into
+    `[{"cohort", "link", "mapping"}]`; `mapping` defaults to `"{cohort}.yaml"`.
+    Raises `MappingError` if `Cohort` or `Link` columns are missing.
   - `class MappingError(Exception)`.
 
 - [ ] **Step 1: Create an example mapping file**
@@ -1072,6 +1183,39 @@ def test_normalize_rows_missing_column_raises():
     mapping = {"matriculation": "Matr", "name": "Name"}
     with pytest.raises(MappingError):
         normalize_rows(rows, mapping)
+
+
+def test_extract_sheet_id_from_url():
+    from sdt_bot.core.sheets import extract_sheet_id
+    url = "https://docs.google.com/spreadsheets/d/1AbC-dEf_123/edit#gid=0"
+    assert extract_sheet_id(url) == "1AbC-dEf_123"
+
+
+def test_extract_sheet_id_passthrough_bare_id():
+    from sdt_bot.core.sheets import extract_sheet_id
+    assert extract_sheet_id("  1AbC-dEf_123 ") == "1AbC-dEf_123"
+
+
+def test_parse_cohort_index():
+    from sdt_bot.core.sheets import parse_cohort_index
+    rows = [
+        ["Cohort", "Link", "Mapping"],
+        ["2024", "https://docs.google.com/spreadsheets/d/AAA/edit", "cohort-2024.yaml"],
+        ["2023", "BBB", ""],  # no mapping -> default
+        ["", "ignored", ""],  # blank cohort skipped
+    ]
+    out = parse_cohort_index(rows)
+    assert out == [
+        {"cohort": "2024", "link": "https://docs.google.com/spreadsheets/d/AAA/edit",
+         "mapping": "cohort-2024.yaml"},
+        {"cohort": "2023", "link": "BBB", "mapping": "2023.yaml"},
+    ]
+
+
+def test_parse_cohort_index_missing_columns_raises():
+    from sdt_bot.core.sheets import parse_cohort_index
+    with pytest.raises(MappingError):
+        parse_cohort_index([["Cohort"], ["2024"]])  # no Link column
 ```
 
 - [ ] **Step 3: Run tests to verify they fail**
@@ -1083,7 +1227,11 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'sdt_bot.core.sheets'`
 
 Create `src/sdt_bot/core/sheets.py`:
 ```python
+import re
+
 import yaml
+
+_SHEET_ID_RE = re.compile(r"/spreadsheets/d/([A-Za-z0-9_-]+)")
 
 
 class MappingError(Exception):
@@ -1093,6 +1241,38 @@ class MappingError(Exception):
 def load_mapping(path: str) -> dict:
     with open(path, encoding="utf-8") as fh:
         return yaml.safe_load(fh)
+
+
+def extract_sheet_id(link: str) -> str:
+    match = _SHEET_ID_RE.search(link)
+    if match:
+        return match.group(1)
+    return link.strip()
+
+
+def parse_cohort_index(rows: list[list[str]]) -> list[dict]:
+    if not rows:
+        return []
+    header = [h.strip() for h in rows[0]]
+    index = {col: i for i, col in enumerate(header)}
+    if "Cohort" not in index or "Link" not in index:
+        raise MappingError("Cohorts tab needs 'Cohort' and 'Link' columns")
+
+    def cell(row, name):
+        i = index.get(name)
+        return row[i].strip() if i is not None and i < len(row) else ""
+
+    out = []
+    for row in rows[1:]:
+        cohort = cell(row, "Cohort")
+        if not cohort:
+            continue
+        out.append({
+            "cohort": cohort,
+            "link": cell(row, "Link"),
+            "mapping": cell(row, "Mapping") or f"{cohort}.yaml",
+        })
+    return out
 
 
 def normalize_rows(rows: list[list[str]], mapping: dict) -> list[dict]:
@@ -1116,7 +1296,7 @@ def normalize_rows(rows: list[list[str]], mapping: dict) -> list[dict]:
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_sheets_normalize.py -v`
-Expected: PASS (3 passed)
+Expected: PASS (7 passed)
 
 - [ ] **Step 6: Commit**
 
@@ -1138,9 +1318,10 @@ git commit -m "feat: sheet column mapping and row normalization"
 - Produces:
   - `upsert_users(session, records: list[dict], key: str = "matriculation") -> None`
     — inserts/updates only sheet-owned fields (`name`, `handle_sheet`, `gmail`,
-    `github`, `codeforces`, `primary_cohort`, `past_cohorts`, and `matriculation`);
-    never touches `telegram_id`, `handle_observed`, `status_line`, `visibility`,
-    `link_nonce`. Matches existing rows by `key`.
+    `github`, `codeforces`, `primary_cohort`, `past_cohorts`, `role`, and
+    `matriculation`); never touches `telegram_id`, `handle_observed`,
+    `status_line`, `visibility`, `link_nonce`. A `role` value (a string like
+    `"Admin"`) is converted to `Role(value)`. Matches existing rows by `key`.
   - `@dataclass ReconcileReport(drift: list[str], unmatched: list[str], duplicates: list[str])`.
   - `reconcile(session, records: list[dict], key: str = "matriculation") -> ReconcileReport`
     — `drift`: users whose `handle_observed` differs from the record's
@@ -1182,6 +1363,24 @@ def test_upsert_preserves_bot_owned_fields(session):
     assert u.visibility == {"gmail": "nobody"}
 
 
+def test_upsert_converts_role_string(session):
+    from sdt_bot.core.models import Role
+    sheets.upsert_users(session, [
+        {"matriculation": "1", "name": "Boss", "role": "Admin"},
+    ])
+    u = session.query(User).filter_by(matriculation="1").one()
+    assert u.role is Role.ADMIN
+
+
+def test_upsert_blank_role_keeps_default(session):
+    from sdt_bot.core.models import Role
+    sheets.upsert_users(session, [
+        {"matriculation": "1", "name": "Stud", "role": ""},
+    ])
+    u = session.query(User).filter_by(matriculation="1").one()
+    assert u.role is Role.STUDENT
+
+
 def test_reconcile_reports_drift_unmatched_duplicates(session):
     session.add(User(matriculation="1", name="Ivan",
                      handle_observed="ivan_new"))
@@ -1211,11 +1410,11 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import select
 
-from sdt_bot.core.models import User
+from sdt_bot.core.models import Role, User
 
 SHEET_OWNED = (
     "name", "handle_sheet", "gmail", "github", "codeforces", "primary_cohort",
-    "past_cohorts",
+    "past_cohorts", "role",
 )
 
 
@@ -1232,7 +1431,12 @@ def upsert_users(session, records: list[dict], key: str = "matriculation") -> No
             session.add(user)
         for field_name in SHEET_OWNED:
             if field_name in record:
-                setattr(user, field_name, record[field_name])
+                value = record[field_name]
+                if field_name == "role":
+                    if not value:
+                        continue  # blank role -> leave default/existing
+                    value = Role(value)
+                setattr(user, field_name, value)
     session.commit()
 
 
@@ -1267,7 +1471,7 @@ def reconcile(session, records: list[dict], key: str = "matriculation") -> Recon
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_sheets_upsert.py -v`
-Expected: PASS (3 passed)
+Expected: PASS (5 passed)
 
 - [ ] **Step 5: Commit**
 
@@ -1672,7 +1876,7 @@ from sdt_bot.core.models import User
 from sdt_bot.features.directory.render import render_profile
 from sdt_bot.features.directory.search import list_cohort, search_users
 
-router = Router()
+router = Router(name="directory")
 
 
 def set_status(session, user: User, text: str) -> None:
@@ -1894,12 +2098,17 @@ git commit -m "feat: admin inline buttons for one-time link and binding reset"
 
 **Interfaces:**
 - Consumes: everything above.
-- Produces (`sheets_client.py`): `fetch_rows(sheet_id: str, credentials_file: str, range_: str = "A:Z") -> list[list[str]]`.
+- Produces (`sheets_client.py`): `fetch_rows(sheet_id: str, credentials_file: str, range_: str = "A:Z") -> list[list[str]]` — `range_` may name a tab, e.g. `"Cohorts!A:Z"`.
 - Produces (`main.py`):
-  - `build_dispatcher(session_factory) -> Dispatcher` — registers
-    `PrincipalMiddleware`, includes every discovered feature router, and attaches
-    the NL fallback handler that calls `IntentRouter.dispatch`.
-  - `run()` — creates the `Bot`, builds the dispatcher, and starts polling.
+  - `build_dispatcher(session_factory, bootstrap_ids: set[int] | None = None) -> Dispatcher`
+    — registers `PrincipalMiddleware` (with `bootstrap_ids`), includes every
+    discovered feature router, and attaches the NL fallback handler that calls
+    `IntentRouter.dispatch`.
+  - `run()` — creates the `Bot`, builds the dispatcher (passing
+    `get_settings().bootstrap_admin_id_set`), and starts polling.
+- `/sync` reads the `Cohorts` tab of `rights_sheet_id`, imports each linked
+  cohort data sheet (key=matriculation, injecting `primary_cohort`), then imports
+  the `Rights` tab (role grants). Aborts on any parse error before writing.
 
 - [ ] **Step 1: Write the failing test for dispatcher wiring**
 
@@ -1908,15 +2117,14 @@ Create `tests/test_bootstrap.py`:
 from sdt_bot.main import build_dispatcher
 
 
-def test_build_dispatcher_registers_directory():
+def test_build_dispatcher_registers_directory_router():
     dp = build_dispatcher(session_factory=lambda: None)
-    # the directory router is included among the dispatcher's sub-routers
     names = [r.name for r in dp.sub_routers]
-    assert any("directory" in (n or "") for n in names) or dp.sub_routers
+    assert "directory" in names
 ```
 
-Note: aiogram assigns router names; the assertion tolerates auto-names by
-falling back to "at least one router was included".
+Note: the directory router is created with `Router(name="directory")` (Task 12),
+so this asserts the loader actually discovered and included it.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1987,39 +2195,84 @@ async def cmd_sync(message: Message, principal: User, session):
         await message.answer("Admins only.")
         return
     settings = get_settings()
-    rows = fetch_rows(settings.rights_sheet_id, settings.google_service_account_file)
-    # rights sheet uses matriculation-or-email as key; mapping is loaded per file.
-    mapping = sheets.load_mapping(f"{settings.mapping_dir}/rights.yaml")
+    sa = settings.google_service_account_file
+    lines = ["Sync done."]
+
+    # 1. Read the Cohorts index tab and import each linked cohort data sheet.
     try:
-        records = sheets.normalize_rows(rows, mapping)
+        index_rows = fetch_rows(settings.rights_sheet_id, sa,
+                                f"{settings.cohorts_tab}!A:Z")
+        cohorts = sheets.parse_cohort_index(index_rows)
     except sheets.MappingError as exc:
-        await message.answer(f"Sync aborted: {exc}")
+        await message.answer(f"Sync aborted (Cohorts tab): {exc}")
         return
-    sheets.upsert_users(session, records)
-    report = sheets.reconcile(session, records)
-    await message.answer(
-        "Sync done.\n"
-        f"Drift: {report.drift or 'none'}\n"
-        f"Unmatched: {report.unmatched or 'none'}\n"
-        f"Duplicates: {report.duplicates or 'none'}"
+
+    for entry in cohorts:
+        sheet_id = sheets.extract_sheet_id(entry["link"])
+        try:
+            rows = fetch_rows(sheet_id, sa)
+            mapping = sheets.load_mapping(
+                f"{settings.mapping_dir}/{entry['mapping']}"
+            )
+            records = sheets.normalize_rows(rows, mapping)
+        except (sheets.MappingError, FileNotFoundError) as exc:
+            await message.answer(
+                f"Sync aborted (cohort {entry['cohort']}): {exc}"
+            )
+            return
+        for record in records:
+            record["primary_cohort"] = entry["cohort"]  # cohorts tab is authoritative
+        sheets.upsert_users(session, records)
+        rep = sheets.reconcile(session, records)
+        lines.append(
+            f"{entry['cohort']}: {len(records)} rows, drift={rep.drift or '-'}, "
+            f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}"
+        )
+
+    # 2. Read the Rights tab and apply role grants to existing users.
+    try:
+        rights_rows = fetch_rows(settings.rights_sheet_id, sa,
+                                 f"{settings.rights_tab}!A:Z")
+        rights_mapping = sheets.load_mapping(
+            f"{settings.mapping_dir}/{settings.rights_mapping}"
+        )
+        rights_records = sheets.normalize_rows(rights_rows, rights_mapping)
+    except (sheets.MappingError, FileNotFoundError) as exc:
+        await message.answer(f"Sync aborted (Rights tab): {exc}")
+        return
+    sheets.upsert_users(session, rights_records)
+    rep = sheets.reconcile(session, rights_records)
+    lines.append(
+        f"rights: {len(rights_records)} rows, drift={rep.drift or '-'}, "
+        f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}"
     )
+
+    await message.answer("\n".join(lines))
 ```
 
 Add the corresponding commands to the manifest — update
 `src/sdt_bot/features/directory/__init__.py` `commands` list to
 `["start", "me", "cohort", "sync"]`.
 
-Create `mapping/rights.yaml`:
+Create `mapping/rights.yaml` (the `Rights` tab maps matriculation → role):
 ```yaml
 matriculation: "Matriculation Number"
 name: "Full Name"
 role: "Role"
 handle_sheet: "Telegram"
 ```
-Note: `role` is sheet-owned; add `"role"` to `sheets.SHEET_OWNED` in
-`src/sdt_bot/core/sheets.py` and convert the string to `Role` during upsert —
-update `upsert_users` so that when `field_name == "role"` it assigns
-`Role(record["role"])`.
+
+Sheet layout this expects (all inside the `rights_sheet_id` spreadsheet):
+- **`Cohorts` tab** — columns `Cohort`, `Link` (URL or id of that cohort's data
+  sheet), optional `Mapping` (YAML filename in `mapping/`, defaults to
+  `<cohort>.yaml`). Example row: `2024 | https://docs.google.com/…/d/AAA/edit | cohort-2024.yaml`.
+- **`Rights` tab** — matriculation → role grants (mapped by `rights.yaml`).
+- Each **cohort data sheet** (linked from `Cohorts`) is mapped by its own YAML
+  (e.g. `mapping/cohort-2024.yaml` from Task 8). It need not contain a cohort
+  column — `/sync` injects `primary_cohort` from the `Cohorts` tab.
+
+Role handling (string → `Role`) already lives in `upsert_users` (Task 9); no
+change to `sheets.py` is needed here.
 
 - [ ] **Step 5: Implement main.py**
 
@@ -2040,10 +2293,10 @@ from sdt_bot.core.middleware import PrincipalMiddleware
 _intent_router = IntentRouter()
 
 
-def build_dispatcher(session_factory) -> Dispatcher:
+def build_dispatcher(session_factory, bootstrap_ids: set | None = None) -> Dispatcher:
     dp = Dispatcher()
-    dp.message.middleware(PrincipalMiddleware(session_factory))
-    dp.callback_query.middleware(PrincipalMiddleware(session_factory))
+    dp.message.middleware(PrincipalMiddleware(session_factory, bootstrap_ids))
+    dp.callback_query.middleware(PrincipalMiddleware(session_factory, bootstrap_ids))
 
     for feature in discover_features(features_pkg):
         dp.include_router(feature.router)
@@ -2061,7 +2314,7 @@ def build_dispatcher(session_factory) -> Dispatcher:
 def run() -> None:
     settings = get_settings()
     bot = Bot(settings.bot_token)
-    dp = build_dispatcher(get_session)
+    dp = build_dispatcher(get_session, settings.bootstrap_admin_id_set)
     asyncio.run(dp.start_polling(bot))
 ```
 
@@ -2081,15 +2334,17 @@ Expected: all tests PASS.
 
 - [ ] **Step 8: Manual smoke test (documented, not automated)**
 
-With a real `.env` (`cp .env.example .env` and fill in a bot token + a service
-account with the rights sheet shared to it) and `uv run alembic upgrade head`:
+With a real `.env` (`cp .env.example .env`; fill in a bot token, a service
+account with the rights spreadsheet shared to it, and your own Telegram id in
+`BOOTSTRAP_ADMIN_IDS`) and `uv run alembic upgrade head`:
 ```bash
 uv run python -m sdt_bot
 ```
-Verify in Telegram: `/start` for an unlinked user asks to contact an admin;
-after `/sync` (as an admin whose row exists in the rights sheet), a student who
-messages the bot with a matching handle is recognized; typing a name returns a
-profile card; an admin viewing a card sees the inline buttons.
+Verify in Telegram: as a bootstrap admin, `/sync` imports the `Cohorts` tab's
+linked sheets and the `Rights` tab and reports per-cohort counts + reconciliation;
+a student who messages the bot with a handle matching their cohort sheet is
+recognized; typing a name returns a profile card; an admin viewing a card sees
+the inline buttons; `/start` for an unlinked non-admin asks to contact an admin.
 
 - [ ] **Step 9: Commit**
 
@@ -2105,8 +2360,8 @@ git commit -m "feat: bootstrap dispatcher, /start binding, /sync, and sheets cli
 Spec coverage check (spec §→plan task):
 - §2 layers → Tasks 1–14 create every listed `core/` module and the directory feature.
 - §3 data model → Task 2 (single `users` table, JSON cohorts/visibility, dual handle fields, `link_nonce`).
-- §4 ETL → Tasks 8 (mapping/normalize), 9 (upsert preserving bot-owned, reconciliation), 14 (Sheets API client, `/sync`, abort-on-parse-error).
-- §5 identity & binding → Tasks 3 (resolve/claim/reset), 4 (one-time token, single-use), 14 (`/start` binding).
+- §4 ETL → Tasks 8 (mapping/normalize, cohort-index + URL parsing), 9 (upsert preserving bot-owned + role conversion, reconciliation), 14 (Sheets API client, two-tab `/sync` over Cohorts+Rights, abort-on-parse-error).
+- §5 identity & binding → Tasks 3 (resolve/claim/reset, bootstrap-admin elevation), 4 (one-time token, single-use), 5 (bootstrap ids via middleware), 14 (`/start` binding).
 - §6 plugin contract → Tasks 6 (loader + Manifest), 7 (intents), 12 (directory exports router+manifest).
 - §7 directory → Tasks 10 (visibility matrix incl. staff override, cohort-mate rule, admin-only), 11 (render/search/cohort), 12 (free-text search, `/me`, `/cohort`), 13 (admin inline link/reset buttons), 14 (`/sync` shows reconciliation, no separate command).
 - §8 tooling → Task 1 (uv, pyproject, lockfile, pytest config).
