@@ -16,7 +16,10 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    role: Mapped[Role] = mapped_column(Enum(Role), default=Role.STUDENT)
+    role: Mapped[Role] = mapped_column(
+        Enum(Role, values_callable=lambda e: [m.value for m in e]),
+        default=Role.STUDENT,
+    )
     name: Mapped[str] = mapped_column(String, default="")
     matriculation: Mapped[str | None] = mapped_column(String, unique=True)
     handle_sheet: Mapped[str | None] = mapped_column(String)

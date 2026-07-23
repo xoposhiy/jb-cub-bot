@@ -29,3 +29,11 @@ def test_matriculation_unique(session):
     session.add(User(name="B", matriculation="1"))
     with pytest.raises(IntegrityError):
         session.commit()
+
+
+def test_telegram_id_unique(session):
+    session.add(User(name="A", telegram_id=123))
+    session.commit()
+    session.add(User(name="B", telegram_id=123))
+    with pytest.raises(IntegrityError):
+        session.commit()
