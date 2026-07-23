@@ -1,0 +1,59 @@
+from sdt_bot.core.models import Role, User
+
+SUPER_MINIMUM = ("name", "telegram", "primary_cohort", "role", "status_line")
+CONFIGURABLE = ("gmail", "github", "codeforces")
+ADMIN_ONLY = ("matriculation",)
+
+_DEFAULT_LEVEL = "cohort"
+
+
+def _cohorts(u: User) -> set:
+    cohorts = set(u.past_cohorts or [])
+    if u.primary_cohort:
+        cohorts.add(u.primary_cohort)
+    return cohorts
+
+
+def are_cohort_mates(a: User, b: User) -> bool:
+    return bool(_cohorts(a) & _cohorts(b))
+
+
+def _telegram(u: User):
+    return u.handle_observed or u.handle_sheet
+
+
+def visible_fields(viewer: User, target: User) -> dict:
+    fields: dict = {}
+
+    # Super-minimum: always visible to any student/teacher/admin.
+    fields["name"] = target.name
+    fields["telegram"] = _telegram(target)
+    fields["primary_cohort"] = target.primary_cohort
+    fields["role"] = target.role
+    if target.status_line:
+        fields["status_line"] = target.status_line
+
+    is_admin = viewer.role is Role.ADMIN
+    is_teacher = viewer.role is Role.TEACHER
+    mates = are_cohort_mates(viewer, target)
+
+    for field in CONFIGURABLE:
+        value = getattr(target, field)
+        if value is None:
+            continue
+        # Staff override: teachers/admins see configurable fields regardless.
+        if is_admin or is_teacher:
+            fields[field] = value
+            continue
+        level = (target.visibility or {}).get(field, _DEFAULT_LEVEL)
+        if level == "all_students":
+            fields[field] = value
+        elif level == "cohort" and mates:
+            fields[field] = value
+        # level == "nobody" -> skip
+
+    if is_admin:
+        for field in ADMIN_ONLY:
+            fields[field] = getattr(target, field)
+
+    return fields
