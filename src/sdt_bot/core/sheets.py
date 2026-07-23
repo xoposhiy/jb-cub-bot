@@ -96,7 +96,7 @@ def upsert_users(session, records: list[dict], key: str = "matriculation") -> No
                         continue  # blank role -> leave default/existing
                     value = Role(value)
                 setattr(user, field_name, value)
-    session.commit()
+    # Caller commits — keeps multi-sheet /sync atomic.
 
 
 @dataclass

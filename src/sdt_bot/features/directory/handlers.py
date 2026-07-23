@@ -159,15 +159,32 @@ async def cmd_sync(message: Message, principal: User, session):
         await message.answer(f"Sync aborted (Rights tab): {exc}")
         return
 
+    for record in rights_records:
+        role_value = record.get("role")
+        if role_value:
+            try:
+                Role(role_value)
+            except ValueError:
+                await message.answer(
+                    f"Sync aborted (Rights tab): invalid role {role_value!r}"
+                )
+                return
+
     # --- Write phase: everything parsed OK, now upsert + reconcile. ---
-    lines = ["Sync done."]
-    for cohort_name, records in parsed_cohorts:
-        sheets.upsert_users(session, records)
-        rep = sheets.reconcile(session, records)
-        lines.append(f"{cohort_name}: {len(records)} rows, drift={rep.drift or '-'}, "
+    try:
+        lines = ["Sync done."]
+        for cohort_name, records in parsed_cohorts:
+            sheets.upsert_users(session, records)
+            rep = sheets.reconcile(session, records)
+            lines.append(f"{cohort_name}: {len(records)} rows, drift={rep.drift or '-'}, "
+                         f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}")
+        sheets.upsert_users(session, rights_records)
+        rep = sheets.reconcile(session, rights_records)
+        lines.append(f"rights: {len(rights_records)} rows, drift={rep.drift or '-'}, "
                      f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}")
-    sheets.upsert_users(session, rights_records)
-    rep = sheets.reconcile(session, rights_records)
-    lines.append(f"rights: {len(rights_records)} rows, drift={rep.drift or '-'}, "
-                 f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}")
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        await message.answer(f"Sync aborted (write phase): {exc}")
+        return
     await message.answer("\n".join(lines))

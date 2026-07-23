@@ -67,3 +67,23 @@ async def test_sync_happy_path(session, monkeypatch):
     assert u.role is Role.ADMIN
     assert u.primary_cohort == "2024"
     assert "Sync done." in msg.answer.await_args.args[0]
+
+
+async def test_sync_aborts_and_writes_nothing_on_invalid_role(session, monkeypatch):
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [["Cohort", "Link", "Mapping"], ["2024", "AAA", "cohort-2024.yaml"]]
+        if sheet_id == "AAA":
+            return [["Matriculation Number", "Full Name", "Telegram", "Gmail",
+                     "GitHub", "Codeforces"],
+                    ["30000001", "Ivan", "ivan", "", "", ""]]
+        if range_ == "Rights!A:Z":
+            return [["Matriculation Number", "Full Name", "Role", "Telegram"],
+                    ["30000001", "Ivan", "superuser", "ivan"]]  # invalid role
+        return []
+    monkeypatch.setattr("sdt_bot.features.directory.handlers.fetch_rows", fake_fetch)
+    monkeypatch.setattr("sdt_bot.features.directory.handlers.get_settings", _settings)
+    msg = SimpleNamespace(answer=AsyncMock())
+    await cmd_sync(msg, principal=User(name="A", role=Role.ADMIN), session=session)
+    assert "aborted" in msg.answer.await_args.args[0].lower()
+    assert session.query(User).count() == 0

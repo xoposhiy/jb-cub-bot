@@ -26,11 +26,11 @@ async def test_middleware_injects_principal(session):
     captured = {}
 
     async def handler(event, data):
-        captured["principal"] = data["principal"]
+        captured["tid"] = data["principal"].telegram_id
 
     event = SimpleNamespace(from_user=SimpleNamespace(id=777, username="ivan"))
     await mw(handler, event, {})
-    assert captured["principal"].telegram_id == 777
+    assert captured["tid"] == 777
 
 
 async def test_middleware_bootstrap_admin(session):

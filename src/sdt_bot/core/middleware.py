@@ -28,13 +28,16 @@ class PrincipalMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         session = self.session_factory()
         data["session"] = session
-        user = getattr(event, "from_user", None)
-        if user is not None:
-            principal = identity.resolve(session, user.id, user.username)
-            principal = identity.apply_bootstrap(
-                principal, user.id, user.username, self.bootstrap_ids
-            )
-            data["principal"] = principal
-        else:
-            data["principal"] = None
-        return await handler(event, data)
+        try:
+            user = getattr(event, "from_user", None)
+            if user is not None:
+                principal = identity.resolve(session, user.id, user.username)
+                principal = identity.apply_bootstrap(
+                    principal, user.id, user.username, self.bootstrap_ids
+                )
+                data["principal"] = principal
+            else:
+                data["principal"] = None
+            return await handler(event, data)
+        finally:
+            session.close()
