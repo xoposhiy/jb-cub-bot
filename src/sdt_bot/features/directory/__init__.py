@@ -4,7 +4,7 @@ from sdt_bot.features.directory.handlers import name_search_intent, router
 
 manifest = Manifest(
     name="directory",
-    commands=["me", "cohort"],
+    commands=["start", "me", "cohort", "sync"],
     intents=[name_search_intent],
     min_role=Role.STUDENT,
     help_text="Find classmates and manage your own profile.",

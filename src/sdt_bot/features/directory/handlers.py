@@ -10,6 +10,12 @@ from sdt_bot.core.tokens import issue_link_token
 from sdt_bot.features.directory.render import admin_keyboard, render_profile
 from sdt_bot.features.directory.search import list_cohort, search_users
 
+from aiogram.filters import CommandObject
+
+from sdt_bot.core import sheets
+from sdt_bot.core.sheets_client import fetch_rows
+from sdt_bot.core.tokens import verify_link_token
+
 router = Router(name="directory")
 
 
@@ -86,3 +92,87 @@ async def cb_reset(cb: CallbackQuery, principal: User, session):
     matriculation = cb.data.split(":", 2)[2]
     ok = identity.reset_binding(session, matriculation)
     await cb.answer("Reset done." if ok else "Not found.", show_alert=True)
+
+
+@router.message(Command("start"))
+async def cmd_start(message: Message, principal: User, session,
+                    command: CommandObject):
+    settings = get_settings()
+    payload = command.args
+    if payload:  # one-time link binding
+        user = verify_link_token(session, payload, settings.link_secret,
+                                 settings.link_ttl_seconds)
+        if user is None:
+            await message.answer("This link is invalid or expired.")
+            return
+        identity.bind_by_token(session, message.from_user.id,
+                               message.from_user.username, user)
+        await message.answer(f"Linked as {user.name}.")
+        return
+    if principal is not None:
+        await message.answer(f"Welcome back, {principal.name}.")
+    else:
+        await message.answer(
+            "I couldn't recognize you. Ask a program admin for a one-time link."
+        )
+
+
+@router.message(Command("sync"))
+async def cmd_sync(message: Message, principal: User, session):
+    if principal is None or principal.role is not Role.ADMIN:
+        await message.answer("Admins only.")
+        return
+    settings = get_settings()
+    sa = settings.google_service_account_file
+    lines = ["Sync done."]
+
+    # 1. Read the Cohorts index tab and import each linked cohort data sheet.
+    try:
+        index_rows = fetch_rows(settings.rights_sheet_id, sa,
+                                f"{settings.cohorts_tab}!A:Z")
+        cohorts = sheets.parse_cohort_index(index_rows)
+    except sheets.MappingError as exc:
+        await message.answer(f"Sync aborted (Cohorts tab): {exc}")
+        return
+
+    for entry in cohorts:
+        sheet_id = sheets.extract_sheet_id(entry["link"])
+        try:
+            rows = fetch_rows(sheet_id, sa)
+            mapping = sheets.load_mapping(
+                f"{settings.mapping_dir}/{entry['mapping']}"
+            )
+            records = sheets.normalize_rows(rows, mapping)
+        except (sheets.MappingError, FileNotFoundError) as exc:
+            await message.answer(
+                f"Sync aborted (cohort {entry['cohort']}): {exc}"
+            )
+            return
+        for record in records:
+            record["primary_cohort"] = entry["cohort"]  # cohorts tab is authoritative
+        sheets.upsert_users(session, records)
+        rep = sheets.reconcile(session, records)
+        lines.append(
+            f"{entry['cohort']}: {len(records)} rows, drift={rep.drift or '-'}, "
+            f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}"
+        )
+
+    # 2. Read the Rights tab and apply role grants to existing users.
+    try:
+        rights_rows = fetch_rows(settings.rights_sheet_id, sa,
+                                 f"{settings.rights_tab}!A:Z")
+        rights_mapping = sheets.load_mapping(
+            f"{settings.mapping_dir}/{settings.rights_mapping}"
+        )
+        rights_records = sheets.normalize_rows(rights_rows, rights_mapping)
+    except (sheets.MappingError, FileNotFoundError) as exc:
+        await message.answer(f"Sync aborted (Rights tab): {exc}")
+        return
+    sheets.upsert_users(session, rights_records)
+    rep = sheets.reconcile(session, rights_records)
+    lines.append(
+        f"rights: {len(rights_records)} rows, drift={rep.drift or '-'}, "
+        f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}"
+    )
+
+    await message.answer("\n".join(lines))
