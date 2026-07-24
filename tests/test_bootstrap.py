@@ -1,4 +1,4 @@
-from sdt_bot.main import build_dispatcher
+from jbcub_bot.main import build_dispatcher
 
 
 def test_build_dispatcher_registers_directory_router():

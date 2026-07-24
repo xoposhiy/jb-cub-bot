@@ -1,7 +1,7 @@
 from aiogram import BaseMiddleware
 
-from sdt_bot.core import identity
-from sdt_bot.core.models import Role, User
+from jbcub_bot.core import identity
+from jbcub_bot.core.models import Role, User
 
 _RANK = {Role.STUDENT: 0, Role.TEACHER: 1, Role.ADMIN: 2}
 

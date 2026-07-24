@@ -3,7 +3,7 @@ import enum
 from sqlalchemy import JSON, BigInteger, Enum, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from sdt_bot.core.db import Base
+from jbcub_bot.core.db import Base
 
 
 class Role(str, enum.Enum):
@@ -20,7 +20,8 @@ class User(Base):
         Enum(Role, values_callable=lambda e: [m.value for m in e]),
         default=Role.STUDENT,
     )
-    name: Mapped[str] = mapped_column(String, default="")
+    last_name: Mapped[str] = mapped_column(String, default="")
+    first_name: Mapped[str] = mapped_column(String, default="")
     matriculation: Mapped[str | None] = mapped_column(String, unique=True)
     handle_sheet: Mapped[str | None] = mapped_column(String)
     handle_observed: Mapped[str | None] = mapped_column(String)
@@ -33,3 +34,7 @@ class User(Base):
     past_cohorts: Mapped[list] = mapped_column(JSON, default=list)
     visibility: Mapped[dict] = mapped_column(JSON, default=dict)
     link_nonce: Mapped[str | None] = mapped_column(String)
+
+    @property
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}".strip()

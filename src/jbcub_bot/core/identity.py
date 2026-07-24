@@ -1,6 +1,6 @@
 from sqlalchemy import select
 
-from sdt_bot.core.models import Role, User
+from jbcub_bot.core.models import Role, User
 
 
 def find_by_telegram_id(session, telegram_id: int) -> User | None:
@@ -52,7 +52,7 @@ def apply_bootstrap(principal, telegram_id, username, bootstrap_ids):
         # Transient (unsaved) admin so /sync works on an empty DB.
         return User(
             role=Role.ADMIN,
-            name="(bootstrap admin)",
+            last_name="(bootstrap admin)",
             telegram_id=telegram_id,
             handle_observed=username,
         )

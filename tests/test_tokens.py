@@ -1,11 +1,11 @@
-from sdt_bot.core import identity, tokens
-from sdt_bot.core.models import User
+from jbcub_bot.core import identity, tokens
+from jbcub_bot.core.models import User
 
 SECRET = "unit-secret"
 
 
 def _student(session):
-    u = User(name="Ivan", matriculation="30000001")
+    u = User(last_name="Ivan", matriculation="30000001")
     session.add(u)
     session.commit()
     return u

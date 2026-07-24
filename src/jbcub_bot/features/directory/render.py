@@ -1,7 +1,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from sdt_bot.core.models import User
-from sdt_bot.features.directory.visibility import visible_fields
+from jbcub_bot.core.models import User
+from jbcub_bot.features.directory.visibility import visible_fields
 
 _LABELS = {
     "name": "Name",
@@ -22,6 +22,12 @@ def render_profile(viewer: User, target: User) -> str:
     fields = visible_fields(viewer, target)
     lines = []
     for key in _ORDER:
+        if key == "name":  # synthetic: combine first + last into one line
+            name = f"{fields.get('first_name') or ''} " \
+                   f"{fields.get('last_name') or ''}".strip()
+            if name:
+                lines.append(f"{_LABELS['name']}: {name}")
+            continue
         if key not in fields or fields[key] in (None, ""):
             continue
         value = fields[key]

@@ -1,4 +1,4 @@
-from sdt_bot.core.intents import Intent, IntentRouter
+from jbcub_bot.core.intents import Intent, IntentRouter
 
 
 def test_matches_first_registered():

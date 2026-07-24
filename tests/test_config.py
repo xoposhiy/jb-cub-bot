@@ -1,5 +1,5 @@
 import pytest
-from sdt_bot.core.config import Settings
+from jbcub_bot.core.config import Settings
 
 
 def test_settings_load_from_env(monkeypatch):
@@ -10,7 +10,7 @@ def test_settings_load_from_env(monkeypatch):
     s = Settings()
     assert s.bot_token == "123:abc"
     assert s.link_secret == "s3cret"
-    assert s.database_url == "sqlite:///sdt_bot.db"  # default
+    assert s.database_url == "sqlite:///jbcub_bot.db"  # default
     assert s.link_ttl_seconds == 86400  # default
     assert s.cohorts_tab == "Cohorts"  # default
     assert s.rights_tab == "Rights"  # default

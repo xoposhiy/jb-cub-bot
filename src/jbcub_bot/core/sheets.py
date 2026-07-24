@@ -69,11 +69,11 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import select
 
-from sdt_bot.core.models import Role, User
+from jbcub_bot.core.models import Role, User
 
 SHEET_OWNED = (
-    "name", "handle_sheet", "gmail", "github", "codeforces", "primary_cohort",
-    "past_cohorts", "role",
+    "last_name", "first_name", "handle_sheet", "gmail", "github", "codeforces",
+    "primary_cohort", "past_cohorts", "role",
 )
 
 

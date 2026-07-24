@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from aiogram import Router
 
-from sdt_bot.core.models import Role
+from jbcub_bot.core.models import Role
 
 
 @dataclass

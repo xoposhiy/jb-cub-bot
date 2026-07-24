@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
-from sdt_bot.core.middleware import HasRole, PrincipalMiddleware, role_rank
-from sdt_bot.core.models import Role, User
+from jbcub_bot.core.middleware import HasRole, PrincipalMiddleware, role_rank
+from jbcub_bot.core.models import Role, User
 
 
 def test_role_rank_ordering():
@@ -19,7 +19,7 @@ def test_has_role_none_principal_denied():
 
 
 async def test_middleware_injects_principal(session):
-    session.add(User(name="Ivan", telegram_id=777, role=Role.STUDENT))
+    session.add(User(last_name="Ivan", telegram_id=777, role=Role.STUDENT))
     session.commit()
 
     mw = PrincipalMiddleware(session_factory=lambda: session)

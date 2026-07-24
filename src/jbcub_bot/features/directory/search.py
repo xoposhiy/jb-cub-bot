@@ -1,13 +1,14 @@
 from sqlalchemy import or_, select
 
-from sdt_bot.core.models import User
+from jbcub_bot.core.models import User
 
 
 def search_users(session, query: str) -> list[User]:
     pattern = f"%{query.lower()}%"
     stmt = select(User).where(
         or_(
-            User.name.ilike(pattern),
+            User.last_name.ilike(pattern),
+            User.first_name.ilike(pattern),
             User.handle_sheet.ilike(pattern),
             User.handle_observed.ilike(pattern),
         )

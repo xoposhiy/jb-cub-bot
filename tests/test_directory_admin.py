@@ -1,25 +1,25 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from sdt_bot.features.directory.render import admin_keyboard
-from sdt_bot.features.directory.handlers import cb_issue_link, cb_reset
-from sdt_bot.core.models import Role, User
+from jbcub_bot.features.directory.render import admin_keyboard
+from jbcub_bot.features.directory.handlers import cb_issue_link, cb_reset
+from jbcub_bot.core.models import Role, User
 
 
 def test_admin_keyboard_has_link_and_reset():
-    kb = admin_keyboard(User(name="Ivan", matriculation="30000001"))
+    kb = admin_keyboard(User(last_name="Ivan", matriculation="30000001"))
     datas = [btn.callback_data for row in kb.inline_keyboard for btn in row]
     assert "dir:link:30000001" in datas
     assert "dir:reset:30000001" in datas
 
 
 def test_admin_keyboard_none_without_matriculation():
-    assert admin_keyboard(User(name="Staff")) is None
+    assert admin_keyboard(User(last_name="Staff")) is None
 
 
 async def test_cb_reset_denied_for_non_admin(session):
     target = User(
-        name="Ivan",
+        last_name="Ivan",
         matriculation="30000001",
         telegram_id=111,
         role=Role.STUDENT,
@@ -27,7 +27,7 @@ async def test_cb_reset_denied_for_non_admin(session):
     session.add(target)
     session.commit()
 
-    non_admin = User(name="Petya", role=Role.STUDENT, telegram_id=222)
+    non_admin = User(last_name="Petya", role=Role.STUDENT, telegram_id=222)
 
     cb = SimpleNamespace(data="dir:reset:30000001", answer=AsyncMock())
     await cb_reset(cb, principal=non_admin, session=session)
@@ -42,7 +42,7 @@ async def test_cb_reset_denied_for_non_admin(session):
 
 async def test_cb_reset_admin_clears_binding(session):
     target = User(
-        name="Ivan",
+        last_name="Ivan",
         matriculation="30000001",
         telegram_id=111,
         role=Role.STUDENT,
@@ -50,7 +50,7 @@ async def test_cb_reset_admin_clears_binding(session):
     session.add(target)
     session.commit()
 
-    admin = User(name="Admin", role=Role.ADMIN, telegram_id=999)
+    admin = User(last_name="Admin", role=Role.ADMIN, telegram_id=999)
 
     cb = SimpleNamespace(data="dir:reset:30000001", answer=AsyncMock())
     await cb_reset(cb, principal=admin, session=session)
@@ -60,11 +60,11 @@ async def test_cb_reset_admin_clears_binding(session):
 
 
 async def test_cb_issue_link_denied_for_non_admin(session):
-    target = User(name="Ivan", matriculation="30000001", role=Role.STUDENT)
+    target = User(last_name="Ivan", matriculation="30000001", role=Role.STUDENT)
     session.add(target)
     session.commit()
 
-    non_admin = User(name="Petya", role=Role.STUDENT, telegram_id=222)
+    non_admin = User(last_name="Petya", role=Role.STUDENT, telegram_id=222)
 
     cb = SimpleNamespace(
         data="dir:link:30000001",
@@ -84,7 +84,7 @@ async def test_cb_issue_link_denied_for_non_admin(session):
 
 
 async def test_cb_issue_link_not_found(session):
-    admin = User(name="Admin", role=Role.ADMIN, telegram_id=999)
+    admin = User(last_name="Admin", role=Role.ADMIN, telegram_id=999)
 
     cb = SimpleNamespace(
         data="dir:link:DOESNOTEXIST",

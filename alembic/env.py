@@ -14,9 +14,9 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-from sdt_bot.core.config import get_settings
-from sdt_bot.core.db import Base
-from sdt_bot.core import models  # noqa: F401  (register the model)
+from jbcub_bot.core.config import get_settings
+from jbcub_bot.core.db import Base
+from jbcub_bot.core import models  # noqa: F401  (register the model)
 
 target_metadata = Base.metadata
 config.set_main_option("sqlalchemy.url", get_settings().database_url)

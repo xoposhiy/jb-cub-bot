@@ -1,0 +1,1 @@
+uv run python -m jbcub_bot

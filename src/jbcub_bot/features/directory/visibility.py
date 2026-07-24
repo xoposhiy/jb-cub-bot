@@ -1,6 +1,7 @@
-from sdt_bot.core.models import Role, User
+from jbcub_bot.core.models import Role, User
 
-SUPER_MINIMUM = ("name", "telegram", "primary_cohort", "role", "status_line")
+SUPER_MINIMUM = ("last_name", "first_name", "telegram", "primary_cohort",
+                 "role", "status_line")
 CONFIGURABLE = ("gmail", "github", "codeforces")
 ADMIN_ONLY = ("matriculation",)
 
@@ -26,7 +27,8 @@ def visible_fields(viewer: User, target: User) -> dict:
     fields: dict = {}
 
     # Super-minimum: always visible to any student/teacher/admin.
-    fields["name"] = target.name
+    fields["last_name"] = target.last_name
+    fields["first_name"] = target.first_name
     fields["telegram"] = _telegram(target)
     fields["primary_cohort"] = target.primary_cohort
     fields["role"] = target.role

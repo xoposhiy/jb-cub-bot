@@ -2,7 +2,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from sdt_bot.core.db import Base
+from jbcub_bot.core.db import Base
 
 
 @pytest.fixture

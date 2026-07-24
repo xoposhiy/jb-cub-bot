@@ -1,7 +1,7 @@
 from aiogram import Router
 
-from sdt_bot.core.loader import Manifest
-from sdt_bot.core.models import Role
+from jbcub_bot.core.loader import Manifest
+from jbcub_bot.core.models import Role
 
 router = Router()
 manifest = Manifest(

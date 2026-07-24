@@ -2,19 +2,19 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from sdt_bot.core import identity
-from sdt_bot.core.config import get_settings
-from sdt_bot.core.intents import Intent
-from sdt_bot.core.models import Role, User
-from sdt_bot.core.tokens import issue_link_token
-from sdt_bot.features.directory.render import admin_keyboard, render_profile
-from sdt_bot.features.directory.search import list_cohort, search_users
+from jbcub_bot.core import identity
+from jbcub_bot.core.config import get_settings
+from jbcub_bot.core.intents import Intent
+from jbcub_bot.core.models import Role, User
+from jbcub_bot.core.tokens import issue_link_token
+from jbcub_bot.features.directory.render import admin_keyboard, render_profile
+from jbcub_bot.features.directory.search import list_cohort, search_users
 
 from aiogram.filters import CommandObject
 
-from sdt_bot.core import sheets
-from sdt_bot.core.sheets_client import fetch_rows
-from sdt_bot.core.tokens import verify_link_token
+from jbcub_bot.core import sheets
+from jbcub_bot.core.sheets_client import fetch_rows
+from jbcub_bot.core.tokens import verify_link_token
 
 router = Router(name="directory")
 
@@ -39,7 +39,7 @@ async def cmd_cohort(message: Message, principal: User, session):
         await message.answer("No cohort on file.")
         return
     mates = list_cohort(session, principal.primary_cohort)
-    lines = [f"- {m.name} (@{m.handle_observed or m.handle_sheet or '?'})"
+    lines = [f"- {m.full_name} (@{m.handle_observed or m.handle_sheet or '?'})"
              for m in mates]
     await message.answer("Your cohort:\n" + "\n".join(lines))
 
@@ -57,7 +57,7 @@ async def name_search(message: Message, principal: User, session):
         kb = admin_keyboard(target) if principal.role is Role.ADMIN else None
         await message.answer(render_profile(principal, target), reply_markup=kb)
     else:
-        lines = [f"- {u.name}" for u in results[:20]]
+        lines = [f"- {u.full_name}" for u in results[:20]]
         await message.answer("Several people match:\n" + "\n".join(lines))
 
 
@@ -107,10 +107,10 @@ async def cmd_start(message: Message, principal: User, session,
             return
         identity.bind_by_token(session, message.from_user.id,
                                message.from_user.username, user)
-        await message.answer(f"Linked as {user.name}.")
+        await message.answer(f"Linked as {user.full_name}.")
         return
     if principal is not None:
-        await message.answer(f"Welcome back, {principal.name}.")
+        await message.answer(f"Welcome back, {principal.full_name}.")
     else:
         await message.answer(
             "I couldn't recognize you. Ask a program admin for a one-time link."

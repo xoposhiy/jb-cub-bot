@@ -1,9 +1,9 @@
-from sdt_bot.core import identity
-from sdt_bot.core.models import User
+from jbcub_bot.core import identity
+from jbcub_bot.core.models import User
 
 
 def _add(session, **kw):
-    u = User(name=kw.pop("name", "X"), **kw)
+    u = User(last_name=kw.pop("name", "X"), **kw)
     session.add(u)
     session.commit()
     return u
@@ -42,7 +42,7 @@ def test_reset_binding(session):
 
 
 def test_bootstrap_creates_transient_admin_when_unknown():
-    from sdt_bot.core.models import Role
+    from jbcub_bot.core.models import Role
     p = identity.apply_bootstrap(None, 999, "adm", {999})
     assert p is not None
     assert p.role is Role.ADMIN
@@ -50,8 +50,8 @@ def test_bootstrap_creates_transient_admin_when_unknown():
 
 
 def test_bootstrap_elevates_existing_principal():
-    from sdt_bot.core.models import Role
-    u = User(name="X", role=Role.STUDENT)
+    from jbcub_bot.core.models import Role
+    u = User(last_name="X", role=Role.STUDENT)
     p = identity.apply_bootstrap(u, 999, "adm", {999})
     assert p.role is Role.ADMIN
 

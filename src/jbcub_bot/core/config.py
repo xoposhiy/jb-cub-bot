@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     link_secret: str
     rights_sheet_id: str  # spreadsheet holding the Cohorts and Rights tabs
     google_service_account_file: str
-    database_url: str = "sqlite:///sdt_bot.db"
+    database_url: str = "sqlite:///jbcub_bot.db"
     mapping_dir: str = "mapping"
     link_ttl_seconds: int = 86400
     # comma-separated Telegram ids that are always treated as Admin (bootstrap).

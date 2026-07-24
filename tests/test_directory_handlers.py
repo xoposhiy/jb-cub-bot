@@ -1,6 +1,6 @@
-import sdt_bot.features.directory as directory
-from sdt_bot.features.directory.handlers import name_search_intent, set_status
-from sdt_bot.core.models import Role, User
+import jbcub_bot.features.directory as directory
+from jbcub_bot.features.directory.handlers import name_search_intent, set_status
+from jbcub_bot.core.models import Role, User
 
 
 def test_manifest_exposes_contract():
@@ -18,7 +18,7 @@ def test_search_intent_matches_plain_text():
 
 
 def test_set_status_updates_user(session):
-    u = User(name="Ivan", telegram_id=1)
+    u = User(last_name="Ivan", telegram_id=1)
     session.add(u)
     session.commit()
     set_status(session, u, "looking for a teammate")

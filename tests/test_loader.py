@@ -1,6 +1,6 @@
 import tests.fixtures_features as fixtures_pkg
-from sdt_bot.core.loader import Manifest, discover_features
-from sdt_bot.core.models import Role
+from jbcub_bot.core.loader import Manifest, discover_features
+from jbcub_bot.core.models import Role
 
 
 def test_manifest_defaults():

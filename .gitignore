@@ -3,3 +3,11 @@ __pycache__/
 *.pyc
 *.db
 .env
+
+# IDE / OS / crash artifacts
+.idea/
+*.stackdump
+
+# Secrets — never commit service-account credentials
+google-service-account.json
+*-service-account.json

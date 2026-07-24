@@ -37,9 +37,9 @@ uv.lock                   # committed lockfile
 .gitignore
 alembic.ini               # Alembic config
 alembic/                  # migration env + versions
-src/sdt_bot/
+src/jbcub_bot/
   __init__.py
-  __main__.py             # `python -m sdt_bot` entrypoint
+  __main__.py             # `python -m jbcub_bot` entrypoint
   main.py                 # bootstrap: bot, dispatcher, loader, middleware, polling
   core/
     __init__.py
@@ -73,12 +73,12 @@ tests/
 
 **Files:**
 - Create: `pyproject.toml`, `.gitignore`, `.env.example`
-- Create: `src/sdt_bot/__init__.py`, `src/sdt_bot/__main__.py`
-- Create: `src/sdt_bot/core/__init__.py`, `src/sdt_bot/core/config.py`
+- Create: `src/jbcub_bot/__init__.py`, `src/jbcub_bot/__main__.py`
+- Create: `src/jbcub_bot/core/__init__.py`, `src/jbcub_bot/core/config.py`
 - Create: `tests/conftest.py`, `tests/test_config.py`
 
 **Interfaces:**
-- Produces: `sdt_bot.core.config.Settings` (pydantic-settings) with fields
+- Produces: `jbcub_bot.core.config.Settings` (pydantic-settings) with fields
   `bot_token: str`, `database_url: str`, `google_service_account_file: str`,
   `rights_sheet_id: str` (the spreadsheet holding the `Cohorts` and `Rights`
   tabs), `mapping_dir: str`, `link_secret: str`, `link_ttl_seconds: int`,
@@ -90,13 +90,13 @@ tests/
 
 Run:
 ```bash
-cd /c/work/projects/sdt-tg-bot
+cd /c/work/projects/jbcub-bot
 git init
-uv init --package --name sdt-bot --python 3.12
+uv init --package --name jbcub-bot --python 3.12
 uv add aiogram sqlalchemy alembic "google-api-python-client" google-auth pydantic-settings itsdangerous pyyaml
 uv add --dev pytest pytest-asyncio
 ```
-Expected: `pyproject.toml`, `uv.lock`, and `src/sdt_bot/` created; dependencies resolved.
+Expected: `pyproject.toml`, `uv.lock`, and `src/jbcub_bot/` created; dependencies resolved.
 
 - [ ] **Step 2: Add pytest config and .gitignore**
 
@@ -127,7 +127,7 @@ __pycache__/
 Create `tests/test_config.py`:
 ```python
 import pytest
-from sdt_bot.core.config import Settings
+from jbcub_bot.core.config import Settings
 
 
 def test_settings_load_from_env(monkeypatch):
@@ -138,7 +138,7 @@ def test_settings_load_from_env(monkeypatch):
     s = Settings()
     assert s.bot_token == "123:abc"
     assert s.link_secret == "s3cret"
-    assert s.database_url == "sqlite:///sdt_bot.db"  # default
+    assert s.database_url == "sqlite:///jbcub_bot.db"  # default
     assert s.link_ttl_seconds == 86400  # default
     assert s.cohorts_tab == "Cohorts"  # default
     assert s.rights_tab == "Rights"  # default
@@ -175,11 +175,11 @@ def test_settings_missing_required_raises(monkeypatch):
 - [ ] **Step 4: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_config.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'sdt_bot.core.config'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.core.config'`
 
 - [ ] **Step 5: Implement config**
 
-Create `src/sdt_bot/core/config.py`:
+Create `src/jbcub_bot/core/config.py`:
 ```python
 from functools import lru_cache
 
@@ -193,7 +193,7 @@ class Settings(BaseSettings):
     link_secret: str
     rights_sheet_id: str  # spreadsheet holding the Cohorts and Rights tabs
     google_service_account_file: str
-    database_url: str = "sqlite:///sdt_bot.db"
+    database_url: str = "sqlite:///jbcub_bot.db"
     mapping_dir: str = "mapping"
     link_ttl_seconds: int = 86400
     # comma-separated Telegram ids that are always treated as Admin (bootstrap).
@@ -212,13 +212,13 @@ def get_settings() -> Settings:
     return Settings()
 ```
 
-Create `src/sdt_bot/__init__.py` (empty) and `src/sdt_bot/core/__init__.py` (empty).
+Create `src/jbcub_bot/__init__.py` (empty) and `src/jbcub_bot/core/__init__.py` (empty).
 
 - [ ] **Step 6: Create the module entrypoint and env example**
 
-Create `src/sdt_bot/__main__.py`:
+Create `src/jbcub_bot/__main__.py`:
 ```python
-from sdt_bot.main import run
+from jbcub_bot.main import run
 
 if __name__ == "__main__":
     run()
@@ -230,7 +230,7 @@ BOT_TOKEN=123456:replace-me
 LINK_SECRET=generate-a-long-random-string
 RIGHTS_SHEET_ID=spreadsheet-id-holding-Cohorts-and-Rights-tabs
 GOOGLE_SERVICE_ACCOUNT_FILE=service-account.json
-DATABASE_URL=sqlite:///sdt_bot.db
+DATABASE_URL=sqlite:///jbcub_bot.db
 MAPPING_DIR=mapping
 LINK_TTL_SECONDS=86400
 BOOTSTRAP_ADMIN_IDS=111111111,222222222
@@ -239,7 +239,7 @@ RIGHTS_TAB=Rights
 RIGHTS_MAPPING=rights.yaml
 ```
 
-Note: `sdt_bot.main` does not exist yet — `__main__.py` is wired now but only runs after Task 14. Tests do not import it.
+Note: `jbcub_bot.main` does not exist yet — `__main__.py` is wired now but only runs after Task 14. Tests do not import it.
 
 - [ ] **Step 7: Run test to verify it passes**
 
@@ -258,14 +258,14 @@ git commit -m "chore: scaffold project with uv, config, and tooling"
 ## Task 2: Database, User model, and first migration
 
 **Files:**
-- Create: `src/sdt_bot/core/db.py`, `src/sdt_bot/core/models.py`
+- Create: `src/jbcub_bot/core/db.py`, `src/jbcub_bot/core/models.py`
 - Create: `alembic.ini`, `alembic/` (via `alembic init`)
 - Create: `tests/conftest.py`, `tests/test_models.py`
 
 **Interfaces:**
-- Consumes: `sdt_bot.core.config.get_settings`.
-- Produces: `sdt_bot.core.db.Base`, `sdt_bot.core.db.engine`, `sdt_bot.core.db.SessionLocal`, `sdt_bot.core.db.get_session()`.
-- Produces: `sdt_bot.core.models.Role` (enum: `ADMIN="Admin"`, `STUDENT="Student"`, `TEACHER="Teacher"`), `sdt_bot.core.models.User` with columns:
+- Consumes: `jbcub_bot.core.config.get_settings`.
+- Produces: `jbcub_bot.core.db.Base`, `jbcub_bot.core.db.engine`, `jbcub_bot.core.db.SessionLocal`, `jbcub_bot.core.db.get_session()`.
+- Produces: `jbcub_bot.core.models.Role` (enum: `ADMIN="Admin"`, `STUDENT="Student"`, `TEACHER="Teacher"`), `jbcub_bot.core.models.User` with columns:
   `id:int PK`, `role:Role`, `name:str`, `matriculation:str|None unique`,
   `handle_sheet:str|None`, `handle_observed:str|None`, `telegram_id:int|None unique`,
   `gmail:str|None`, `github:str|None`, `codeforces:str|None`, `status_line:str|None`,
@@ -280,7 +280,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from sdt_bot.core.db import Base
+from jbcub_bot.core.db import Base
 
 
 @pytest.fixture
@@ -299,7 +299,7 @@ Create `tests/test_models.py`:
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from sdt_bot.core.models import Role, User
+from jbcub_bot.core.models import Role, User
 
 
 def test_create_and_read_user(session):
@@ -332,16 +332,16 @@ def test_matriculation_unique(session):
 - [ ] **Step 3: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_models.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'sdt_bot.core.db'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.core.db'`
 
 - [ ] **Step 4: Implement db.py**
 
-Create `src/sdt_bot/core/db.py`:
+Create `src/jbcub_bot/core/db.py`:
 ```python
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from sdt_bot.core.config import get_settings
+from jbcub_bot.core.config import get_settings
 
 
 class Base(DeclarativeBase):
@@ -373,14 +373,14 @@ Note: everywhere the plan needs a session factory (middleware, `main.py`), pass
 
 - [ ] **Step 5: Implement models.py**
 
-Create `src/sdt_bot/core/models.py`:
+Create `src/jbcub_bot/core/models.py`:
 ```python
 import enum
 
 from sqlalchemy import JSON, BigInteger, Enum, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from sdt_bot.core.db import Base
+from jbcub_bot.core.db import Base
 
 
 class Role(str, enum.Enum):
@@ -422,9 +422,9 @@ uv run alembic init alembic
 ```
 Edit `alembic/env.py`: set `target_metadata` and the URL from settings. Replace the `target_metadata = None` line and the config section with:
 ```python
-from sdt_bot.core.config import get_settings
-from sdt_bot.core.db import Base
-from sdt_bot.core import models  # noqa: F401  (register the model)
+from jbcub_bot.core.config import get_settings
+from jbcub_bot.core.db import Base
+from jbcub_bot.core import models  # noqa: F401  (register the model)
 
 target_metadata = Base.metadata
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
@@ -434,7 +434,7 @@ Then:
 uv run alembic revision --autogenerate -m "create users table"
 uv run alembic upgrade head
 ```
-Expected: a migration file under `alembic/versions/` creating the `users` table; `sdt_bot.db` created.
+Expected: a migration file under `alembic/versions/` creating the `users` table; `jbcub_bot.db` created.
 
 - [ ] **Step 8: Commit**
 
@@ -448,11 +448,11 @@ git commit -m "feat: add User model, db session, and initial migration"
 ## Task 3: Identity resolution and first-claim binding
 
 **Files:**
-- Create: `src/sdt_bot/core/identity.py`
+- Create: `src/jbcub_bot/core/identity.py`
 - Create: `tests/test_identity.py`
 
 **Interfaces:**
-- Consumes: `User`, `Role` from `sdt_bot.core.models`.
+- Consumes: `User`, `Role` from `jbcub_bot.core.models`.
 - Produces:
   - `find_by_telegram_id(session, telegram_id: int) -> User | None`
   - `try_claim_by_handle(session, telegram_id: int, username: str | None) -> User | None`
@@ -467,8 +467,8 @@ git commit -m "feat: add User model, db session, and initial migration"
 
 Create `tests/test_identity.py`:
 ```python
-from sdt_bot.core import identity
-from sdt_bot.core.models import User
+from jbcub_bot.core import identity
+from jbcub_bot.core.models import User
 
 
 def _add(session, **kw):
@@ -511,7 +511,7 @@ def test_reset_binding(session):
 
 
 def test_bootstrap_creates_transient_admin_when_unknown():
-    from sdt_bot.core.models import Role
+    from jbcub_bot.core.models import Role
     p = identity.apply_bootstrap(None, 999, "adm", {999})
     assert p is not None
     assert p.role is Role.ADMIN
@@ -519,7 +519,7 @@ def test_bootstrap_creates_transient_admin_when_unknown():
 
 
 def test_bootstrap_elevates_existing_principal():
-    from sdt_bot.core.models import Role
+    from jbcub_bot.core.models import Role
     u = User(name="X", role=Role.STUDENT)
     p = identity.apply_bootstrap(u, 999, "adm", {999})
     assert p.role is Role.ADMIN
@@ -532,15 +532,15 @@ def test_bootstrap_noop_for_non_admin_id():
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_identity.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'sdt_bot.core.identity'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.core.identity'`
 
 - [ ] **Step 3: Implement identity.py**
 
-Create `src/sdt_bot/core/identity.py`:
+Create `src/jbcub_bot/core/identity.py`:
 ```python
 from sqlalchemy import select
 
-from sdt_bot.core.models import Role, User
+from jbcub_bot.core.models import Role, User
 
 
 def find_by_telegram_id(session, telegram_id: int) -> User | None:
@@ -617,8 +617,8 @@ git commit -m "feat: identity resolution with first-claim handle binding and res
 ## Task 4: One-time link tokens
 
 **Files:**
-- Create: `src/sdt_bot/core/tokens.py`
-- Modify: `src/sdt_bot/core/identity.py` (add `bind_by_token`)
+- Create: `src/jbcub_bot/core/tokens.py`
+- Modify: `src/jbcub_bot/core/identity.py` (add `bind_by_token`)
 - Create: `tests/test_tokens.py`
 
 **Interfaces:**
@@ -633,8 +633,8 @@ git commit -m "feat: identity resolution with first-claim handle binding and res
 
 Create `tests/test_tokens.py`:
 ```python
-from sdt_bot.core import identity, tokens
-from sdt_bot.core.models import User
+from jbcub_bot.core import identity, tokens
+from jbcub_bot.core.models import User
 
 SECRET = "unit-secret"
 
@@ -680,16 +680,16 @@ def test_single_use_via_nonce(session):
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_tokens.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'sdt_bot.core.tokens'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.core.tokens'`
 
 - [ ] **Step 3: Implement tokens.py**
 
-Create `src/sdt_bot/core/tokens.py`:
+Create `src/jbcub_bot/core/tokens.py`:
 ```python
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import select
 
-from sdt_bot.core.models import User
+from jbcub_bot.core.models import User
 
 _SALT = "one-time-link"
 
@@ -731,7 +731,7 @@ contract is "the stored nonce must equal the token's nonce".)
 
 - [ ] **Step 4: Add bind_by_token to identity.py**
 
-Append to `src/sdt_bot/core/identity.py`:
+Append to `src/jbcub_bot/core/identity.py`:
 ```python
 def bind_by_token(session, telegram_id: int, username: str | None, user: User) -> User:
     user.telegram_id = telegram_id
@@ -759,7 +759,7 @@ git commit -m "feat: signed single-use one-time link tokens for binding"
 ## Task 5: Principal middleware and role guard
 
 **Files:**
-- Create: `src/sdt_bot/core/middleware.py`
+- Create: `src/jbcub_bot/core/middleware.py`
 - Create: `tests/test_middleware.py`
 
 **Interfaces:**
@@ -779,8 +779,8 @@ Create `tests/test_middleware.py`:
 ```python
 from types import SimpleNamespace
 
-from sdt_bot.core.middleware import HasRole, PrincipalMiddleware, role_rank
-from sdt_bot.core.models import Role, User
+from jbcub_bot.core.middleware import HasRole, PrincipalMiddleware, role_rank
+from jbcub_bot.core.models import Role, User
 
 
 def test_role_rank_ordering():
@@ -828,16 +828,16 @@ async def test_middleware_bootstrap_admin(session):
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_middleware.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'sdt_bot.core.middleware'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.core.middleware'`
 
 - [ ] **Step 3: Implement middleware.py**
 
-Create `src/sdt_bot/core/middleware.py`:
+Create `src/jbcub_bot/core/middleware.py`:
 ```python
 from aiogram import BaseMiddleware
 
-from sdt_bot.core import identity
-from sdt_bot.core.models import Role, User
+from jbcub_bot.core import identity
+from jbcub_bot.core.models import Role, User
 
 _RANK = {Role.STUDENT: 0, Role.TEACHER: 1, Role.ADMIN: 2}
 
@@ -893,8 +893,8 @@ git commit -m "feat: principal-injection middleware and role guard filter"
 ## Task 6: Feature loader and Manifest contract
 
 **Files:**
-- Create: `src/sdt_bot/core/loader.py`
-- Create: `src/sdt_bot/features/__init__.py`
+- Create: `src/jbcub_bot/core/loader.py`
+- Create: `src/jbcub_bot/features/__init__.py`
 - Create: `tests/test_loader.py`, `tests/fixtures_features/dummy/__init__.py`
 
 **Interfaces:**
@@ -912,8 +912,8 @@ Create `tests/fixtures_features/__init__.py` (empty) and `tests/fixtures_feature
 ```python
 from aiogram import Router
 
-from sdt_bot.core.loader import Manifest
-from sdt_bot.core.models import Role
+from jbcub_bot.core.loader import Manifest
+from jbcub_bot.core.models import Role
 
 router = Router()
 manifest = Manifest(
@@ -929,8 +929,8 @@ manifest = Manifest(
 Create `tests/test_loader.py`:
 ```python
 import tests.fixtures_features as fixtures_pkg
-from sdt_bot.core.loader import Manifest, discover_features
-from sdt_bot.core.models import Role
+from jbcub_bot.core.loader import Manifest, discover_features
+from jbcub_bot.core.models import Role
 
 
 def test_manifest_defaults():
@@ -952,11 +952,11 @@ def test_discover_reads_router_and_manifest():
 - [ ] **Step 3: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_loader.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'sdt_bot.core.loader'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.core.loader'`
 
 - [ ] **Step 4: Implement loader.py**
 
-Create `src/sdt_bot/core/loader.py`:
+Create `src/jbcub_bot/core/loader.py`:
 ```python
 import importlib
 import pkgutil
@@ -964,7 +964,7 @@ from dataclasses import dataclass, field
 
 from aiogram import Router
 
-from sdt_bot.core.models import Role
+from jbcub_bot.core.models import Role
 
 
 @dataclass
@@ -994,7 +994,7 @@ def discover_features(package) -> list[LoadedFeature]:
     return found
 ```
 
-Create `src/sdt_bot/features/__init__.py` (empty).
+Create `src/jbcub_bot/features/__init__.py` (empty).
 
 - [ ] **Step 5: Run test to verify it passes**
 
@@ -1013,7 +1013,7 @@ git commit -m "feat: feature loader with Manifest contract and auto-discovery"
 ## Task 7: NL intent router
 
 **Files:**
-- Create: `src/sdt_bot/core/intents.py`
+- Create: `src/jbcub_bot/core/intents.py`
 - Create: `tests/test_intents.py`
 
 **Interfaces:**
@@ -1030,7 +1030,7 @@ git commit -m "feat: feature loader with Manifest contract and auto-discovery"
 
 Create `tests/test_intents.py`:
 ```python
-from sdt_bot.core.intents import Intent, IntentRouter
+from jbcub_bot.core.intents import Intent, IntentRouter
 
 
 def test_matches_first_registered():
@@ -1063,11 +1063,11 @@ async def test_dispatch_no_match_returns_false():
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_intents.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'sdt_bot.core.intents'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.core.intents'`
 
 - [ ] **Step 3: Implement intents.py**
 
-Create `src/sdt_bot/core/intents.py`:
+Create `src/jbcub_bot/core/intents.py`:
 ```python
 import re
 from dataclasses import dataclass
@@ -1119,7 +1119,7 @@ git commit -m "feat: NL intent router with regex matchers"
 ## Task 8: Sheets ETL — column mapping and normalization
 
 **Files:**
-- Create: `src/sdt_bot/core/sheets.py`
+- Create: `src/jbcub_bot/core/sheets.py`
 - Create: `mapping/cohort-2024.yaml`
 - Create: `tests/test_sheets_normalize.py`
 
@@ -1156,7 +1156,7 @@ Create `tests/test_sheets_normalize.py`:
 ```python
 import pytest
 
-from sdt_bot.core.sheets import MappingError, load_mapping, normalize_rows
+from jbcub_bot.core.sheets import MappingError, load_mapping, normalize_rows
 
 
 def test_load_mapping(tmp_path):
@@ -1186,18 +1186,18 @@ def test_normalize_rows_missing_column_raises():
 
 
 def test_extract_sheet_id_from_url():
-    from sdt_bot.core.sheets import extract_sheet_id
+    from jbcub_bot.core.sheets import extract_sheet_id
     url = "https://docs.google.com/spreadsheets/d/1AbC-dEf_123/edit#gid=0"
     assert extract_sheet_id(url) == "1AbC-dEf_123"
 
 
 def test_extract_sheet_id_passthrough_bare_id():
-    from sdt_bot.core.sheets import extract_sheet_id
+    from jbcub_bot.core.sheets import extract_sheet_id
     assert extract_sheet_id("  1AbC-dEf_123 ") == "1AbC-dEf_123"
 
 
 def test_parse_cohort_index():
-    from sdt_bot.core.sheets import parse_cohort_index
+    from jbcub_bot.core.sheets import parse_cohort_index
     rows = [
         ["Cohort", "Link", "Mapping"],
         ["2024", "https://docs.google.com/spreadsheets/d/AAA/edit", "cohort-2024.yaml"],
@@ -1213,7 +1213,7 @@ def test_parse_cohort_index():
 
 
 def test_parse_cohort_index_missing_columns_raises():
-    from sdt_bot.core.sheets import parse_cohort_index
+    from jbcub_bot.core.sheets import parse_cohort_index
     with pytest.raises(MappingError):
         parse_cohort_index([["Cohort"], ["2024"]])  # no Link column
 ```
@@ -1221,11 +1221,11 @@ def test_parse_cohort_index_missing_columns_raises():
 - [ ] **Step 3: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_sheets_normalize.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'sdt_bot.core.sheets'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.core.sheets'`
 
 - [ ] **Step 4: Implement the normalization half of sheets.py**
 
-Create `src/sdt_bot/core/sheets.py`:
+Create `src/jbcub_bot/core/sheets.py`:
 ```python
 import re
 
@@ -1310,7 +1310,7 @@ git commit -m "feat: sheet column mapping and row normalization"
 ## Task 9: Sheets ETL — upsert and reconciliation
 
 **Files:**
-- Modify: `src/sdt_bot/core/sheets.py` (add upsert + reconciliation)
+- Modify: `src/jbcub_bot/core/sheets.py` (add upsert + reconciliation)
 - Create: `tests/test_sheets_upsert.py`
 
 **Interfaces:**
@@ -1332,8 +1332,8 @@ git commit -m "feat: sheet column mapping and row normalization"
 
 Create `tests/test_sheets_upsert.py`:
 ```python
-from sdt_bot.core import sheets
-from sdt_bot.core.models import User
+from jbcub_bot.core import sheets
+from jbcub_bot.core.models import User
 
 
 def test_upsert_inserts_new(session):
@@ -1364,7 +1364,7 @@ def test_upsert_preserves_bot_owned_fields(session):
 
 
 def test_upsert_converts_role_string(session):
-    from sdt_bot.core.models import Role
+    from jbcub_bot.core.models import Role
     sheets.upsert_users(session, [
         {"matriculation": "1", "name": "Boss", "role": "Admin"},
     ])
@@ -1373,7 +1373,7 @@ def test_upsert_converts_role_string(session):
 
 
 def test_upsert_blank_role_keeps_default(session):
-    from sdt_bot.core.models import Role
+    from jbcub_bot.core.models import Role
     sheets.upsert_users(session, [
         {"matriculation": "1", "name": "Stud", "role": ""},
     ])
@@ -1399,18 +1399,18 @@ def test_reconcile_reports_drift_unmatched_duplicates(session):
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_sheets_upsert.py -v`
-Expected: FAIL with `AttributeError: module 'sdt_bot.core.sheets' has no attribute 'upsert_users'`
+Expected: FAIL with `AttributeError: module 'jbcub_bot.core.sheets' has no attribute 'upsert_users'`
 
 - [ ] **Step 3: Implement upsert and reconciliation**
 
-Append to `src/sdt_bot/core/sheets.py`:
+Append to `src/jbcub_bot/core/sheets.py`:
 ```python
 from collections import Counter
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
 
-from sdt_bot.core.models import Role, User
+from jbcub_bot.core.models import Role, User
 
 SHEET_OWNED = (
     "name", "handle_sheet", "gmail", "github", "codeforces", "primary_cohort",
@@ -1485,8 +1485,8 @@ git commit -m "feat: sheet upsert preserving bot-owned fields and reconciliation
 ## Task 10: Directory — visibility enforcement service
 
 **Files:**
-- Create: `src/sdt_bot/features/__init__.py` (if missing) and `src/sdt_bot/features/directory/__init__.py`
-- Create: `src/sdt_bot/features/directory/visibility.py`
+- Create: `src/jbcub_bot/features/__init__.py` (if missing) and `src/jbcub_bot/features/directory/__init__.py`
+- Create: `src/jbcub_bot/features/directory/visibility.py`
 - Create: `tests/test_visibility.py`
 
 **Interfaces:**
@@ -1503,11 +1503,11 @@ git commit -m "feat: sheet upsert preserving bot-owned fields and reconciliation
 
 Create `tests/test_visibility.py`:
 ```python
-from sdt_bot.features.directory.visibility import (
+from jbcub_bot.features.directory.visibility import (
     are_cohort_mates,
     visible_fields,
 )
-from sdt_bot.core.models import Role, User
+from jbcub_bot.core.models import Role, User
 
 
 def _u(**kw):
@@ -1577,15 +1577,15 @@ def test_student_never_sees_admin_only():
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_visibility.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'sdt_bot.features.directory.visibility'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.features.directory.visibility'`
 
 - [ ] **Step 3: Implement visibility.py**
 
-Create `src/sdt_bot/features/directory/__init__.py` (empty for now — router/manifest added in Task 12).
+Create `src/jbcub_bot/features/directory/__init__.py` (empty for now — router/manifest added in Task 12).
 
-Create `src/sdt_bot/features/directory/visibility.py`:
+Create `src/jbcub_bot/features/directory/visibility.py`:
 ```python
-from sdt_bot.core.models import Role, User
+from jbcub_bot.core.models import Role, User
 
 SUPER_MINIMUM = ("name", "telegram", "primary_cohort", "role", "status_line")
 CONFIGURABLE = ("gmail", "github", "codeforces")
@@ -1663,8 +1663,8 @@ git commit -m "feat: directory visibility enforcement service"
 ## Task 11: Directory — profile rendering and search helpers
 
 **Files:**
-- Create: `src/sdt_bot/features/directory/render.py`
-- Create: `src/sdt_bot/features/directory/search.py`
+- Create: `src/jbcub_bot/features/directory/render.py`
+- Create: `src/jbcub_bot/features/directory/search.py`
 - Create: `tests/test_directory_render.py`, `tests/test_directory_search.py`
 
 **Interfaces:**
@@ -1680,8 +1680,8 @@ git commit -m "feat: directory visibility enforcement service"
 
 Create `tests/test_directory_render.py`:
 ```python
-from sdt_bot.features.directory.render import render_profile
-from sdt_bot.core.models import Role, User
+from jbcub_bot.features.directory.render import render_profile
+from jbcub_bot.core.models import Role, User
 
 
 def test_render_includes_visible_and_omits_hidden():
@@ -1697,8 +1697,8 @@ def test_render_includes_visible_and_omits_hidden():
 
 Create `tests/test_directory_search.py`:
 ```python
-from sdt_bot.features.directory.search import list_cohort, search_users
-from sdt_bot.core.models import User
+from jbcub_bot.features.directory.search import list_cohort, search_users
+from jbcub_bot.core.models import User
 
 
 def _seed(session):
@@ -1734,10 +1734,10 @@ Expected: FAIL with `ModuleNotFoundError` for `render`/`search`.
 
 - [ ] **Step 3: Implement render.py**
 
-Create `src/sdt_bot/features/directory/render.py`:
+Create `src/jbcub_bot/features/directory/render.py`:
 ```python
-from sdt_bot.core.models import User
-from sdt_bot.features.directory.visibility import visible_fields
+from jbcub_bot.core.models import User
+from jbcub_bot.features.directory.visibility import visible_fields
 
 _LABELS = {
     "name": "Name",
@@ -1769,11 +1769,11 @@ def render_profile(viewer: User, target: User) -> str:
 
 - [ ] **Step 4: Implement search.py**
 
-Create `src/sdt_bot/features/directory/search.py`:
+Create `src/jbcub_bot/features/directory/search.py`:
 ```python
 from sqlalchemy import or_, select
 
-from sdt_bot.core.models import User
+from jbcub_bot.core.models import User
 
 
 def search_users(session, query: str) -> list[User]:
@@ -1810,8 +1810,8 @@ git commit -m "feat: directory profile rendering and search/cohort helpers"
 ## Task 12: Directory — handlers, manifest, and NL search intent
 
 **Files:**
-- Modify: `src/sdt_bot/features/directory/__init__.py` (export `router`, `manifest`)
-- Create: `src/sdt_bot/features/directory/handlers.py`
+- Modify: `src/jbcub_bot/features/directory/__init__.py` (export `router`, `manifest`)
+- Create: `src/jbcub_bot/features/directory/handlers.py`
 - Create: `tests/test_directory_handlers.py`
 
 **Interfaces:**
@@ -1830,9 +1830,9 @@ git commit -m "feat: directory profile rendering and search/cohort helpers"
 
 Create `tests/test_directory_handlers.py`:
 ```python
-import sdt_bot.features.directory as directory
-from sdt_bot.features.directory.handlers import name_search_intent, set_status
-from sdt_bot.core.models import Role, User
+import jbcub_bot.features.directory as directory
+from jbcub_bot.features.directory.handlers import name_search_intent, set_status
+from jbcub_bot.core.models import Role, User
 
 
 def test_manifest_exposes_contract():
@@ -1861,20 +1861,20 @@ def test_set_status_updates_user(session):
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_directory_handlers.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'sdt_bot.features.directory.handlers'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.features.directory.handlers'`
 
 - [ ] **Step 3: Implement handlers.py**
 
-Create `src/sdt_bot/features/directory/handlers.py`:
+Create `src/jbcub_bot/features/directory/handlers.py`:
 ```python
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from sdt_bot.core.intents import Intent
-from sdt_bot.core.models import User
-from sdt_bot.features.directory.render import render_profile
-from sdt_bot.features.directory.search import list_cohort, search_users
+from jbcub_bot.core.intents import Intent
+from jbcub_bot.core.models import User
+from jbcub_bot.features.directory.render import render_profile
+from jbcub_bot.features.directory.search import list_cohort, search_users
 
 router = Router(name="directory")
 
@@ -1925,11 +1925,11 @@ name_search_intent = Intent(
 
 - [ ] **Step 4: Wire the feature exports**
 
-Replace `src/sdt_bot/features/directory/__init__.py` with:
+Replace `src/jbcub_bot/features/directory/__init__.py` with:
 ```python
-from sdt_bot.core.loader import Manifest
-from sdt_bot.core.models import Role
-from sdt_bot.features.directory.handlers import name_search_intent, router
+from jbcub_bot.core.loader import Manifest
+from jbcub_bot.core.models import Role
+from jbcub_bot.features.directory.handlers import name_search_intent, router
 
 manifest = Manifest(
     name="directory",
@@ -1959,8 +1959,8 @@ git commit -m "feat: directory handlers, manifest, and free-text search intent"
 ## Task 13: Directory — admin inline buttons (issue link / reset)
 
 **Files:**
-- Modify: `src/sdt_bot/features/directory/render.py` (add admin keyboard builder)
-- Modify: `src/sdt_bot/features/directory/handlers.py` (callback handlers)
+- Modify: `src/jbcub_bot/features/directory/render.py` (add admin keyboard builder)
+- Modify: `src/jbcub_bot/features/directory/handlers.py` (callback handlers)
 - Create: `tests/test_directory_admin.py`
 
 **Interfaces:**
@@ -1979,8 +1979,8 @@ git commit -m "feat: directory handlers, manifest, and free-text search intent"
 
 Create `tests/test_directory_admin.py`:
 ```python
-from sdt_bot.features.directory.render import admin_keyboard
-from sdt_bot.core.models import User
+from jbcub_bot.features.directory.render import admin_keyboard
+from jbcub_bot.core.models import User
 
 
 def test_admin_keyboard_has_link_and_reset():
@@ -2001,7 +2001,7 @@ Expected: FAIL with `ImportError: cannot import name 'admin_keyboard'`
 
 - [ ] **Step 3: Implement admin_keyboard**
 
-Append to `src/sdt_bot/features/directory/render.py`:
+Append to `src/jbcub_bot/features/directory/render.py`:
 ```python
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -2019,16 +2019,16 @@ def admin_keyboard(target: User) -> InlineKeyboardMarkup | None:
 
 - [ ] **Step 4: Implement the callback handlers**
 
-Append to `src/sdt_bot/features/directory/handlers.py`:
+Append to `src/jbcub_bot/features/directory/handlers.py`:
 ```python
 from aiogram import F
 from aiogram.types import CallbackQuery
 
-from sdt_bot.core import identity
-from sdt_bot.core.config import get_settings
-from sdt_bot.core.models import Role
-from sdt_bot.core.tokens import issue_link_token
-from sdt_bot.features.directory.render import admin_keyboard
+from jbcub_bot.core import identity
+from jbcub_bot.core.config import get_settings
+from jbcub_bot.core.models import Role
+from jbcub_bot.core.tokens import issue_link_token
+from jbcub_bot.features.directory.render import admin_keyboard
 
 
 @router.callback_query(F.data.startswith("dir:link:"))
@@ -2091,10 +2091,10 @@ git commit -m "feat: admin inline buttons for one-time link and binding reset"
 ## Task 14: Bootstrap, /start binding, /sync command, and wiring
 
 **Files:**
-- Create: `src/sdt_bot/main.py`
-- Create: `src/sdt_bot/core/sheets_client.py` (Sheets API fetch)
+- Create: `src/jbcub_bot/main.py`
+- Create: `src/jbcub_bot/core/sheets_client.py` (Sheets API fetch)
 - Create: `tests/test_bootstrap.py`
-- Modify: `src/sdt_bot/features/directory/handlers.py` (add `/start` and `/sync`)
+- Modify: `src/jbcub_bot/features/directory/handlers.py` (add `/start` and `/sync`)
 
 **Interfaces:**
 - Consumes: everything above.
@@ -2114,7 +2114,7 @@ git commit -m "feat: admin inline buttons for one-time link and binding reset"
 
 Create `tests/test_bootstrap.py`:
 ```python
-from sdt_bot.main import build_dispatcher
+from jbcub_bot.main import build_dispatcher
 
 
 def test_build_dispatcher_registers_directory_router():
@@ -2129,11 +2129,11 @@ so this asserts the loader actually discovered and included it.
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_bootstrap.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'sdt_bot.main'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.main'`
 
 - [ ] **Step 3: Implement the Sheets API client**
 
-Create `src/sdt_bot/core/sheets_client.py`:
+Create `src/jbcub_bot/core/sheets_client.py`:
 ```python
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -2155,15 +2155,15 @@ def fetch_rows(sheet_id: str, credentials_file: str, range_: str = "A:Z") -> lis
 
 - [ ] **Step 4: Add /start and /sync handlers**
 
-Append to `src/sdt_bot/features/directory/handlers.py`:
+Append to `src/jbcub_bot/features/directory/handlers.py`:
 ```python
 from aiogram.filters import CommandObject
 from sqlalchemy import select
 
-from sdt_bot.core import sheets
-from sdt_bot.core.config import get_settings
-from sdt_bot.core.sheets_client import fetch_rows
-from sdt_bot.core.tokens import verify_link_token
+from jbcub_bot.core import sheets
+from jbcub_bot.core.config import get_settings
+from jbcub_bot.core.sheets_client import fetch_rows
+from jbcub_bot.core.tokens import verify_link_token
 
 
 @router.message(Command("start"))
@@ -2251,7 +2251,7 @@ async def cmd_sync(message: Message, principal: User, session):
 ```
 
 Add the corresponding commands to the manifest — update
-`src/sdt_bot/features/directory/__init__.py` `commands` list to
+`src/jbcub_bot/features/directory/__init__.py` `commands` list to
 `["start", "me", "cohort", "sync"]`.
 
 Create `mapping/rights.yaml` (the `Rights` tab maps matriculation → role):
@@ -2276,19 +2276,19 @@ change to `sheets.py` is needed here.
 
 - [ ] **Step 5: Implement main.py**
 
-Create `src/sdt_bot/main.py`:
+Create `src/jbcub_bot/main.py`:
 ```python
 import asyncio
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 
-import sdt_bot.features as features_pkg
-from sdt_bot.core.config import get_settings
-from sdt_bot.core.db import get_session
-from sdt_bot.core.intents import IntentRouter
-from sdt_bot.core.loader import discover_features
-from sdt_bot.core.middleware import PrincipalMiddleware
+import jbcub_bot.features as features_pkg
+from jbcub_bot.core.config import get_settings
+from jbcub_bot.core.db import get_session
+from jbcub_bot.core.intents import IntentRouter
+from jbcub_bot.core.loader import discover_features
+from jbcub_bot.core.middleware import PrincipalMiddleware
 
 _intent_router = IntentRouter()
 
@@ -2338,7 +2338,7 @@ With a real `.env` (`cp .env.example .env`; fill in a bot token, a service
 account with the rights spreadsheet shared to it, and your own Telegram id in
 `BOOTSTRAP_ADMIN_IDS`) and `uv run alembic upgrade head`:
 ```bash
-uv run python -m sdt_bot
+uv run python -m jbcub_bot
 ```
 Verify in Telegram: as a bootstrap admin, `/sync` imports the `Cohorts` tab's
 linked sheets and the `Rights` tab and reports per-cohort counts + reconciliation;

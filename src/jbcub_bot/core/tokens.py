@@ -1,7 +1,7 @@
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import select
 
-from sdt_bot.core.models import User
+from jbcub_bot.core.models import User
 
 _SALT = "one-time-link"
 

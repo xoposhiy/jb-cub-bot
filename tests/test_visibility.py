@@ -1,12 +1,13 @@
-from sdt_bot.features.directory.visibility import (
+from jbcub_bot.features.directory.visibility import (
     are_cohort_mates,
     visible_fields,
 )
-from sdt_bot.core.models import Role, User
+from jbcub_bot.core.models import Role, User
 
 
 def _u(**kw):
-    return User(name=kw.pop("name", "U"), **kw)
+    return User(last_name=kw.pop("last_name", "U"),
+                first_name=kw.pop("first_name", ""), **kw)
 
 
 def test_cohort_mates_by_intersection():
@@ -33,7 +34,8 @@ def test_student_non_cohort_sees_super_minimum_only():
     fields = visible_fields(viewer, target)
     assert "gmail" not in fields
     assert fields["telegram"] == "tg"
-    assert fields["name"] == target.name
+    assert fields["last_name"] == target.last_name
+    assert fields["first_name"] == target.first_name
 
 
 def test_field_hidden_when_level_nobody():

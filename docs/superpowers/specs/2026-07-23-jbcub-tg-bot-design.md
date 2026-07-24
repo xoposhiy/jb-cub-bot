@@ -1,4 +1,4 @@
-# SDT Telegram Bot — Design Spec
+# JBCUB Telegram Bot — Design Spec
 
 **Date:** 2026-07-23
 **Status:** Approved design, ready for implementation planning
@@ -220,7 +220,7 @@ Filtering (e.g. `/cohort`) uses `primary_cohort` only (indexed).
 - **`uv.lock`** — pinned, reproducible versions; committed to the repo.
 - **Workflow:**
   - `uv sync` — create/refresh an identical environment (incl. the right Python).
-  - `uv run python -m sdt_bot` — run the bot without manually activating a venv.
+  - `uv run python -m jbcub_bot` — run the bot without manually activating a venv.
   - `uv run pytest` — run tests.
   - `uv add <pkg>` — add a dependency.
 

@@ -3,12 +3,12 @@ import asyncio
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 
-import sdt_bot.features as features_pkg
-from sdt_bot.core.config import get_settings
-from sdt_bot.core.db import get_session
-from sdt_bot.core.intents import IntentRouter
-from sdt_bot.core.loader import discover_features
-from sdt_bot.core.middleware import PrincipalMiddleware
+import jbcub_bot.features as features_pkg
+from jbcub_bot.core.config import get_settings
+from jbcub_bot.core.db import get_session
+from jbcub_bot.core.intents import IntentRouter
+from jbcub_bot.core.loader import discover_features
+from jbcub_bot.core.middleware import PrincipalMiddleware
 
 _intent_router = IntentRouter()
 
