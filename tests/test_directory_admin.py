@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from jbcub_bot.features.directory.render import admin_keyboard
-from jbcub_bot.features.directory.handlers import cb_issue_link, cb_reset
+from jbcub_bot.features.directory.handlers import cb_issue_link, cb_reset, cb_reset_do
 from jbcub_bot.core.models import Role, User
 
 
@@ -40,7 +40,7 @@ async def test_cb_reset_denied_for_non_admin(session):
     assert target.telegram_id == 111
 
 
-async def test_cb_reset_admin_clears_binding(session):
+async def test_cb_reset_admin_confirms_before_clearing(session):
     target = User(
         last_name="Ivan",
         matriculation="30000001",
@@ -52,11 +52,29 @@ async def test_cb_reset_admin_clears_binding(session):
 
     admin = User(last_name="Admin", role=Role.ADMIN, telegram_id=999)
 
-    cb = SimpleNamespace(data="dir:reset:30000001", answer=AsyncMock())
+    # Step 1: pressing "Reset" only asks for confirmation; nothing is cleared.
+    cb = SimpleNamespace(
+        data="dir:reset:30000001",
+        answer=AsyncMock(),
+        message=SimpleNamespace(answer=AsyncMock()),
+    )
     await cb_reset(cb, principal=admin, session=session)
+    assert target.telegram_id == 111  # untouched until confirmed
+    cb.message.answer.assert_awaited_once()
+    kb = cb.message.answer.await_args.kwargs["reply_markup"]
+    datas = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+    assert "dir:reset_do:30000001" in datas
+    assert "dir:reset_cancel" in datas
 
+    # Step 2: confirming actually clears the binding.
+    cb2 = SimpleNamespace(
+        data="dir:reset_do:30000001",
+        answer=AsyncMock(),
+        message=SimpleNamespace(edit_text=AsyncMock()),
+    )
+    await cb_reset_do(cb2, principal=admin, session=session)
     assert target.telegram_id is None
-    cb.answer.assert_awaited_once()
+    cb2.answer.assert_awaited_once()
 
 
 async def test_cb_issue_link_denied_for_non_admin(session):

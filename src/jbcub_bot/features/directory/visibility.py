@@ -3,7 +3,8 @@ from jbcub_bot.core.models import Role, User
 SUPER_MINIMUM = ("last_name", "first_name", "telegram", "primary_cohort",
                  "role", "status_line")
 CONFIGURABLE = ("gmail", "github", "codeforces")
-ADMIN_ONLY = ("matriculation",)
+ADMIN_ONLY = ("matriculation", "telegram_id", "birthday", "citizenship",
+              "comment")
 
 _DEFAULT_LEVEL = "cohort"
 
@@ -20,7 +21,8 @@ def are_cohort_mates(a: User, b: User) -> bool:
 
 
 def _telegram(u: User):
-    return u.handle_observed or u.handle_sheet
+    handle = u.handle_observed or u.handle_sheet
+    return f"@{handle}" if handle else None
 
 
 def visible_fields(viewer: User, target: User) -> dict:

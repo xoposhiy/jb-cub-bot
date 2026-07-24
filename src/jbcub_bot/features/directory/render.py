@@ -8,14 +8,19 @@ _LABELS = {
     "role": "Role",
     "primary_cohort": "Cohort",
     "telegram": "Telegram",
+    "telegram_id": "Telegram ID",
     "status_line": "Status",
     "gmail": "Gmail",
     "github": "GitHub",
     "codeforces": "Codeforces",
     "matriculation": "Matriculation",
+    "birthday": "Birthday",
+    "citizenship": "Citizenship",
+    "comment": "Comment",
 }
-_ORDER = ["name", "role", "primary_cohort", "telegram", "status_line",
-          "gmail", "github", "codeforces", "matriculation"]
+_ORDER = ["name", "role", "primary_cohort", "telegram", "telegram_id",
+          "status_line", "gmail", "github", "codeforces", "matriculation",
+          "birthday", "citizenship", "comment"]
 
 
 def render_profile(viewer: User, target: User) -> str:

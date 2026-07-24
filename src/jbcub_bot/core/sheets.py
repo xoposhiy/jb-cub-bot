@@ -3,10 +3,29 @@ import re
 import yaml
 
 _SHEET_ID_RE = re.compile(r"/spreadsheets/d/([A-Za-z0-9_-]+)")
+_HANDLE_URL_RE = re.compile(
+    r"(?:https?://)?(?:t\.me|telegram\.me)/(@?[A-Za-z0-9_]+)", re.IGNORECASE
+)
 
 
 class MappingError(Exception):
     pass
+
+
+def normalize_handle(value: str | None) -> str | None:
+    """Normalize a Telegram handle to a bare username (no '@', no URL).
+
+    Accepts '@name', 'name', or 't.me/name' / 'https://t.me/name'. Returns
+    None for empty/blank input so handles are stored in a single canonical form.
+    """
+    if not value:
+        return None
+    handle = value.strip()
+    match = _HANDLE_URL_RE.search(handle)
+    if match:
+        handle = match.group(1)
+    handle = handle.lstrip("@").strip()
+    return handle or None
 
 
 def load_mapping(path: str) -> dict:
@@ -60,6 +79,8 @@ def normalize_rows(rows: list[list[str]], mapping: dict) -> list[dict]:
         for field, column in mapping.items():
             i = index[column]
             record[field] = row[i] if i < len(row) else ""
+        if "handle_sheet" in record:
+            record["handle_sheet"] = normalize_handle(record["handle_sheet"])
         out.append(record)
     return out
 
@@ -73,6 +94,7 @@ from jbcub_bot.core.models import Role, User
 
 SHEET_OWNED = (
     "last_name", "first_name", "handle_sheet", "gmail", "github", "codeforces",
+    "birthday", "citizenship", "comment",
     "primary_cohort", "past_cohorts", "role",
 )
 

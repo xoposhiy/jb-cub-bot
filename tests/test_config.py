@@ -7,7 +7,7 @@ def test_settings_load_from_env(monkeypatch):
     monkeypatch.setenv("LINK_SECRET", "s3cret")
     monkeypatch.setenv("RIGHTS_SHEET_ID", "sheet-xyz")
     monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_FILE", "sa.json")
-    s = Settings()
+    s = Settings(_env_file=None)  # ignore the developer's real .env
     assert s.bot_token == "123:abc"
     assert s.link_secret == "s3cret"
     assert s.database_url == "sqlite:///jbcub_bot.db"  # default
@@ -22,7 +22,7 @@ def test_bootstrap_admin_id_set_parsed(monkeypatch):
     monkeypatch.setenv("RIGHTS_SHEET_ID", "sheet-xyz")
     monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_FILE", "sa.json")
     monkeypatch.setenv("BOOTSTRAP_ADMIN_IDS", "111, 222 ,333")
-    s = Settings()
+    s = Settings(_env_file=None)  # ignore the developer's real .env
     assert s.bootstrap_admin_id_set == {111, 222, 333}
 
 
@@ -32,7 +32,7 @@ def test_bootstrap_admin_id_set_empty_by_default(monkeypatch):
     monkeypatch.setenv("RIGHTS_SHEET_ID", "sheet-xyz")
     monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_FILE", "sa.json")
     monkeypatch.delenv("BOOTSTRAP_ADMIN_IDS", raising=False)
-    assert Settings().bootstrap_admin_id_set == set()
+    assert Settings(_env_file=None).bootstrap_admin_id_set == set()
 
 
 def test_settings_missing_required_raises(monkeypatch):
@@ -41,4 +41,4 @@ def test_settings_missing_required_raises(monkeypatch):
     monkeypatch.delenv("RIGHTS_SHEET_ID", raising=False)
     monkeypatch.delenv("GOOGLE_SERVICE_ACCOUNT_FILE", raising=False)
     with pytest.raises(Exception):
-        Settings()
+        Settings(_env_file=None)  # ignore the developer's real .env

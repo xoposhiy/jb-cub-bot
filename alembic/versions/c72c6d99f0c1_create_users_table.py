@@ -1,8 +1,8 @@
 """create users table
 
-Revision ID: 9b256905bc2d
+Revision ID: c72c6d99f0c1
 Revises: 
-Create Date: 2026-07-23 18:34:14.646068
+Create Date: 2026-07-24 17:16:10.312996
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '9b256905bc2d'
+revision: str = 'c72c6d99f0c1'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -24,7 +24,8 @@ def upgrade() -> None:
     op.create_table('users',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('role', sa.Enum('Admin', 'Student', 'Teacher', name='role'), nullable=False),
-    sa.Column('name', sa.String(), nullable=False),
+    sa.Column('last_name', sa.String(), nullable=False),
+    sa.Column('first_name', sa.String(), nullable=False),
     sa.Column('matriculation', sa.String(), nullable=True),
     sa.Column('handle_sheet', sa.String(), nullable=True),
     sa.Column('handle_observed', sa.String(), nullable=True),
@@ -32,6 +33,9 @@ def upgrade() -> None:
     sa.Column('gmail', sa.String(), nullable=True),
     sa.Column('github', sa.String(), nullable=True),
     sa.Column('codeforces', sa.String(), nullable=True),
+    sa.Column('birthday', sa.String(), nullable=True),
+    sa.Column('citizenship', sa.String(), nullable=True),
+    sa.Column('comment', sa.String(), nullable=True),
     sa.Column('status_line', sa.String(), nullable=True),
     sa.Column('primary_cohort', sa.String(), nullable=True),
     sa.Column('past_cohorts', sa.JSON(), nullable=False),

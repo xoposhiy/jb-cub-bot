@@ -81,6 +81,30 @@ async def test_sync_happy_path(session, monkeypatch):
     assert "Sync done." in msg.answer.await_args.args[0]
 
 
+async def test_sync_creates_searchable_admin_only_in_rights(session, monkeypatch):
+    # An admin who appears only in the Rights tab (no cohort, no matriculation)
+    # must still become a real, searchable User row, keyed by Telegram handle.
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [["Cohort", "Link", "Mapping"], ["2024", "AAA", "sdt-2025-2028.yaml"]]
+        if sheet_id == "AAA":
+            return [COHORT_HEADER, _cohort_row("30000001", "Ivanov", "Ivan", "ivan")]
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER,
+                    ["", "Sidorov", "Sergey", "Admin", "sidorov"]]
+        return []
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows", fake_fetch)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    msg = SimpleNamespace(answer=AsyncMock())
+    await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
+
+    from jbcub_bot.features.directory.search import search_users
+    results = search_users(session, "sidorov")
+    assert len(results) == 1
+    assert results[0].role is Role.ADMIN
+    assert results[0].full_name == "Sergey Sidorov"
+
+
 async def test_sync_aborts_and_writes_nothing_on_invalid_role(session, monkeypatch):
     def fake_fetch(sheet_id, sa, range_="A:Z"):
         if range_ == "Cohorts!A:Z":

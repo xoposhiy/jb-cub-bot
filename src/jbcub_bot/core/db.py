@@ -26,3 +26,15 @@ def get_session() -> Session:
     if _maker is None:
         _maker = sessionmaker(bind=get_engine())
     return _maker()
+
+
+def init_db() -> None:
+    """Create any missing tables from the models.
+
+    Idempotent: ``create_all`` only creates tables that don't exist yet, so a
+    fresh DB is built from scratch on first run and existing tables are left
+    untouched on subsequent runs.
+    """
+    from jbcub_bot.core import models  # noqa: F401  (register models on Base)
+
+    Base.metadata.create_all(get_engine())

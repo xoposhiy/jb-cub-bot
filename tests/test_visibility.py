@@ -33,7 +33,7 @@ def test_student_non_cohort_sees_super_minimum_only():
                 handle_observed="tg")
     fields = visible_fields(viewer, target)
     assert "gmail" not in fields
-    assert fields["telegram"] == "tg"
+    assert fields["telegram"] == "@tg"  # rendered with leading @
     assert fields["last_name"] == target.last_name
     assert fields["first_name"] == target.first_name
 
@@ -63,6 +63,26 @@ def test_admin_sees_admin_only_fields():
     viewer = _u(role=Role.ADMIN)
     target = _u(role=Role.STUDENT, matriculation="30000001")
     assert visible_fields(viewer, target)["matriculation"] == "30000001"
+
+
+def test_admin_sees_personal_admin_only_fields():
+    viewer = _u(role=Role.ADMIN)
+    target = _u(role=Role.STUDENT, birthday="2000-01-02",
+                citizenship="RU", comment="note")
+    fields = visible_fields(viewer, target)
+    assert fields["birthday"] == "2000-01-02"
+    assert fields["citizenship"] == "RU"
+    assert fields["comment"] == "note"
+
+
+def test_student_never_sees_personal_admin_only_fields():
+    viewer = _u(role=Role.STUDENT, primary_cohort="2024")
+    target = _u(role=Role.STUDENT, primary_cohort="2024", birthday="2000-01-02",
+                citizenship="RU", comment="note")
+    fields = visible_fields(viewer, target)
+    assert "birthday" not in fields
+    assert "citizenship" not in fields
+    assert "comment" not in fields
 
 
 def test_student_never_sees_admin_only():

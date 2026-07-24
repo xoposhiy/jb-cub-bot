@@ -15,3 +15,7 @@ Telegram bot for a Constructor University program (students + admins). Core + dr
 - **Field ownership:** Google Sheets are read-only source of truth for roster fields; the bot **never writes to a sheet**. Bot-owned fields (`telegram_id`, `handle_observed`, `status_line`, `visibility`) must survive re-import. `matriculation` is the only stable student key.
 - **Profile reads go through `features/directory/visibility.py`** — never bypass it.
 - First admins come from `BOOTSTRAP_ADMIN_IDS`.
+
+## UX Rules
+
+The user must confirm destructive actions (e.g., delete, reset).

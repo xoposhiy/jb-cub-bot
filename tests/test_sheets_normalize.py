@@ -25,6 +25,29 @@ def test_normalize_rows_maps_by_header():
     ]
 
 
+def test_normalize_handle_strips_at_url_and_whitespace():
+    from jbcub_bot.core.sheets import normalize_handle
+    assert normalize_handle("@xoposhiy") == "xoposhiy"
+    assert normalize_handle("xoposhiy") == "xoposhiy"
+    assert normalize_handle("  @xoposhiy ") == "xoposhiy"
+    assert normalize_handle("https://t.me/xoposhiy") == "xoposhiy"
+    assert normalize_handle("t.me/xoposhiy") == "xoposhiy"
+    assert normalize_handle("https://telegram.me/@xoposhiy") == "xoposhiy"
+    assert normalize_handle("") is None
+    assert normalize_handle(None) is None
+    assert normalize_handle("   ") is None
+
+
+def test_normalize_rows_normalizes_handle():
+    rows = [
+        ["Last name", "Telegram"],
+        ["Ivanov", "https://t.me/@ivanov"],
+    ]
+    mapping = {"last_name": "Last name", "handle_sheet": "Telegram"}
+    out = normalize_rows(rows, mapping)
+    assert out == [{"last_name": "Ivanov", "handle_sheet": "ivanov"}]
+
+
 def test_normalize_rows_missing_column_raises():
     rows = [["Last name"], ["Ivanov"]]
     mapping = {"matriculation": "Matr", "last_name": "Last name"}
