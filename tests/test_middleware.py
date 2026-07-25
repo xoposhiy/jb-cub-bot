@@ -57,13 +57,13 @@ async def test_middleware_impersonation_swaps_for_admin(session):
     captured = {}
 
     async def handler(event, data):
-        captured["principal"] = data["principal"]
-        captured["impersonator"] = data.get("impersonator")
+        captured["principal_matriculation"] = data["principal"].matriculation
+        captured["impersonator_tid"] = data.get("impersonator").telegram_id
 
     event = SimpleNamespace(from_user=SimpleNamespace(id=777, username="a"))
     await mw(handler, event, {"impersonate_ref": "30000001"})
-    assert captured["principal"].matriculation == "30000001"
-    assert captured["impersonator"].telegram_id == 777
+    assert captured["principal_matriculation"] == "30000001"
+    assert captured["impersonator_tid"] == 777
 
 
 async def test_middleware_impersonation_ignored_for_non_admin(session):
@@ -77,8 +77,8 @@ async def test_middleware_impersonation_ignored_for_non_admin(session):
     captured = {}
 
     async def handler(event, data):
-        captured["principal"] = data["principal"]
+        captured["principal_tid"] = data["principal"].telegram_id
 
     event = SimpleNamespace(from_user=SimpleNamespace(id=777, username="s"))
     await mw(handler, event, {"impersonate_ref": "30000001"})
-    assert captured["principal"].telegram_id == 777  # not swapped
+    assert captured["principal_tid"] == 777  # not swapped

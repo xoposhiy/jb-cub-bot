@@ -9,6 +9,6 @@ from jbcub_bot.core.db import Base
 def session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
-    maker = sessionmaker(bind=engine, expire_on_commit=False)
+    maker = sessionmaker(bind=engine)
     with maker() as s:
         yield s
