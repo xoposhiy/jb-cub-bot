@@ -4,16 +4,18 @@ from dataclasses import dataclass, field
 
 from aiogram import Router
 
+from jbcub_bot.core.commands import CommandSpec
 from jbcub_bot.core.models import Role
 
 
 @dataclass
 class Manifest:
     name: str
-    commands: list = field(default_factory=list)
+    commands: list[CommandSpec] = field(default_factory=list)
     intents: list = field(default_factory=list)
     min_role: Role = Role.STUDENT
     help_text: str = ""
+    emoji: str = "📒"
 
 
 @dataclass
