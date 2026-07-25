@@ -1,5 +1,4 @@
 from aiogram import F, Router
-from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -8,6 +7,7 @@ from aiogram.types import (
 )
 
 from jbcub_bot.core import identity
+from jbcub_bot.core.commands import CommandRegistrar
 from jbcub_bot.core.config import get_settings
 from jbcub_bot.core.intents import Intent
 from jbcub_bot.core.models import Role, User
@@ -22,6 +22,7 @@ from jbcub_bot.core.sheets_client import fetch_rows
 from jbcub_bot.core.tokens import verify_link_token
 
 router = Router(name="directory")
+cmd = CommandRegistrar(router)
 
 
 def set_status(session, user: User, text: str) -> None:
@@ -29,18 +30,15 @@ def set_status(session, user: User, text: str) -> None:
     session.commit()
 
 
-@router.message(Command("me"))
+@cmd.command("me", "Show your own profile.")
 async def cmd_me(message: Message, principal: User, session):
-    if principal is None:
-        await message.answer("You are not linked yet. Contact an admin.")
-        return
     kb = admin_keyboard(principal) if principal.role is Role.ADMIN else None
     await message.answer(render_profile(principal, principal), reply_markup=kb)
 
 
-@router.message(Command("cohort"))
+@cmd.command("cohort", "List the people in your cohort.")
 async def cmd_cohort(message: Message, principal: User, session):
-    if principal is None or not principal.primary_cohort:
+    if not principal.primary_cohort:
         await message.answer("No cohort on file.")
         return
     mates = list_cohort(session, principal.primary_cohort)
@@ -67,7 +65,10 @@ async def name_search(message: Message, principal: User, session):
 
 
 name_search_intent = Intent(
-    name="directory.search", pattern=r".+", handler=name_search
+    name="directory.search",
+    pattern=r".+",
+    handler=name_search,
+    description="just type a name — search people",
 )
 
 
@@ -127,7 +128,7 @@ async def cb_reset_cancel(cb: CallbackQuery, principal: User, session):
     await cb.answer()
 
 
-@router.message(Command("start"))
+@cmd.command("start", "Start / link your account.", public=True)
 async def cmd_start(message: Message, principal: User, session,
                     command: CommandObject):
     settings = get_settings()
@@ -150,11 +151,8 @@ async def cmd_start(message: Message, principal: User, session,
         )
 
 
-@router.message(Command("sync"))
+@cmd.command("sync", "Re-sync roster from Google Sheets.", min_role=Role.ADMIN)
 async def cmd_sync(message: Message, principal: User, session):
-    if principal is None or principal.role is not Role.ADMIN:
-        await message.answer("Admins only.")
-        return
     settings = get_settings()
     sa = settings.google_service_account_file
 

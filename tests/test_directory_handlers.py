@@ -5,8 +5,10 @@ from jbcub_bot.core.models import Role, User
 
 def test_manifest_exposes_contract():
     assert directory.manifest.name == "directory"
-    assert "me" in directory.manifest.commands
-    assert "cohort" in directory.manifest.commands
+    names = {c.name for c in directory.manifest.commands}
+    assert {"me", "cohort", "sync", "start"} <= names
+    sync = next(c for c in directory.manifest.commands if c.name == "sync")
+    assert sync.min_role is Role.ADMIN
     assert directory.manifest.min_role is Role.STUDENT
     assert any(i.name == "directory.search" for i in directory.manifest.intents)
     assert directory.router is not None
