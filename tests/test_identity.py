@@ -58,3 +58,28 @@ def test_bootstrap_elevates_existing_principal():
 
 def test_bootstrap_noop_for_non_admin_id():
     assert identity.apply_bootstrap(None, 1, "x", {999}) is None
+
+
+def test_find_impersonation_target_by_matriculation(session):
+    u = _add(session, matriculation="30000001", telegram_id=777)
+    got = identity.find_impersonation_target(session, "30000001")
+    assert got.id == u.id
+
+
+def test_find_impersonation_target_by_telegram_id(session):
+    u = _add(session, matriculation="ABC", telegram_id=777)
+    got = identity.find_impersonation_target(session, "777")
+    assert got.id == u.id
+
+
+def test_find_impersonation_target_prefers_matriculation_when_numeric(session):
+    by_matr = _add(session, matriculation="777", telegram_id=111)
+    _add(session, matriculation="OTHER", telegram_id=777)
+    got = identity.find_impersonation_target(session, "777")
+    assert got.id == by_matr.id  # matriculation wins even though numeric
+
+
+def test_find_impersonation_target_not_found(session):
+    _add(session, matriculation="30000001", telegram_id=777)
+    assert identity.find_impersonation_target(session, "nope") is None
+    assert identity.find_impersonation_target(session, "999") is None

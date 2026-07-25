@@ -7,6 +7,15 @@ def find_by_telegram_id(session, telegram_id: int) -> User | None:
     return session.scalar(select(User).where(User.telegram_id == telegram_id))
 
 
+def find_impersonation_target(session, ref: str) -> User | None:
+    user = session.scalar(select(User).where(User.matriculation == ref))
+    if user is not None:
+        return user
+    if ref.isdigit():
+        return session.scalar(select(User).where(User.telegram_id == int(ref)))
+    return None
+
+
 def try_claim_by_handle(session, telegram_id: int, username: str | None) -> User | None:
     if not username:
         return None
