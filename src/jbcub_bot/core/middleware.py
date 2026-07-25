@@ -30,14 +30,21 @@ class PrincipalMiddleware(BaseMiddleware):
         data["session"] = session
         try:
             user = getattr(event, "from_user", None)
+            principal = None
             if user is not None:
                 principal = identity.resolve(session, user.id, user.username)
                 principal = identity.apply_bootstrap(
                     principal, user.id, user.username, self.bootstrap_ids
                 )
-                data["principal"] = principal
+            ref = data.get("impersonate_ref")
+            if ref is not None and principal is not None \
+                    and principal.role is Role.ADMIN:
+                data["principal"] = identity.find_impersonation_target(
+                    session, ref
+                )
+                data["impersonator"] = principal
             else:
-                data["principal"] = None
+                data["principal"] = principal
             return await handler(event, data)
         finally:
             session.close()
