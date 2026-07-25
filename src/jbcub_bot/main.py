@@ -6,6 +6,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 
 import jbcub_bot.features as features_pkg
+from jbcub_bot.core import registry
 from jbcub_bot.core.config import get_settings
 from jbcub_bot.core.db import get_session, init_db
 from jbcub_bot.core.intents import IntentRouter
@@ -20,8 +21,10 @@ def build_dispatcher(session_factory, bootstrap_ids: set | None = None) -> Dispa
     dp.message.middleware(PrincipalMiddleware(session_factory, bootstrap_ids))
     dp.callback_query.middleware(PrincipalMiddleware(session_factory, bootstrap_ids))
 
+    registry.reset()
     for feature in discover_features(features_pkg):
         dp.include_router(feature.router)
+        registry.register(feature.manifest)
         for intent in feature.manifest.intents:
             _intent_router.register(intent)
 
