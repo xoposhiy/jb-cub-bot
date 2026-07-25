@@ -1,9 +1,5 @@
-# tests/test_commands.py
-import functools
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-
-import pytest
 
 from jbcub_bot.core.commands import CommandSpec, CommandRegistrar
 from jbcub_bot.core.models import Role, User

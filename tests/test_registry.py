@@ -1,5 +1,7 @@
+import jbcub_bot.features as features_pkg
 from jbcub_bot.core import registry
-from jbcub_bot.core.loader import Manifest
+from jbcub_bot.core.loader import Manifest, discover_features
+from jbcub_bot.main import build_dispatcher
 
 
 def test_reset_clears():
@@ -21,11 +23,6 @@ def test_all_returns_copy():
     snapshot = registry.all_manifests()
     snapshot.append(Manifest(name="b"))
     assert len(registry.all_manifests()) == 1
-
-
-import jbcub_bot.features as features_pkg
-from jbcub_bot.core.loader import discover_features
-from jbcub_bot.main import build_dispatcher
 
 
 def _reset_routers():

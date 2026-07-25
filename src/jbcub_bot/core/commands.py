@@ -1,4 +1,3 @@
-# src/jbcub_bot/core/commands.py
 import functools
 from dataclasses import dataclass
 
