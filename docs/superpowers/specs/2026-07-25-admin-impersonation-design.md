@@ -140,9 +140,14 @@ so the NL fallback runs the search intent with the student as viewer.
   already an admin and could run `/sync` directly — no new capability. Flagged
   here so it is not a surprise. Impersonating a student and sending `/sync`
   yields the normal "Admins only." denial, which is the correct student view.
-- **Nested `/as`.** `/as <student> /as ...` swaps the principal to the student,
-  so the inner `cmd_as` sees a non-admin principal and replies "Admins only."
-  Naturally bounded.
+- **Nested `/as`.** `/as <ref1> /as <ref2> ...` re-feeds with the principal
+  swapped to `ref1`'s target, which is not necessarily a student — if `ref1` is
+  another admin, the inner `cmd_as` still passes the admin check and continues.
+  Termination is guaranteed structurally, not by the admin check: each re-feed
+  strips one `/as <ref>` prefix from the query text, so the text strictly
+  shrinks and is bounded by Telegram's message length, ruling out unbounded
+  recursion. There is no security impact either way, since the real caller is
+  already an admin.
 - **Bad input.** Missing args, empty query, or unknown ref produce friendly
   messages and no re-feed.
 

@@ -18,9 +18,7 @@ from sqlalchemy.pool import StaticPool
 from aiogram.types import Chat, Message, Update
 from aiogram.types import User as TgUser
 
-import jbcub_bot.features as features_pkg
 from jbcub_bot.core.db import Base
-from jbcub_bot.core.loader import discover_features
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.main import build_dispatcher
 
@@ -77,15 +75,6 @@ async def test_as_command_reaches_real_handler_as_target_student():
                    role=Role.STUDENT, primary_cohort="cohort-x"))
     setup.commit()
     setup.close()
-
-    # Feature routers are module-level singletons that aiogram permanently
-    # attaches to whichever Dispatcher includes them first (Router.include
-    # raises if you try to attach an already-attached router). test_bootstrap.py
-    # also calls build_dispatcher() in this same process, so detach the
-    # routers here before building our own dispatcher -- this makes this
-    # test resilient regardless of whether it runs before or after that one.
-    for feature in discover_features(features_pkg):
-        feature.router._parent_router = None
 
     dp = build_dispatcher(session_factory=session_factory)
 
