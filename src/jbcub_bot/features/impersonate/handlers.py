@@ -1,22 +1,21 @@
 from aiogram import Router
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import CommandObject
 from aiogram.types import Message
 
 from jbcub_bot.core import identity
+from jbcub_bot.core.commands import CommandRegistrar
 from jbcub_bot.core.models import Role, User
 
 router = Router(name="impersonate")
+cmd = CommandRegistrar(router)
 
 _USAGE = "Usage: /as <matriculation|telegram_id> <query>"
 
 
-@router.message(Command("as"))
+@cmd.command("as", "View the bot as another user.",
+             min_role=Role.ADMIN, usage="<ref> <query>")
 async def cmd_as(message: Message, principal: User, session, bot, dispatcher,
                  command: CommandObject):
-    if principal is None or principal.role is not Role.ADMIN:
-        await message.answer("Admins only.")
-        return
-
     args = (command.args or "").strip()
     parts = args.split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():

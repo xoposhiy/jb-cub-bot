@@ -12,7 +12,7 @@ def _cmd(args):
 
 def test_manifest_exposes_as_command():
     assert impersonate.manifest.name == "impersonate"
-    assert "as" in impersonate.manifest.commands
+    assert any(c.name == "as" for c in impersonate.manifest.commands)
     assert impersonate.router is not None
 
 
@@ -31,7 +31,7 @@ async def test_cmd_as_denied_for_none_principal(session):
     dispatcher = SimpleNamespace(propagate_event=AsyncMock())
     await cmd_as(msg, principal=None, session=session, bot=object(),
                  dispatcher=dispatcher, command=_cmd("30000001 /me"))
-    msg.answer.assert_awaited_once_with("Admins only.")
+    msg.answer.assert_awaited_once_with("You are not linked yet. Contact an admin.")
     dispatcher.propagate_event.assert_not_awaited()
 
 
