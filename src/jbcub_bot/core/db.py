@@ -43,10 +43,13 @@ def init_db() -> None:
     the last deploy, so a schema change needs no deployment change. Databases
     created by the older ``create_all`` have the tables but no
     ``alembic_version``; alembic would read those as empty and fail trying to
-    re-create ``users``, so they are stamped at head first.
+    re-create ``users``, so they are stamped. Databases from ``create_all``
+    have exactly the schema of revision c72c6d99f0c1, so that specific revision
+    is stamped rather than the moving ``head`` alias; this ensures later
+    migrations apply normally instead of being skipped.
     """
     inspector = inspect(get_engine())
     config = Config(str(Path(_ALEMBIC_INI).resolve()))
     if inspector.has_table("users") and not inspector.has_table("alembic_version"):
-        command.stamp(config, "head")
+        command.stamp(config, "c72c6d99f0c1")
     command.upgrade(config, "head")

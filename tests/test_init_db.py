@@ -52,6 +52,8 @@ def test_init_db_stamps_a_legacy_create_all_database(db_path):
     assert inspector.has_table("alembic_version")
     with db.get_engine().connect() as conn:
         assert conn.execute(text("SELECT last_name FROM users")).scalar() == "Ivanov"
+        # Assert the stamped revision is explicit, not the moving head alias
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "c72c6d99f0c1"
 
 
 def test_init_db_is_idempotent(db_path):
