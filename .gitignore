@@ -14,3 +14,4 @@ __pycache__/
 # Secrets — never commit service-account credentials
 google-service-account.json
 *-service-account.json
+service-account.json

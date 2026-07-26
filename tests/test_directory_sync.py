@@ -22,6 +22,7 @@ RIGHTS_HEADER = ["Matriculation Number", "Last name", "First name", "Role",
 def _settings():
     return SimpleNamespace(
         google_service_account_file="sa.json",
+        google_service_account_json="",
         rights_sheet_id="RIGHTS",
         cohorts_tab="Cohorts",
         rights_tab="Rights",
@@ -40,6 +41,21 @@ async def test_sync_denied_for_non_admin(session, monkeypatch):
     assert called == []  # no fetch, no writes
 
 
+async def test_sync_aborts_on_credential_error_without_raising(session, monkeypatch):
+    def raise_credential_error(*a):
+        raise ValueError(
+            "No Google service-account credentials configured: set either "
+            "GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SERVICE_ACCOUNT_FILE."
+        )
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
+                        raise_credential_error)
+    msg = SimpleNamespace(answer=AsyncMock())
+    await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
+    msg.answer.assert_awaited_once()
+    assert msg.answer.await_args.args[0].startswith("Sync aborted (credentials):")
+
+
 async def test_sync_aborts_and_writes_nothing_on_cohort_parse_error(session, monkeypatch):
     def fake_fetch(sheet_id, sa, range_="A:Z"):
         if range_ == "Cohorts!A:Z":
@@ -53,6 +69,8 @@ async def test_sync_aborts_and_writes_nothing_on_cohort_parse_error(session, mon
         return []
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows", fake_fetch)
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
+                        lambda *a: None)
     msg = SimpleNamespace(answer=AsyncMock())
     await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
     assert "aborted" in msg.answer.await_args.args[0].lower()
@@ -71,6 +89,8 @@ async def test_sync_happy_path(session, monkeypatch):
         return []
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows", fake_fetch)
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
+                        lambda *a: None)
     msg = SimpleNamespace(answer=AsyncMock())
     await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
     u = session.query(User).filter_by(matriculation="30000001").one()
@@ -95,6 +115,8 @@ async def test_sync_creates_searchable_admin_only_in_rights(session, monkeypatch
         return []
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows", fake_fetch)
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
+                        lambda *a: None)
     msg = SimpleNamespace(answer=AsyncMock())
     await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
 
@@ -117,6 +139,8 @@ async def test_sync_aborts_and_writes_nothing_on_invalid_role(session, monkeypat
         return []
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows", fake_fetch)
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
+                        lambda *a: None)
     msg = SimpleNamespace(answer=AsyncMock())
     await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
     assert "aborted" in msg.answer.await_args.args[0].lower()

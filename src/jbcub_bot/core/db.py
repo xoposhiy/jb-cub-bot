@@ -1,7 +1,15 @@
-from sqlalchemy import create_engine
+from pathlib import Path
+
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from jbcub_bot.core.config import get_settings
+
+# Resolved from the working directory, like the `mapping_dir` setting and
+# alembic.ini's own `prepend_sys_path = .`.
+_ALEMBIC_INI = "alembic.ini"
 
 
 class Base(DeclarativeBase):
@@ -29,12 +37,32 @@ def get_session() -> Session:
 
 
 def init_db() -> None:
-    """Create any missing tables from the models.
+    """Bring the schema up to date, creating it from scratch when absent.
 
-    Idempotent: ``create_all`` only creates tables that don't exist yet, so a
-    fresh DB is built from scratch on first run and existing tables are left
-    untouched on subsequent runs.
+    ``upgrade head`` builds a fresh database and applies anything added since
+    the last deploy, so a schema change needs no deployment change. Databases
+    created by the older ``create_all`` have the tables but no
+    ``alembic_version``; alembic would read those as empty and fail trying to
+    re-create ``users``, so they are stamped. Databases from ``create_all``
+    have exactly the schema of revision c72c6d99f0c1, so that specific revision
+    is stamped rather than the moving ``head`` alias; this ensures later
+    migrations apply normally instead of being skipped.
+
+    The legacy-stamp branch is one-shot: it exists only to migrate databases
+    created before this project had migrations, and can be deleted once the
+    remaining pre-migration databases have been stamped.
     """
-    from jbcub_bot.core import models  # noqa: F401  (register models on Base)
-
-    Base.metadata.create_all(get_engine())
+    inspector = inspect(get_engine())
+    ini_path = Path(_ALEMBIC_INI).resolve()
+    if not ini_path.is_file():
+        raise RuntimeError(
+            f"alembic.ini not found at {ini_path}; the bot must be run from "
+            "the repository root."
+        )
+    config = Config(str(ini_path))
+    # The bot already configured logging (and aiogram's loggers exist by now);
+    # alembic/env.py must not run fileConfig() and disable them.
+    config.attributes["configure_logger"] = False
+    if inspector.has_table("users") and not inspector.has_table("alembic_version"):
+        command.stamp(config, "c72c6d99f0c1")
+    command.upgrade(config, "head")
