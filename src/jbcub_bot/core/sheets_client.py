@@ -1,12 +1,28 @@
+import json
+
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 
 
-def fetch_rows(sheet_id: str, credentials_file: str, range_: str = "A:Z") -> list[list[str]]:
-    creds = Credentials.from_service_account_file(credentials_file, scopes=_SCOPES)
-    service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+def build_credentials(credentials_file: str, credentials_json: str) -> Credentials:
+    """Service-account credentials from an inline JSON blob or a key file.
+
+    Inline JSON wins when present: hosts like Railway can only pass secrets as
+    environment variables, while local development keeps using the file.
+    """
+    if credentials_json:
+        return Credentials.from_service_account_info(
+            json.loads(credentials_json), scopes=_SCOPES
+        )
+    return Credentials.from_service_account_file(credentials_file, scopes=_SCOPES)
+
+
+def fetch_rows(
+    sheet_id: str, credentials: Credentials, range_: str = "A:Z"
+) -> list[list[str]]:
+    service = build("sheets", "v4", credentials=credentials, cache_discovery=False)
     result = (
         service.spreadsheets()
         .values()

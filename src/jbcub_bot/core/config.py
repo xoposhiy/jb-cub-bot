@@ -9,7 +9,10 @@ class Settings(BaseSettings):
     bot_token: str
     link_secret: str
     rights_sheet_id: str  # spreadsheet holding the Cohorts and Rights tabs
-    google_service_account_file: str
+    # Exactly one of these is supplied. Inline JSON is for hosts that can only
+    # pass secrets as env vars (Railway); the file path is for local dev.
+    google_service_account_file: str = ""
+    google_service_account_json: str = ""
     database_url: str = "sqlite:///jbcub_bot.db"
     mapping_dir: str = "mapping"
     link_ttl_seconds: int = 86400

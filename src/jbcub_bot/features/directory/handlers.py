@@ -18,7 +18,7 @@ from jbcub_bot.features.directory.search import list_cohort, search_users
 from aiogram.filters import CommandObject
 
 from jbcub_bot.core import sheets
-from jbcub_bot.core.sheets_client import fetch_rows
+from jbcub_bot.core.sheets_client import build_credentials, fetch_rows
 from jbcub_bot.core.tokens import verify_link_token
 
 router = Router(name="directory")
@@ -154,7 +154,8 @@ async def cmd_start(message: Message, principal: User, session,
 @cmd.command("sync", "Re-sync roster from Google Sheets.", min_role=Role.ADMIN)
 async def cmd_sync(message: Message, principal: User, session):
     settings = get_settings()
-    sa = settings.google_service_account_file
+    sa = build_credentials(settings.google_service_account_file,
+                           settings.google_service_account_json)
 
     # --- Parse phase: fetch + normalize everything; write nothing yet. ---
     await message.answer("Sync started. Reading sheets…")

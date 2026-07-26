@@ -42,3 +42,14 @@ def test_settings_missing_required_raises(monkeypatch):
     monkeypatch.delenv("GOOGLE_SERVICE_ACCOUNT_FILE", raising=False)
     with pytest.raises(Exception):
         Settings(_env_file=None)  # ignore the developer's real .env
+
+
+def test_service_account_fields_default_to_empty(monkeypatch):
+    monkeypatch.setenv("BOT_TOKEN", "123:abc")
+    monkeypatch.setenv("LINK_SECRET", "s3cret")
+    monkeypatch.setenv("RIGHTS_SHEET_ID", "sheet-xyz")
+    monkeypatch.delenv("GOOGLE_SERVICE_ACCOUNT_FILE", raising=False)
+    monkeypatch.delenv("GOOGLE_SERVICE_ACCOUNT_JSON", raising=False)
+    s = Settings(_env_file=None)  # ignore the developer's real .env
+    assert s.google_service_account_file == ""
+    assert s.google_service_account_json == ""
