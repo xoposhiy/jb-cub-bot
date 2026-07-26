@@ -52,8 +52,36 @@ def test_init_db_stamps_a_legacy_create_all_database(db_path):
     assert inspector.has_table("alembic_version")
     with db.get_engine().connect() as conn:
         assert conn.execute(text("SELECT last_name FROM users")).scalar() == "Ivanov"
-        # Assert the stamped revision is explicit, not the moving head alias
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "c72c6d99f0c1"
+
+
+def test_init_db_stamps_the_explicit_revision_not_head(db_path, monkeypatch):
+    """init_db must stamp legacy databases at the explicit revision id.
+
+    With exactly one migration in the repo, "head" and "c72c6d99f0c1" resolve
+    to the same on-disk value, so inspecting alembic_version afterwards can't
+    tell the two apart. Capture the literal argument passed to
+    command.stamp instead: that's the one thing that distinguishes "the
+    explicit revision" from "the moving head alias" today, before a second
+    migration would make the difference observable on disk too.
+    """
+    from jbcub_bot.core import models  # noqa: F401  (register models on Base)
+
+    legacy = create_engine(f"sqlite:///{db_path.as_posix()}")
+    db.Base.metadata.create_all(legacy)
+    legacy.dispose()
+
+    stamped_revisions = []
+    real_stamp = db.command.stamp
+
+    def recording_stamp(config, revision):
+        stamped_revisions.append(revision)
+        return real_stamp(config, revision)
+
+    monkeypatch.setattr(db.command, "stamp", recording_stamp)
+
+    db.init_db()
+
+    assert stamped_revisions == ["c72c6d99f0c1"]
 
 
 def test_init_db_is_idempotent(db_path):
