@@ -25,7 +25,7 @@
 **Files:**
 - Modify: `src/jbcub_bot/core/config.py:12` (add field, default the existing one)
 - Modify: `src/jbcub_bot/core/sheets_client.py` (whole file)
-- Modify: `src/jbcub_bot/features/directory/handlers.py:21,159`
+- Modify: `src/jbcub_bot/features/directory/handlers.py:21,157`
 - Test: `tests/test_sheets_client.py` (create)
 - Test: `tests/test_config.py` (add one test)
 - Test: `tests/test_directory_sync.py:22-30` and 4 test bodies (update)
@@ -207,7 +207,7 @@ Then, in each of the four tests that patch `get_settings` (`test_sync_aborts_and
                         lambda *a: None)
 ```
 
-`test_sync_denied_for_non_admin` needs no change: it returns at the admin check, before credentials are built.
+`test_sync_denied_for_non_admin` needs no change: the `@cmd.command(..., min_role=Role.ADMIN)` guard rejects the caller before the body runs, so credentials are never built.
 
 - [ ] **Step 10: Run the sync tests to verify they fail**
 
@@ -228,7 +228,7 @@ to:
 from jbcub_bot.core.sheets_client import build_credentials, fetch_rows
 ```
 
-and replace line 159:
+and replace line 157:
 
 ```python
     sa = settings.google_service_account_file
