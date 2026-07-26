@@ -47,9 +47,22 @@ def init_db() -> None:
     have exactly the schema of revision c72c6d99f0c1, so that specific revision
     is stamped rather than the moving ``head`` alias; this ensures later
     migrations apply normally instead of being skipped.
+
+    The legacy-stamp branch is one-shot: it exists only to migrate databases
+    created before this project had migrations, and can be deleted once the
+    remaining pre-migration databases have been stamped.
     """
     inspector = inspect(get_engine())
-    config = Config(str(Path(_ALEMBIC_INI).resolve()))
+    ini_path = Path(_ALEMBIC_INI).resolve()
+    if not ini_path.is_file():
+        raise RuntimeError(
+            f"alembic.ini not found at {ini_path}; the bot must be run from "
+            "the repository root."
+        )
+    config = Config(str(ini_path))
+    # The bot already configured logging (and aiogram's loggers exist by now);
+    # alembic/env.py must not run fileConfig() and disable them.
+    config.attributes["configure_logger"] = False
     if inspector.has_table("users") and not inspector.has_table("alembic_version"):
         command.stamp(config, "c72c6d99f0c1")
     command.upgrade(config, "head")

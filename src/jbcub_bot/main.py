@@ -72,7 +72,7 @@ async def _serve(bot: Bot, dp: Dispatcher) -> None:
 
 def run() -> None:
     settings = get_settings()
-    init_db()  # create the DB schema from scratch if it doesn't exist yet
+    init_db()  # run pending migrations, creating the schema on a fresh database
     bot = Bot(settings.bot_token)
     dp = build_dispatcher(get_session, settings.bootstrap_admin_id_set)
     asyncio.run(_serve(bot, dp))

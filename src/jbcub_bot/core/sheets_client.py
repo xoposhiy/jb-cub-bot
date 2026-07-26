@@ -12,6 +12,11 @@ def build_credentials(credentials_file: str, credentials_json: str) -> Credentia
     Inline JSON wins when present: hosts like Railway can only pass secrets as
     environment variables, while local development keeps using the file.
     """
+    if not credentials_json and not credentials_file:
+        raise ValueError(
+            "No Google service-account credentials configured: set either "
+            "GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SERVICE_ACCOUNT_FILE."
+        )
     if credentials_json:
         return Credentials.from_service_account_info(
             json.loads(credentials_json), scopes=_SCOPES

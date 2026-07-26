@@ -11,7 +11,14 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
-if config.config_file_name is not None:
+# The bot runs migrations in-process (init_db() calls command.upgrade) after
+# aiogram's loggers already exist; fileConfig()'s default
+# disable_existing_loggers=True would silently disable them. init_db() sets
+# configure_logger=False on the Config it builds; the `alembic` CLI leaves it
+# unset (defaulting to True) so `uv run alembic ...` still gets its logging.
+if config.config_file_name is not None and config.attributes.get(
+    "configure_logger", True
+):
     fileConfig(config.config_file_name)
 
 from jbcub_bot.core.config import get_settings

@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from sqlalchemy import create_engine, inspect, text
 
@@ -89,3 +91,30 @@ def test_init_db_is_idempotent(db_path):
     db.init_db()  # a second run on an up-to-date DB is a no-op
 
     assert inspect(db.get_engine()).has_table("users")
+
+
+def test_init_db_does_not_disable_pre_existing_loggers(db_path):
+    """command.upgrade runs alembic/env.py, which calls fileConfig() with its
+    default disable_existing_loggers=True; that would silently disable every
+    logger created before init_db() runs (e.g. aiogram's), unless env.py
+    honors the configure_logger=False that init_db() sets on the Config.
+
+    A plain named logger stands in for aiogram's so this doesn't depend on
+    aiogram's internals.
+    """
+    logger = logging.getLogger("aiogram")
+    logger.disabled = False
+
+    db.init_db()
+
+    assert logger.disabled is False
+
+
+def test_init_db_raises_a_clear_error_when_alembic_ini_is_missing(db_path, monkeypatch):
+    # init_db() resolves alembic.ini relative to the CWD by design; running
+    # it from the wrong directory should say so, not surface alembic's
+    # generic "no script_location" CommandError.
+    monkeypatch.chdir(db_path.parent)
+
+    with pytest.raises(RuntimeError, match="repository root"):
+        db.init_db()

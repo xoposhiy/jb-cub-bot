@@ -31,6 +31,13 @@ def test_build_credentials_prefers_inline_json(monkeypatch):
     assert captured["scopes"] == sheets_client._SCOPES
 
 
+def test_build_credentials_raises_when_nothing_configured():
+    with pytest.raises(ValueError, match="GOOGLE_SERVICE_ACCOUNT_JSON") as exc_info:
+        sheets_client.build_credentials("", "")
+
+    assert "GOOGLE_SERVICE_ACCOUNT_FILE" in str(exc_info.value)
+
+
 def test_build_credentials_falls_back_to_file(monkeypatch):
     captured = {}
 
