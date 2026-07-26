@@ -1,7 +1,15 @@
-from sqlalchemy import create_engine
+from pathlib import Path
+
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from jbcub_bot.core.config import get_settings
+
+# Resolved from the working directory, like the `mapping_dir` setting and
+# alembic.ini's own `prepend_sys_path = .`.
+_ALEMBIC_INI = "alembic.ini"
 
 
 class Base(DeclarativeBase):
@@ -29,12 +37,16 @@ def get_session() -> Session:
 
 
 def init_db() -> None:
-    """Create any missing tables from the models.
+    """Bring the schema up to date, creating it from scratch when absent.
 
-    Idempotent: ``create_all`` only creates tables that don't exist yet, so a
-    fresh DB is built from scratch on first run and existing tables are left
-    untouched on subsequent runs.
+    ``upgrade head`` builds a fresh database and applies anything added since
+    the last deploy, so a schema change needs no deployment change. Databases
+    created by the older ``create_all`` have the tables but no
+    ``alembic_version``; alembic would read those as empty and fail trying to
+    re-create ``users``, so they are stamped at head first.
     """
-    from jbcub_bot.core import models  # noqa: F401  (register models on Base)
-
-    Base.metadata.create_all(get_engine())
+    inspector = inspect(get_engine())
+    config = Config(str(Path(_ALEMBIC_INI).resolve()))
+    if inspector.has_table("users") and not inspector.has_table("alembic_version"):
+        command.stamp(config, "head")
+    command.upgrade(config, "head")
