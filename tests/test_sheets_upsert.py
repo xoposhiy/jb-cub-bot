@@ -58,6 +58,26 @@ def test_reconcile_reports_drift_unmatched_duplicates(session):
         {"matriculation": "2", "handle_sheet": "x"},          # duplicate key
     ]
     report = sheets.reconcile(session, records)
-    assert "1" in report.drift
+    assert "1:telegram" in report.drift
     assert "2" in report.unmatched
     assert "2" in report.duplicates
+
+
+def test_reconcile_names_the_account_field_that_drifted(session):
+    session.add(User(matriculation="1", last_name="Ivan",
+                     github_self="alice-dev", codeforces_self="alice"))
+    session.commit()
+    records = [{"matriculation": "1", "github_sheet": "alice",
+                "codeforces_sheet": "alice"}]
+
+    report = sheets.reconcile(session, records)
+
+    assert report.drift == ["1:github"]  # codeforces agrees, so it is not listed
+
+
+def test_reconcile_ignores_a_field_only_one_side_filled(session):
+    session.add(User(matriculation="1", last_name="Ivan", github_self="alice"))
+    session.commit()
+    records = [{"matriculation": "1", "github_sheet": ""}]
+
+    assert sheets.reconcile(session, records).drift == []

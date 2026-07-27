@@ -129,6 +129,16 @@ class ReconcileReport:
     duplicates: list = field(default_factory=list)
 
 
+# Fields the roster and the bot can both hold a value for: (the record key the
+# sheet fills, the column the bot fills, the profile field's name). The bot
+# never resolves a disagreement itself -- an admin edits the sheet.
+DRIFT_PAIRS = (
+    ("handle_sheet", "handle_observed", "telegram"),
+    ("github_sheet", "github_self", "github"),
+    ("codeforces_sheet", "codeforces_self", "codeforces"),
+)
+
+
 def reconcile(session, records: list[dict], key: str = "matriculation") -> ReconcileReport:
     report = ReconcileReport()
     keys = [r.get(key) for r in records if r.get(key)]
@@ -143,8 +153,9 @@ def reconcile(session, records: list[dict], key: str = "matriculation") -> Recon
         if user is None:
             report.unmatched.append(key_value)
             continue
-        observed = user.handle_observed
-        sheet_handle = record.get("handle_sheet")
-        if observed and sheet_handle and observed != sheet_handle:
-            report.drift.append(key_value)
+        for sheet_key, own_column, label in DRIFT_PAIRS:
+            sheet_value = record.get(sheet_key)
+            own_value = getattr(user, own_column)
+            if sheet_value and own_value and sheet_value != own_value:
+                report.drift.append(f"{key_value}:{label}")
     return report
