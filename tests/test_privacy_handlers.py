@@ -17,7 +17,7 @@ from sqlalchemy.pool import StaticPool
 import jbcub_bot.features.directory as directory
 from jbcub_bot.core.db import Base
 from jbcub_bot.core.models import Role, User
-from jbcub_bot.features.directory.privacy import _EXPIRED, _NO_ROW, _NOT_LINKED
+from jbcub_bot.features.directory.screens import EXPIRED, NO_ROW, NOT_LINKED
 from jbcub_bot.features.directory.visibility import COHORT, EVERYONE, STAFF_ONLY
 from jbcub_bot.main import build_dispatcher
 
@@ -243,7 +243,7 @@ async def test_an_unlinked_user_gets_no_screen():
     assert _edits(fake_bot) == []
     alerts = _alerts(fake_bot)
     assert len(alerts) == 1
-    assert alerts[0].text == _NOT_LINKED
+    assert alerts[0].text == NOT_LINKED
     assert alerts[0].show_alert is True
 
 
@@ -298,7 +298,7 @@ async def test_bootstrap_admin_without_a_row_is_refused_and_persists_nothing():
     assert _edits(fake_bot) == []
     alerts = _alerts(fake_bot)
     assert len(alerts) == 1
-    assert alerts[0].text == _NO_ROW
+    assert alerts[0].text == NO_ROW
     assert alerts[0].show_alert is True
 
     check = factory()
@@ -321,7 +321,7 @@ async def test_opening_a_stale_screen_answers_instead_of_crashing():
     assert _edits(fake_bot) == []
     alerts = _alerts(fake_bot)
     assert len(alerts) == 1
-    assert alerts[0].text == _EXPIRED
+    assert alerts[0].text == EXPIRED
     assert alerts[0].show_alert is True
 
 
@@ -338,5 +338,5 @@ async def test_back_button_on_a_stale_screen_answers_instead_of_crashing():
     assert _edits(fake_bot) == []
     alerts = _alerts(fake_bot)
     assert len(alerts) == 1
-    assert alerts[0].text == _EXPIRED
+    assert alerts[0].text == EXPIRED
     assert alerts[0].show_alert is True

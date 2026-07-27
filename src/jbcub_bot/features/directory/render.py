@@ -4,6 +4,8 @@ from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.directory.visibility import FIELDS, visible_fields
 
 PRIVACY_CALLBACK = "dir:privacy"
+PROFILE_CALLBACK = "dir:profile"
+EDIT_CALLBACK = "dir:edit"
 
 # first_name and last_name render as one "Name" line; every other label comes
 # from the field table.

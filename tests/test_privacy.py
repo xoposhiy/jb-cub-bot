@@ -1,10 +1,10 @@
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.directory.privacy import (
-    BACK_CALLBACK,
     FIELD_CALLBACK_PREFIX,
     privacy_keyboard,
     render_privacy,
 )
+from jbcub_bot.features.directory.render import PROFILE_CALLBACK
 from jbcub_bot.features.directory.visibility import (
     COHORT,
     EVERYONE,
@@ -65,7 +65,7 @@ def test_keyboard_puts_two_fields_per_row_and_back_alone():
     kb = privacy_keyboard(_me())
     widths = [len(row) for row in kb.inline_keyboard]
     assert widths == [2, 2, 1, 1]  # 5 configurable fields, then Back
-    assert kb.inline_keyboard[-1][0].callback_data == BACK_CALLBACK
+    assert kb.inline_keyboard[-1][0].callback_data == PROFILE_CALLBACK
     assert kb.inline_keyboard[-1][0].text == "← Back to profile"
 
 
