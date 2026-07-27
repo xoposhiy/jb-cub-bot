@@ -59,3 +59,18 @@ def me_keyboard(user: User, *,
         if admin is not None:
             rows.extend(admin.inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def render_cohort_list(viewer: User, mates: list[User]) -> str:
+    """One line per cohort mate, with the handle only when `viewer` may see it.
+
+    Goes through visible_fields rather than reading handle_observed: telegram
+    is a configurable field, so this list would otherwise leak a handle its
+    owner hid.
+    """
+    lines = []
+    for mate in mates:
+        handle = visible_fields(viewer, mate).get("telegram")
+        name = mate.full_name
+        lines.append(f"- {name} ({handle})" if handle else f"- {name}")
+    return "\n".join(lines)

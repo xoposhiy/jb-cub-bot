@@ -15,7 +15,11 @@ from jbcub_bot.core.config import get_settings
 from jbcub_bot.core.intents import Intent
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.core.tokens import issue_link_token
-from jbcub_bot.features.directory.render import admin_keyboard, render_profile
+from jbcub_bot.features.directory.render import (
+    admin_keyboard,
+    render_cohort_list,
+    render_profile,
+)
 from jbcub_bot.features.directory.search import list_cohort, search_users
 
 from aiogram.filters import CommandObject
@@ -62,9 +66,7 @@ async def cmd_cohort(message: Message, principal: User, session):
         await message.answer("No cohort on file.")
         return
     mates = list_cohort(session, principal.primary_cohort)
-    lines = [f"- {m.full_name} (@{m.handle_observed or m.handle_sheet or '?'})"
-             for m in mates]
-    await message.answer("Your cohort:\n" + "\n".join(lines))
+    await message.answer("Your cohort:\n" + render_cohort_list(principal, mates))
 
 
 async def name_search(message: Message, principal: User, session):
