@@ -82,15 +82,23 @@ router = Router(name="directory.privacy")
 cmd = CommandRegistrar(router)
 
 _NOT_LINKED = "You are not linked yet. Contact an admin."
+_NO_ROW = "Your account has no saved profile yet. Ask an admin to link you."
+_EXPIRED = "This screen expired — send /privacy again."
 
 
 def _require_linked(fn):
-    """Wrap a callback handler so it refuses an unlinked caller before running.
+    """Wrap a callback handler so it refuses an unusable caller before running.
 
     Mirrors CommandRegistrar._guard in core/commands.py. Uses functools.wraps
     so aiogram unwraps __wrapped__ and injects the original handler's
     declared params (principal, session, ...); guarded handlers must declare
     `principal`.
+
+    Two distinct "not usable yet" cases: no principal at all (unlinked), and
+    a bootstrap admin whose principal is a transient row never written to the
+    database (`id is None` -- see identity.apply_bootstrap). The latter must
+    not be silently materialized into a real row just because a button was
+    tapped, so it gets refused here rather than persisted.
     """
     @functools.wraps(fn)
     async def wrapper(cb: CallbackQuery, **kwargs):
@@ -98,18 +106,29 @@ def _require_linked(fn):
         if principal is None:
             await cb.answer(_NOT_LINKED, show_alert=True)
             return
+        if principal.id is None:
+            await cb.answer(_NO_ROW, show_alert=True)
+            return
         return await fn(cb, **kwargs)
 
     return wrapper
 
 
 @cmd.command("privacy", "Choose who sees each of your profile fields.")
-async def cmd_privacy(message: Message, principal: User, session):
-    await message.answer(render_privacy(principal),
-                         reply_markup=privacy_keyboard(principal))
+async def cmd_privacy(message: Message, principal: User, session, impersonator=None):
+    # Mirrors cmd_me: under /as the callback would arrive without the
+    # impersonation ref and land on the admin's own row, so show the
+    # target's screen with nothing tappable instead of a live keyboard.
+    await message.answer(
+        render_privacy(principal),
+        reply_markup=None if impersonator is not None else privacy_keyboard(principal),
+    )
 
 
 async def _show_privacy(cb: CallbackQuery, principal: User) -> None:
+    if not isinstance(cb.message, Message):
+        await cb.answer(_EXPIRED, show_alert=True)
+        return
     await cb.message.edit_text(render_privacy(principal),
                                reply_markup=privacy_keyboard(principal))
     await cb.answer()
@@ -124,6 +143,9 @@ async def cb_open(cb: CallbackQuery, principal: User, session):
 @router.callback_query(F.data == BACK_CALLBACK)
 @_require_linked
 async def cb_back(cb: CallbackQuery, principal: User, session):
+    if not isinstance(cb.message, Message):
+        await cb.answer(_EXPIRED, show_alert=True)
+        return
     await cb.message.edit_text(render_profile(principal, principal),
                                reply_markup=me_keyboard(principal))
     await cb.answer()

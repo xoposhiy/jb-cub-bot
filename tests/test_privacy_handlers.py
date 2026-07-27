@@ -8,7 +8,7 @@ dispatcher, advances the level, commits it, and edits the same message.
 from datetime import datetime, timezone
 
 from aiogram.methods import AnswerCallbackQuery, EditMessageText
-from aiogram.types import CallbackQuery, Chat, Message, Update
+from aiogram.types import CallbackQuery, Chat, InaccessibleMessage, Message, Update
 from aiogram.types import User as TgUser
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -17,7 +17,7 @@ from sqlalchemy.pool import StaticPool
 import jbcub_bot.features.directory as directory
 from jbcub_bot.core.db import Base
 from jbcub_bot.core.models import Role, User
-from jbcub_bot.features.directory.privacy import _NOT_LINKED
+from jbcub_bot.features.directory.privacy import _EXPIRED, _NO_ROW, _NOT_LINKED
 from jbcub_bot.features.directory.visibility import COHORT, EVERYONE, STAFF_ONLY
 from jbcub_bot.main import build_dispatcher
 
@@ -66,6 +66,33 @@ def _callback_update(fake_bot, telegram_id: int, data: str) -> Update:
         chat_instance="chat-instance",
         data=data,
         message=shown,
+    ).as_(fake_bot)
+    return Update(update_id=1, callback_query=cb).as_(fake_bot)
+
+
+def _seed_admin_and_student(factory):
+    setup = factory()
+    setup.add(User(last_name="Adminova", first_name="Anna",
+                   telegram_id=777, role=Role.ADMIN))
+    setup.add(User(last_name="Zhukovsky", first_name="Zakhar",
+                   matriculation="30009999", telegram_id=222,
+                   role=Role.STUDENT, primary_cohort="cohort-x",
+                   gmail="student@gmail.com"))
+    setup.commit()
+    setup.close()
+
+
+def _stale_callback_update(fake_bot, telegram_id: int, data: str) -> Update:
+    """A callback on a message Telegram can no longer deliver (>48h old)."""
+    stale = InaccessibleMessage(
+        chat=Chat(id=telegram_id, type="private"), message_id=7,
+    ).as_(fake_bot)
+    cb = CallbackQuery(
+        id="cb-1",
+        from_user=TgUser(id=telegram_id, is_bot=False, first_name="tg"),
+        chat_instance="chat-instance",
+        data=data,
+        message=stale,
     ).as_(fake_bot)
     return Update(update_id=1, callback_query=cb).as_(fake_bot)
 
@@ -236,3 +263,80 @@ async def test_a_hidden_field_still_shows_on_the_owner_s_own_screen():
 def test_manifest_lists_the_privacy_command():
     names = {c.name for c in directory.manifest.commands}
     assert "privacy" in names
+
+
+# --- Fix 1: /privacy under /as shows the target read-only -------------------
+
+async def test_privacy_under_impersonation_shows_the_target_with_no_keyboard():
+    factory = _session_factory()
+    _seed_admin_and_student(factory)
+    dp = build_dispatcher(session_factory=factory)
+    fake_bot = FakeBot()
+
+    await dp.feed_update(fake_bot,
+                         _message_update(fake_bot, 777, "/as 30009999 /privacy"),
+                         dispatcher=dp)
+
+    # sent[0] is cmd_as's "Showing as ..." notice; sent[1] is the propagated
+    # /privacy answer.
+    shown = fake_bot.sent[1]
+    assert "student@gmail.com" in shown.text  # the target's row, not the admin's
+    assert shown.reply_markup is None  # nothing tappable while impersonating
+
+
+# --- Fix 2: a bootstrap admin with no DB row can't silently "save" a tap ----
+
+async def test_bootstrap_admin_without_a_row_is_refused_and_persists_nothing():
+    factory = _session_factory()  # nobody seeded at all
+    dp = build_dispatcher(session_factory=factory, bootstrap_ids={555})
+    fake_bot = FakeBot()
+
+    await dp.feed_update(fake_bot,
+                         _callback_update(fake_bot, 555, "dir:vis:gmail"),
+                         dispatcher=dp)
+
+    assert _edits(fake_bot) == []
+    alerts = _alerts(fake_bot)
+    assert len(alerts) == 1
+    assert alerts[0].text == _NO_ROW
+    assert alerts[0].show_alert is True
+
+    check = factory()
+    assert check.scalars(select(User)).all() == []  # nothing was created
+    check.close()
+
+
+# --- Fix 3: a stale (>48h) privacy screen answers instead of crashing ------
+
+async def test_opening_a_stale_screen_answers_instead_of_crashing():
+    factory = _session_factory()
+    _seed_student(factory)
+    dp = build_dispatcher(session_factory=factory)
+    fake_bot = FakeBot()
+
+    await dp.feed_update(fake_bot,
+                         _stale_callback_update(fake_bot, 222, "dir:privacy"),
+                         dispatcher=dp)
+
+    assert _edits(fake_bot) == []
+    alerts = _alerts(fake_bot)
+    assert len(alerts) == 1
+    assert alerts[0].text == _EXPIRED
+    assert alerts[0].show_alert is True
+
+
+async def test_back_button_on_a_stale_screen_answers_instead_of_crashing():
+    factory = _session_factory()
+    _seed_student(factory)
+    dp = build_dispatcher(session_factory=factory)
+    fake_bot = FakeBot()
+
+    await dp.feed_update(fake_bot,
+                         _stale_callback_update(fake_bot, 222, "dir:profile"),
+                         dispatcher=dp)
+
+    assert _edits(fake_bot) == []
+    alerts = _alerts(fake_bot)
+    assert len(alerts) == 1
+    assert alerts[0].text == _EXPIRED
+    assert alerts[0].show_alert is True
