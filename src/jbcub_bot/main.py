@@ -1,19 +1,51 @@
 import asyncio
+import logging
 import sys
 import threading
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message
+from aiogram.types import ErrorEvent, Message, Update
 
 import jbcub_bot.features as features_pkg
 from jbcub_bot.core import registry
 from jbcub_bot.core.config import get_settings
 from jbcub_bot.core.db import get_session, init_db
+from jbcub_bot.core.errors import report_exception, summarize
 from jbcub_bot.core.intents import IntentRouter
 from jbcub_bot.core.loader import discover_features
 from jbcub_bot.core.middleware import PrincipalMiddleware
 
 _intent_router = IntentRouter()
+_log = logging.getLogger(__name__)
+
+
+def configure_logging() -> None:
+    """Send logs to stdout so the host's console shows tracebacks.
+
+    Without this, the root logger falls back to a bare handler that hides
+    anything below WARNING — including aiogram's own diagnostics — which is how
+    a crashed handler ends up looking like a silent hang.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        stream=sys.stdout,
+        force=True,
+    )
+
+
+def describe_update(update: Update) -> str:
+    """Short "what was the bot doing" line for a crash report."""
+    event = update.message or update.callback_query
+    parts = [f"update {update.update_id}"]
+    if update.message is not None and update.message.text:
+        parts.append(repr(update.message.text[:80]))
+    elif update.callback_query is not None:
+        parts.append(f"callback {update.callback_query.data!r}")
+    user = getattr(event, "from_user", None)
+    if user is not None:
+        parts.append(f"from @{user.username}" if user.username else f"from {user.id}")
+    return " · ".join(parts)
 
 
 def build_dispatcher(session_factory, bootstrap_ids: set | None = None) -> Dispatcher:
@@ -32,6 +64,33 @@ def build_dispatcher(session_factory, bootstrap_ids: set | None = None) -> Dispa
     @dp.message(F.text & ~F.text.startswith("/"))
     async def nl_fallback(message: Message, principal, session):
         await _intent_router.dispatch(message.text, message, principal, session)
+
+    @dp.errors()
+    async def on_unhandled_error(event: ErrorEvent, bot: Bot) -> bool:
+        """Catch-all so a crashing handler answers instead of going quiet.
+
+        Returning True marks the update handled, which keeps aiogram from
+        logging the same traceback a second time without any of our context.
+        """
+        exc = event.exception
+        await report_exception(bot, bootstrap_ids, exc,
+                              context=describe_update(event.update))
+        try:
+            if event.update.message is not None:
+                await event.update.message.answer(
+                    f"⚠️ Something went wrong.\n{summarize(exc)}\n\n"
+                    "The bot admins got the full traceback."
+                )
+            elif event.update.callback_query is not None:
+                # An unanswered callback leaves the button spinning in the client.
+                await event.update.callback_query.answer(
+                    "Something went wrong. The bot admins were notified.",
+                    show_alert=True,
+                )
+        except Exception:  # noqa: BLE001 - the report already went out
+            _log.exception("Could not tell the user about the %s",
+                           type(exc).__name__)
+        return True
 
     return dp
 
@@ -71,6 +130,7 @@ async def _serve(bot: Bot, dp: Dispatcher) -> None:
 
 
 def run() -> None:
+    configure_logging()
     settings = get_settings()
     init_db()  # run pending migrations, creating the schema on a fresh database
     bot = Bot(settings.bot_token)

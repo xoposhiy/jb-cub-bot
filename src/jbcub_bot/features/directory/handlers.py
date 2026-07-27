@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 from aiogram import F, Router
@@ -27,9 +28,26 @@ router = Router(name="directory")
 cmd = CommandRegistrar(router)
 
 
+# A Sheets read that never answers must not take the bot with it. googleapiclient
+# already applies a 60s socket timeout, so this only has to be the outer bound.
+SHEET_READ_TIMEOUT = 90.0
+
+
 def set_status(session, user: User, text: str) -> None:
     user.status_line = text
     session.commit()
+
+
+async def read_rows(sheet_id: str, credentials, range_: str = "A:Z") -> list[list[str]]:
+    """`fetch_rows` off the event loop, with a deadline.
+
+    fetch_rows is blocking: awaited inline it stalls every other update until
+    Google answers. The thread keeps running after a timeout — it can't be
+    cancelled — but the bot stays responsive and the failure gets reported
+    instead of looking like a hang.
+    """
+    async with asyncio.timeout(SHEET_READ_TIMEOUT):
+        return await asyncio.to_thread(fetch_rows, sheet_id, credentials, range_)
 
 
 @cmd.command("me", "Show your own profile.")
@@ -167,24 +185,30 @@ async def cmd_sync(message: Message, principal: User, session):
     # --- Parse phase: fetch + normalize everything; write nothing yet. ---
     await message.answer("Sync started. Reading sheets…")
     try:
-        index_rows = fetch_rows(settings.rights_sheet_id, sa,
-                                f"{settings.cohorts_tab}!A:Z")
+        index_rows = await read_rows(settings.rights_sheet_id, sa,
+                                     f"{settings.cohorts_tab}!A:Z")
         cohorts = sheets.parse_cohort_index(index_rows)
     except sheets.MappingError as exc:
         await message.answer(f"Sync aborted (Cohorts tab): {exc}")
         return
+    except Exception as exc:  # network / API / anything unforeseen
+        raise RuntimeError("/sync failed reading the Cohorts tab") from exc
 
     parsed_cohorts = []  # (cohort_name, records)
     for entry in cohorts:
         await message.answer(f"Reading cohort {entry['cohort']}…")
         sheet_id = sheets.extract_sheet_id(entry["link"])
         try:
-            rows = fetch_rows(sheet_id, sa)
+            rows = await read_rows(sheet_id, sa)
             mapping = sheets.load_mapping(f"{settings.mapping_dir}/{entry['mapping']}")
             records = sheets.normalize_rows(rows, mapping)
         except (sheets.MappingError, FileNotFoundError) as exc:
             await message.answer(f"Sync aborted (cohort {entry['cohort']}): {exc}")
             return
+        except Exception as exc:
+            raise RuntimeError(
+                f"/sync failed reading cohort {entry['cohort']} (sheet {sheet_id})"
+            ) from exc
         for record in records:
             record["primary_cohort"] = entry["cohort"]
         parsed_cohorts.append((entry["cohort"], records))
@@ -192,8 +216,8 @@ async def cmd_sync(message: Message, principal: User, session):
 
     await message.answer("Reading Rights…")
     try:
-        rights_rows = fetch_rows(settings.rights_sheet_id, sa,
-                                 f"{settings.rights_tab}!A:Z")
+        rights_rows = await read_rows(settings.rights_sheet_id, sa,
+                                      f"{settings.rights_tab}!A:Z")
         rights_mapping = sheets.load_mapping(
             f"{settings.mapping_dir}/{settings.rights_mapping}"
         )
@@ -201,6 +225,8 @@ async def cmd_sync(message: Message, principal: User, session):
     except (sheets.MappingError, FileNotFoundError) as exc:
         await message.answer(f"Sync aborted (Rights tab): {exc}")
         return
+    except Exception as exc:
+        raise RuntimeError("/sync failed reading the Rights tab") from exc
 
     for record in rights_records:
         role_value = record.get("role")
@@ -232,7 +258,6 @@ async def cmd_sync(message: Message, principal: User, session):
             f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}")
         session.commit()
     except Exception as exc:
-        session.rollback()
-        await message.answer(f"Sync aborted (write phase): {exc}")
-        return
+        session.rollback()  # the roster keeps its last good state
+        raise RuntimeError("/sync failed in the write phase") from exc
     await message.answer("Sync done.")

@@ -1,6 +1,10 @@
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
+from jbcub_bot.features.directory import handlers
 from jbcub_bot.features.directory.handlers import cmd_sync
 from jbcub_bot.core.models import Role, User
 
@@ -125,6 +129,48 @@ async def test_sync_creates_searchable_admin_only_in_rights(session, monkeypatch
     assert len(results) == 1
     assert results[0].role is Role.ADMIN
     assert results[0].full_name == "Sergey Sidorov"
+
+
+async def test_sync_labels_the_phase_and_reraises_an_unexpected_sheet_error(
+        session, monkeypatch):
+    # A Google API / network failure is not something an admin can fix by editing
+    # a sheet, so it must reach the error reporter with the phase attached rather
+    # than be swallowed into a bare "aborted".
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [["Cohort", "Link", "Mapping"], ["2024", "AAA", "sdt-2025-2028.yaml"]]
+        raise ConnectionResetError("connection reset by peer")
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows", fake_fetch)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
+                        lambda *a: None)
+    msg = SimpleNamespace(answer=AsyncMock())
+    with pytest.raises(RuntimeError) as err:
+        await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN),
+                       session=session)
+    assert "cohort 2024" in str(err.value)
+    assert isinstance(err.value.__cause__, ConnectionResetError)
+    assert session.query(User).count() == 0  # write phase never reached
+
+
+async def test_sync_times_out_instead_of_freezing_on_a_stalled_sheet_read(
+        session, monkeypatch):
+    # fetch_rows is blocking: awaited inline, a stalled Google read freezes every
+    # other update. The deadline turns a hang into a reportable error.
+    def stalling_fetch(sheet_id, sa, range_="A:Z"):
+        time.sleep(0.5)
+        return []
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows",
+                        stalling_fetch)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
+                        lambda *a: None)
+    monkeypatch.setattr(handlers, "SHEET_READ_TIMEOUT", 0.01)
+    msg = SimpleNamespace(answer=AsyncMock())
+    with pytest.raises(RuntimeError) as err:
+        await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN),
+                       session=session)
+    assert isinstance(err.value.__cause__, TimeoutError)
 
 
 async def test_sync_aborts_and_writes_nothing_on_invalid_role(session, monkeypatch):
