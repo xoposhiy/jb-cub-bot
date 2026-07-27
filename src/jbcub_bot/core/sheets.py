@@ -93,7 +93,8 @@ from sqlalchemy import select
 from jbcub_bot.core.models import Role, User
 
 SHEET_OWNED = (
-    "last_name", "first_name", "handle_sheet", "gmail", "github", "codeforces",
+    "last_name", "first_name", "handle_sheet", "gmail",
+    "github_sheet", "codeforces_sheet",
     "birthday", "citizenship", "comment",
     "primary_cohort", "past_cohorts", "role",
 )

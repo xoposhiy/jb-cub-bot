@@ -39,7 +39,10 @@ class FieldSpec:
     name: str
     label: str
     category: Category
-    default: str | None = None  # CONFIGURABLE only
+    default: str | None = None       # CONFIGURABLE only
+    sources: tuple[str, ...] = ()    # (self-reported column, roster column)
+    editable: bool = False           # the owner may set it from the bot
+    edit_hint: str = ""              # what the edit prompt asks for
 
 
 # Order here is the order the profile renders in.
@@ -50,10 +53,16 @@ FIELDS = (
     FieldSpec("primary_cohort", "Cohort", Category.ALWAYS),
     FieldSpec("telegram", "Telegram", Category.CONFIGURABLE, EVERYONE),
     FieldSpec("telegram_id", "Telegram ID", Category.ADMIN_ONLY),
-    FieldSpec("status_line", "Status", Category.CONFIGURABLE, EVERYONE),
+    FieldSpec("status_line", "Status", Category.CONFIGURABLE, EVERYONE,
+              editable=True,
+              edit_hint="Send your new status — one line, up to 120 characters."),
     FieldSpec("gmail", "Gmail", Category.CONFIGURABLE, COHORT),
-    FieldSpec("github", "GitHub", Category.CONFIGURABLE, COHORT),
-    FieldSpec("codeforces", "Codeforces", Category.CONFIGURABLE, COHORT),
+    FieldSpec("github", "GitHub", Category.CONFIGURABLE, COHORT,
+              sources=("github_self", "github_sheet"), editable=True,
+              edit_hint="Send your GitHub username, or a link to your profile."),
+    FieldSpec("codeforces", "Codeforces", Category.CONFIGURABLE, COHORT,
+              sources=("codeforces_self", "codeforces_sheet"), editable=True,
+              edit_hint="Send your Codeforces handle, or a link to your profile."),
     FieldSpec("matriculation", "Matriculation", Category.ADMIN_ONLY),
     FieldSpec("birthday", "Birthday", Category.ADMIN_ONLY),
     FieldSpec("citizenship", "Citizenship", Category.ADMIN_ONLY),
@@ -64,6 +73,18 @@ BY_NAME = {spec.name: spec for spec in FIELDS}
 CONFIGURABLE_FIELDS = tuple(
     spec for spec in FIELDS if spec.category is Category.CONFIGURABLE
 )
+EDITABLE_FIELDS = tuple(spec for spec in FIELDS if spec.editable)
+
+ROSTER_NOTE = "roster"
+
+
+def editable_column(spec: FieldSpec) -> str:
+    """The column an owner's own edit writes.
+
+    A two-source field is edited in its self-reported column; the roster's
+    column belongs to the sheet and the bot never writes it.
+    """
+    return spec.sources[0] if spec.sources else spec.name
 
 
 def _cohorts(u: User) -> set:
@@ -82,10 +103,23 @@ def field_value(user: User, name: str):
 
     `telegram` is the one field that isn't a column: it picks the observed
     handle over the sheet's hint and prefixes the @.
+
+    A field with `sources` has two: what its owner told the bot and what the
+    roster says. The owner's wins, but when both are set and disagree the
+    roster's is shown alongside it -- a profile that silently drops one of two
+    conflicting claims keeps the disagreement invisible until it matters.
+    Telegram is deliberately not rendered this way: there, an observed handle
+    is the truth and the sheet's is merely stale.
     """
     if name == "telegram":
         handle = user.handle_observed or user.handle_sheet
         return f"@{handle}" if handle else None
+    spec = BY_NAME[name]
+    if spec.sources:
+        own, roster = (getattr(user, column) or None for column in spec.sources)
+        if own and roster and own != roster:
+            return f"{own} ({ROSTER_NOTE}: {roster})"
+        return own or roster
     return getattr(user, name)
 
 

@@ -1,10 +1,32 @@
 import logging
 
 import pytest
-from sqlalchemy import create_engine, inspect, text
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import inspect, text
 
 from jbcub_bot.core import db
 from jbcub_bot.core.config import get_settings
+
+# The revision whose schema a pre-migration `create_all` produced, and which
+# init_db() therefore stamps onto such a database.
+LEGACY_REVISION = "c72c6d99f0c1"
+
+
+def _make_legacy_database() -> None:
+    """Build a database exactly as the pre-migration `create_all` left it.
+
+    Runs the one migration that describes that schema and then removes
+    alembic_version, rather than calling `Base.metadata.create_all`: the model
+    has moved on since, so create_all would produce a schema *newer* than the
+    revision init_db stamps and the pending migrations would find nothing to
+    migrate.
+    """
+    config = Config("alembic.ini")
+    config.attributes["configure_logger"] = False
+    command.upgrade(config, LEGACY_REVISION)
+    with db.get_engine().begin() as conn:
+        conn.execute(text("DROP TABLE alembic_version"))
 
 
 @pytest.fixture
@@ -35,18 +57,25 @@ def test_init_db_builds_schema_on_a_fresh_database(db_path):
     assert inspector.has_table("alembic_version")
 
 
+def test_migrations_produce_exactly_the_columns_the_model_declares(db_path):
+    # A model change without a migration takes the bot down at boot, where the
+    # only symptom is a failing query far from the edit that caused it.
+    from jbcub_bot.core.models import User
+
+    db.init_db()
+
+    columns = {c["name"] for c in inspect(db.get_engine()).get_columns("users")}
+    assert columns == {c.name for c in User.__table__.columns}
+
+
 def test_init_db_stamps_a_legacy_create_all_database(db_path):
     # The pre-migration world: tables exist, alembic_version does not.
-    from jbcub_bot.core import models  # noqa: F401  (register models on Base)
-
-    legacy = create_engine(f"sqlite:///{db_path.as_posix()}")
-    db.Base.metadata.create_all(legacy)
-    with legacy.begin() as conn:
+    _make_legacy_database()
+    with db.get_engine().begin() as conn:
         conn.execute(text(
             "INSERT INTO users (id, role, last_name, first_name, past_cohorts,"
             " visibility) VALUES (1, 'Student', 'Ivanov', 'Ivan', '[]', '{}')"
         ))
-    legacy.dispose()
 
     db.init_db()  # must not fail trying to re-create `users`
 
@@ -59,18 +88,12 @@ def test_init_db_stamps_a_legacy_create_all_database(db_path):
 def test_init_db_stamps_the_explicit_revision_not_head(db_path, monkeypatch):
     """init_db must stamp legacy databases at the explicit revision id.
 
-    With exactly one migration in the repo, "head" and "c72c6d99f0c1" resolve
-    to the same on-disk value, so inspecting alembic_version afterwards can't
-    tell the two apart. Capture the literal argument passed to
-    command.stamp instead: that's the one thing that distinguishes "the
-    explicit revision" from "the moving head alias" today, before a second
-    migration would make the difference observable on disk too.
+    Stamping "head" instead would mark every later migration as already
+    applied, so a legacy database would keep the schema it had. Capturing the
+    literal argument passed to command.stamp says that directly, where
+    inspecting the resulting schema would only say it indirectly.
     """
-    from jbcub_bot.core import models  # noqa: F401  (register models on Base)
-
-    legacy = create_engine(f"sqlite:///{db_path.as_posix()}")
-    db.Base.metadata.create_all(legacy)
-    legacy.dispose()
+    _make_legacy_database()
 
     stamped_revisions = []
     real_stamp = db.command.stamp
@@ -83,7 +106,7 @@ def test_init_db_stamps_the_explicit_revision_not_head(db_path, monkeypatch):
 
     db.init_db()
 
-    assert stamped_revisions == ["c72c6d99f0c1"]
+    assert stamped_revisions == [LEGACY_REVISION]
 
 
 def test_init_db_is_idempotent(db_path):

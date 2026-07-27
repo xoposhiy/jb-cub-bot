@@ -7,6 +7,7 @@ from jbcub_bot.features.directory.visibility import (
     STAFF_ONLY,
     Category,
     are_cohort_mates,
+    editable_column,
     field_value,
     level_of,
     next_level,
@@ -43,6 +44,26 @@ def test_field_order_matches_the_rendered_profile_order():
         "gmail", "github", "codeforces",
         "matriculation", "birthday", "citizenship", "comment",
     ]
+
+
+def test_editable_column_is_the_self_column_for_two_source_fields():
+    assert editable_column(visibility.BY_NAME["github"]) == "github_self"
+    assert editable_column(visibility.BY_NAME["codeforces"]) == "codeforces_self"
+    assert editable_column(visibility.BY_NAME["status_line"]) == "status_line"
+
+
+def test_editable_fields_are_the_three_a_user_owns():
+    assert [f.name for f in visibility.EDITABLE_FIELDS] == [
+        "status_line", "github", "codeforces",
+    ]
+
+
+def test_every_editable_field_is_configurable_and_has_a_hint():
+    # An editable ALWAYS field could not be hidden; an editable ADMIN_ONLY one
+    # would tell its owner it exists.
+    for spec in visibility.EDITABLE_FIELDS:
+        assert spec.category is Category.CONFIGURABLE, spec.name
+        assert spec.edit_hint, spec.name
 
 
 # --- levels ---------------------------------------------------------------
@@ -96,6 +117,24 @@ def test_field_value_renders_telegram_with_an_at_sign():
     assert field_value(_u(gmail="a@b.c"), "gmail") == "a@b.c"
 
 
+def test_field_value_prefers_the_self_reported_account():
+    assert field_value(_u(github_self="alice", github_sheet=None), "github") == "alice"
+    assert field_value(_u(github_self=None, github_sheet="alice"), "github") == "alice"
+    assert field_value(_u(github_self="alice", github_sheet="alice"), "github") == "alice"
+    assert field_value(_u(), "github") is None
+
+
+def test_field_value_shows_the_roster_value_next_to_a_differing_own_one():
+    u = _u(github_self="alice-dev", github_sheet="alice")
+    assert field_value(u, "github") == "alice-dev (roster: alice)"
+
+
+def test_field_value_treats_a_blank_sheet_cell_as_missing():
+    # normalize_rows writes "" for an empty cell, not None.
+    assert field_value(_u(codeforces_self="alice", codeforces_sheet=""),
+                       "codeforces") == "alice"
+
+
 # --- cohort mates ---------------------------------------------------------
 
 def test_cohort_mates_by_intersection():
@@ -111,7 +150,7 @@ def test_cohort_mates_by_intersection():
 def test_student_sees_cohort_mate_configurable_by_default():
     viewer = _u(role=Role.STUDENT, primary_cohort="2024")
     target = _u(role=Role.STUDENT, primary_cohort="2024", gmail="t@gmail.com",
-                github="gh", visibility={})  # default -> cohort
+                github_sheet="gh", visibility={})  # default -> cohort
     fields = visible_fields(viewer, target)
     assert fields["gmail"] == "t@gmail.com"
     assert fields["github"] == "gh"
@@ -147,7 +186,7 @@ def test_student_cannot_see_a_hidden_telegram_handle():
 
 def test_everyone_level_crosses_cohorts():
     viewer = _u(role=Role.STUDENT, primary_cohort="2024")
-    target = _u(role=Role.STUDENT, primary_cohort="2021", github="gh",
+    target = _u(role=Role.STUDENT, primary_cohort="2021", github_sheet="gh",
                 visibility={"github": EVERYONE})
     assert visible_fields(viewer, target)["github"] == "gh"
 
