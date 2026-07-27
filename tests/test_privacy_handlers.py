@@ -7,7 +7,7 @@ dispatcher, advances the level, commits it, and edits the same message.
 
 from datetime import datetime, timezone
 
-from aiogram.methods import EditMessageText
+from aiogram.methods import AnswerCallbackQuery, EditMessageText
 from aiogram.types import CallbackQuery, Chat, Message, Update
 from aiogram.types import User as TgUser
 from sqlalchemy import create_engine, select
@@ -17,6 +17,7 @@ from sqlalchemy.pool import StaticPool
 import jbcub_bot.features.directory as directory
 from jbcub_bot.core.db import Base
 from jbcub_bot.core.models import Role, User
+from jbcub_bot.features.directory.privacy import _NOT_LINKED
 from jbcub_bot.features.directory.visibility import COHORT, EVERYONE, STAFF_ONLY
 from jbcub_bot.main import build_dispatcher
 
@@ -90,6 +91,10 @@ def _stored_level(factory, field: str):
 
 def _edits(fake_bot):
     return [m for m in fake_bot.sent if isinstance(m, EditMessageText)]
+
+
+def _alerts(fake_bot):
+    return [m for m in fake_bot.sent if isinstance(m, AnswerCallbackQuery)]
 
 
 async def test_privacy_command_shows_the_screen():
@@ -193,6 +198,10 @@ async def test_an_unknown_field_is_refused_without_touching_the_row():
 
     assert _edits(fake_bot) == []
     assert _stored_level(factory, "birthday") is None
+    alerts = _alerts(fake_bot)
+    assert len(alerts) == 1
+    assert alerts[0].text == "Unknown field."
+    assert alerts[0].show_alert is True
 
 
 async def test_an_unlinked_user_gets_no_screen():
@@ -205,6 +214,10 @@ async def test_an_unlinked_user_gets_no_screen():
                          dispatcher=dp)
 
     assert _edits(fake_bot) == []
+    alerts = _alerts(fake_bot)
+    assert len(alerts) == 1
+    assert alerts[0].text == _NOT_LINKED
+    assert alerts[0].show_alert is True
 
 
 async def test_a_hidden_field_still_shows_on_the_owner_s_own_screen():

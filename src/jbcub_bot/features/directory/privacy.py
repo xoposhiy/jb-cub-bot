@@ -5,6 +5,8 @@ and redraws this same message. Only the caller's own row is ever written, so
 there is nothing to authorize beyond being linked.
 """
 
+import functools
+
 from aiogram import F, Router
 from aiogram.types import (
     CallbackQuery,
@@ -82,6 +84,25 @@ cmd = CommandRegistrar(router)
 _NOT_LINKED = "You are not linked yet. Contact an admin."
 
 
+def _require_linked(fn):
+    """Wrap a callback handler so it refuses an unlinked caller before running.
+
+    Mirrors CommandRegistrar._guard in core/commands.py. Uses functools.wraps
+    so aiogram unwraps __wrapped__ and injects the original handler's
+    declared params (principal, session, ...); guarded handlers must declare
+    `principal`.
+    """
+    @functools.wraps(fn)
+    async def wrapper(cb: CallbackQuery, **kwargs):
+        principal: User | None = kwargs.get("principal")
+        if principal is None:
+            await cb.answer(_NOT_LINKED, show_alert=True)
+            return
+        return await fn(cb, **kwargs)
+
+    return wrapper
+
+
 @cmd.command("privacy", "Choose who sees each of your profile fields.")
 async def cmd_privacy(message: Message, principal: User, session):
     await message.answer(render_privacy(principal),
@@ -95,28 +116,22 @@ async def _show_privacy(cb: CallbackQuery, principal: User) -> None:
 
 
 @router.callback_query(F.data == PRIVACY_CALLBACK)
+@_require_linked
 async def cb_open(cb: CallbackQuery, principal: User, session):
-    if principal is None:
-        await cb.answer(_NOT_LINKED, show_alert=True)
-        return
     await _show_privacy(cb, principal)
 
 
 @router.callback_query(F.data == BACK_CALLBACK)
+@_require_linked
 async def cb_back(cb: CallbackQuery, principal: User, session):
-    if principal is None:
-        await cb.answer(_NOT_LINKED, show_alert=True)
-        return
     await cb.message.edit_text(render_profile(principal, principal),
                                reply_markup=me_keyboard(principal))
     await cb.answer()
 
 
 @router.callback_query(F.data.startswith(FIELD_CALLBACK_PREFIX))
+@_require_linked
 async def cb_cycle(cb: CallbackQuery, principal: User, session):
-    if principal is None:
-        await cb.answer(_NOT_LINKED, show_alert=True)
-        return
     name = cb.data[len(FIELD_CALLBACK_PREFIX):]
     spec = BY_NAME.get(name)
     if spec is None or spec.category is not Category.CONFIGURABLE:
