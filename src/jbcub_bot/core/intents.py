@@ -35,8 +35,18 @@ class IntentRouter:
         return None
 
     async def dispatch(self, text, message, principal, session) -> bool:
-        intent = self.matches(text)
-        if intent is None or not intent_allowed(principal, intent):
-            return False
-        await intent.handler(message, principal, session)
-        return True
+        """Offer `text` to each matching intent until one takes it.
+
+        A handler returning False declines -- it must not have answered -- and
+        the turn goes to the next intent. Anything else (including None, so a
+        handler that forgets to return cannot go silently unhandled) ends the
+        walk.
+        """
+        for intent in self._intents:
+            if not re.search(intent.pattern, text, re.IGNORECASE):
+                continue
+            if not intent_allowed(principal, intent):
+                continue
+            if await intent.handler(message, principal, session) is not False:
+                return True
+        return False

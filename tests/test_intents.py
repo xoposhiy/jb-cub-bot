@@ -79,3 +79,49 @@ async def test_dispatch_runs_admin_intent_for_admin():
     )
     assert handled is True
     assert calls == [True]
+
+
+async def test_a_declining_handler_passes_the_turn_on():
+    calls = []
+
+    async def declines(message, principal, session):
+        calls.append("first")
+        return False
+
+    async def accepts(message, principal, session):
+        calls.append("second")
+        return True
+
+    r = IntentRouter()
+    r.register(Intent("first", r".+", handler=declines))
+    r.register(Intent("second", r".+", handler=accepts))
+    handled = await r.dispatch("hi", message="M", principal=None, session="S")
+    assert handled is True
+    assert calls == ["first", "second"]
+
+
+async def test_all_intents_declining_is_unhandled():
+    async def declines(message, principal, session):
+        return False
+
+    r = IntentRouter()
+    r.register(Intent("only", r".+", handler=declines))
+    handled = await r.dispatch("hi", message="M", principal=None, session="S")
+    assert handled is False
+
+
+async def test_a_handler_returning_none_still_counts_as_handled():
+    calls = []
+
+    async def silent(message, principal, session):
+        calls.append("first")
+
+    async def never(message, principal, session):
+        calls.append("second")
+
+    r = IntentRouter()
+    r.register(Intent("first", r".+", handler=silent))
+    r.register(Intent("second", r".+", handler=never))
+    handled = await r.dispatch("hi", message="M", principal=None, session="S")
+    assert handled is True
+    assert calls == ["first"]
