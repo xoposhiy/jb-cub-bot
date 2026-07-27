@@ -15,6 +15,8 @@ one signal among several in `word_score`, and a penalised one.
 
 import re
 import unicodedata
+from collections.abc import Sequence
+from difflib import SequenceMatcher
 
 # Below this a match is not reported at all: the search intent declines and the
 # turn passes to whatever comes next. Measured over the roster, real matches
@@ -88,3 +90,46 @@ def skeleton(text: str) -> str:
     for pattern, replacement in RULES:
         word = re.sub(pattern, replacement, word)
     return re.sub(r"(.)\1+", r"\1", word.upper())
+
+
+def word_score(query: str, name: str) -> float:
+    """How well one query word matches one word of a name, in 0..1."""
+    folded_query, folded_name = fold(query), fold(name)
+    if not folded_query or not folded_name:
+        return 0.0
+    if len(folded_query) >= MIN_QUERY_LEN and folded_name.startswith(folded_query):
+        return 1.0
+    best = SequenceMatcher(None, folded_query, folded_name).ratio()
+    coded_query, coded_name = skeleton(query), skeleton(name)
+    if coded_query and coded_name:
+        if (len(coded_query) >= MIN_QUERY_LEN
+                and coded_name.startswith(coded_query)):
+            coded = 0.95
+        else:
+            # Penalised: a skeleton throws away real information, so it is the
+            # signal most likely to agree about two different people.
+            coded = SequenceMatcher(None, coded_query, coded_name).ratio() * 0.95
+        best = max(best, coded)
+    return best
+
+
+def score(query: str, tokens: Sequence[str]) -> float:
+    """How well `query` matches a person whose name words are `tokens`.
+
+    Every word of the query must find its own word of the name: each one
+    greedily claims the best token still free, and the mean is the result. A
+    query with more words than the name scores 0, which is what keeps a
+    sentence containing a name from being treated as a search for it.
+    """
+    words = [w for w in query.split() if fold(w)]
+    if not words:
+        return 0.0
+    free = [t for t in tokens if t]
+    total = 0.0
+    for word in words:
+        if not free:
+            return 0.0
+        best, index = max((word_score(word, t), i) for i, t in enumerate(free))
+        total += best
+        free.pop(index)
+    return total / len(words)
