@@ -45,17 +45,21 @@ def admin_keyboard(target: User) -> InlineKeyboardMarkup | None:
 
 
 def me_keyboard(user: User, *,
-                allow_privacy: bool = True) -> InlineKeyboardMarkup | None:
+                interactive: bool = True) -> InlineKeyboardMarkup | None:
     """Keyboard for a user's own profile.
 
-    `allow_privacy=False` is for an impersonated view: the follow-up callback
+    `interactive=False` is for an impersonated view: the follow-up callback
     would arrive without the impersonation ref, so the admin would edit their
-    own settings while looking at someone else's profile.
+    own profile while looking at someone else's.
     """
     rows = []
-    if allow_privacy:
-        rows.append([InlineKeyboardButton(text="\U0001f512 Who sees my data",
-                                          callback_data=PRIVACY_CALLBACK)])
+    if interactive:
+        rows.append([
+            InlineKeyboardButton(text="✏️ Edit my profile",
+                                 callback_data=EDIT_CALLBACK),
+            InlineKeyboardButton(text="\U0001f512 Who sees my data",
+                                 callback_data=PRIVACY_CALLBACK),
+        ])
     if user.role is Role.ADMIN:
         admin = admin_keyboard(user)
         if admin is not None:

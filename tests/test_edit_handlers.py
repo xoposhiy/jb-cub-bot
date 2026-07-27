@@ -404,6 +404,22 @@ async def test_cancel_under_impersonation_does_not_crash():
     assert "Nothing to cancel." in fake_bot.sent[1].text
 
 
+async def test_edit_under_impersonation_shows_the_target_read_only():
+    factory = _session_factory()
+    _seed_admin_and_student(factory)
+    dp = build_dispatcher(session_factory=factory)
+    fake_bot = FakeBot()
+
+    await dp.feed_update(fake_bot,
+                         _message_update(fake_bot, 777, "/as 30009999 /edit"),
+                         dispatcher=dp)
+
+    # sent[0] is cmd_as's "Showing as ..." notice; sent[1] is /edit's answer.
+    shown = fake_bot.sent[1]
+    assert "target status" in shown.text   # the target's row, not the admin's
+    assert shown.reply_markup is None      # nothing tappable while impersonating
+
+
 async def test_opening_the_screen_from_a_callback():
     factory = _session_factory()
     _seed_student(factory)

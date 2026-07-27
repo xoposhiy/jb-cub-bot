@@ -15,7 +15,7 @@ from sqlalchemy.pool import StaticPool
 
 from jbcub_bot.core.db import Base
 from jbcub_bot.core.models import Role, User
-from jbcub_bot.features.directory.render import PRIVACY_CALLBACK
+from jbcub_bot.features.directory.render import EDIT_CALLBACK, PRIVACY_CALLBACK
 from jbcub_bot.main import build_dispatcher
 
 
@@ -91,3 +91,28 @@ async def test_me_under_impersonation_has_no_privacy_button():
 
     assert "Zakhar Zhukovsky" in fake_bot.sent[1].text  # the target's profile
     assert PRIVACY_CALLBACK not in _callbacks(fake_bot.sent[1])
+
+
+async def test_me_offers_the_edit_screen():
+    factory = _session_factory()
+    _seed(factory)
+    dp = build_dispatcher(session_factory=factory)
+    fake_bot = FakeBot()
+
+    await dp.feed_update(fake_bot, _message_update(fake_bot, 222, "/me"),
+                         dispatcher=dp)
+
+    assert EDIT_CALLBACK in _callbacks(fake_bot.sent[0])
+
+
+async def test_me_under_impersonation_has_no_edit_button():
+    factory = _session_factory()
+    _seed(factory)
+    dp = build_dispatcher(session_factory=factory)
+    fake_bot = FakeBot()
+
+    await dp.feed_update(fake_bot,
+                         _message_update(fake_bot, 777, "/as 30009999 /me"),
+                         dispatcher=dp)
+
+    assert EDIT_CALLBACK not in _callbacks(fake_bot.sent[1])

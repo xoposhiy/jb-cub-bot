@@ -61,7 +61,7 @@ async def cmd_me(message: Message, principal: User, session, impersonator=None):
     # button press afterwards would arrive as the admin, so hide the screen.
     await message.answer(
         render_profile(principal, principal),
-        reply_markup=me_keyboard(principal, allow_privacy=impersonator is None),
+        reply_markup=me_keyboard(principal, interactive=impersonator is None),
     )
 
 

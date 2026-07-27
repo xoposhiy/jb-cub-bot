@@ -23,7 +23,7 @@ reader. Explain those in conversation instead, where they can be skipped.
 
 ## Conventions that aren't obvious
 - **Add a feature** = a package in `src/jbcub_bot/features/<name>/` exporting `router` (aiogram `Router`) + `manifest`. Register commands via `CommandRegistrar(router)`: `@cmd.command("name", "description", min_role=Role.ADMIN, public=False, usage="<args>")` — the decorator enforces `min_role`/`public` (so no in-handler role checks) and collects `CommandSpec`s for `/help`. Build the manifest with `commands=cmd.specs`. Give intents a `description` and `min_role`. The loader auto-discovers the feature and `build_dispatcher` publishes its manifest to `core/registry.py` for `/help`.
-- **Field ownership:** Google Sheets are read-only source of truth for roster fields; the bot **never writes to a sheet**. Bot-owned fields (`telegram_id`, `handle_observed`, `status_line`, `visibility`) must survive re-import. `matriculation` is the only stable student key.
+- **Field ownership:** Google Sheets are read-only source of truth for roster fields; the bot **never writes to a sheet**. Bot-owned fields (`telegram_id`, `handle_observed`, `status_line`, `github_self`, `codeforces_self`, `visibility`) must survive re-import. `matriculation` is the only stable student key. An account field a user can set has **two columns** — `*_sheet` (the roster's, listed in `sheets.SHEET_OWNED`) and `*_self` (theirs). `visibility.field_value` prefers the user's and shows the roster's beside it when the two disagree; `sheets.DRIFT_PAIRS` makes `/sync` report the disagreement. Nothing resolves it automatically — an admin edits the sheet. A mapping YAML key is a `User` field name, so a roster GitHub column would be `github_sheet: "GitHub"`.
 - **Profile reads go through `features/directory/visibility.py`** — never bypass it.
   A handler that reads a profile column off the model leaks whatever its owner
   hid (`/cohort` did exactly this until telegram became hideable).
@@ -32,9 +32,18 @@ reader. Explain those in conversation instead, where they can be skipped.
   level for configurable ones. The visibility service, the profile renderer, and
   the `/privacy` screen all read that table; nothing else lists profile fields.
   `ADMIN_ONLY` fields are never shown or hinted at to their owner.
+  `editable=True` plus an `edit_hint` puts the field on the `/edit` screen, and
+  `accounts.NORMALIZERS` must gain an entry for it — a test in `test_edit.py`
+  enforces the pairing.
 - **`user.visibility` must be reassigned, not mutated** — it is a plain `JSON`
   column, so `user.visibility[k] = v` leaves the instance clean and the commit
   writes nothing. Use `visibility.set_level`.
+- **A feature that waits for free text must own an FSM state.** `nl_fallback` in
+  `main.py` is registered on the `Dispatcher`, whose own handlers run before
+  every sub-router, so plain text reaches a feature only while
+  `StateFilter(None)` fails — that is, only while the sender is in a state.
+  Exclude commands from a state handler (`~F.text.startswith("/")`) so
+  `/cancel` still works.
 - **Don't swallow unexpected exceptions in a handler.** Answer only the failures a user can act on (a bad mapping, a missing column); let the rest propagate — `build_dispatcher`'s `dp.errors` handler replies, logs, and DMs the full traceback to `BOOTSTRAP_ADMIN_IDS`. Add context by re-raising: `raise RuntimeError("/sync failed reading the Rights tab") from exc`. A bare `except Exception` that answers and returns is how a crash turns into a silent hang.
 - **Blocking I/O in an async handler freezes the whole bot** (one event loop, no threads). Google Sheets reads go through `read_rows()`, which adds a thread hop and a deadline.
 

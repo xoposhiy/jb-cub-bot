@@ -1,4 +1,5 @@
 from jbcub_bot.features.directory.render import (
+    EDIT_CALLBACK,
     PRIVACY_CALLBACK,
     me_keyboard,
     render_profile,
@@ -58,30 +59,31 @@ def test_render_shows_admin_only_fields_to_an_admin():
     assert "Birthday: 2000-01-02" in text
 
 
-def test_me_keyboard_offers_the_privacy_screen():
+def test_me_keyboard_offers_editing_and_privacy():
     kb = me_keyboard(User(first_name="S", last_name="Student",
                           role=Role.STUDENT))
     assert [b.callback_data for row in kb.inline_keyboard for b in row] == [
-        PRIVACY_CALLBACK
+        EDIT_CALLBACK, PRIVACY_CALLBACK,
     ]
 
 
-def test_me_keyboard_without_privacy_is_empty_for_a_student():
+def test_me_keyboard_has_nothing_for_a_student_when_not_interactive():
     assert me_keyboard(User(first_name="S", last_name="Student",
-                            role=Role.STUDENT), allow_privacy=False) is None
+                            role=Role.STUDENT), interactive=False) is None
 
 
-def test_me_keyboard_puts_privacy_above_the_admin_buttons():
+def test_me_keyboard_puts_self_service_above_the_admin_buttons():
     admin = User(first_name="A", last_name="Admin", role=Role.ADMIN,
                  matriculation="30000001")
     kb = me_keyboard(admin)
-    assert kb.inline_keyboard[0][0].callback_data == PRIVACY_CALLBACK
+    assert [b.callback_data for b in kb.inline_keyboard[0]] == [
+        EDIT_CALLBACK, PRIVACY_CALLBACK,
+    ]
     assert [b.callback_data for b in kb.inline_keyboard[1]] == [
         "dir:link:30000001", "dir:reset:30000001",
     ]
 
 
-def test_me_keyboard_for_an_admin_without_matriculation_has_only_privacy():
+def test_me_keyboard_for_an_admin_without_matriculation_has_only_self_service():
     kb = me_keyboard(User(first_name="A", last_name="Admin", role=Role.ADMIN))
     assert len(kb.inline_keyboard) == 1
-    assert kb.inline_keyboard[0][0].callback_data == PRIVACY_CALLBACK
