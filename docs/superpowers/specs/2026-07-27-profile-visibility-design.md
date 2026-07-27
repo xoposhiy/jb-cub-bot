@@ -86,6 +86,13 @@ currently loses it from their own `/me` too.
 
 The staff override stays — the levels govern student-to-student visibility only.
 
+### `/cohort` must stop bypassing the service
+
+`/cohort` prints `@handle` straight off the model. Harmless while `telegram` was
+unhideable; the moment it becomes configurable, that line leaks a handle its
+owner set to `staff_only`. It has to read `visible_fields`, and drop the handle
+from the line when the viewer isn't allowed to see it.
+
 ## UI
 
 Entry points: a `🔒 Who sees my data` button on `/me` (above the existing admin
@@ -126,7 +133,8 @@ the admin would edit their own settings while looking at a student's profile.
   already 264 lines and owns all of `/sync`.
 - **Changed:** `visibility.py` (field table, levels, rewritten
   `visible_fields`), `render.py` (reads `FIELDS`; new `me_keyboard`),
-  `handlers.py` (`/me` uses `me_keyboard`), `__init__.py`
+  `handlers.py` (`/me` uses `me_keyboard`; `/cohort` reads `visible_fields`),
+  `__init__.py`
   (`include_router(privacy.router)`, `commands=cmd.specs + privacy.cmd.specs` —
   explicit composition rather than an import for its side effect).
 
@@ -140,6 +148,8 @@ the admin would edit their own settings while looking at a student's profile.
   unchanged after `telegram`/`status_line` become configurable.
 - **`test_privacy.py`** (new) — pure: screen text, two-per-row chunking with
   `Back` alone, level cycle wraps.
+- **`/cohort`** — a mate who hid their Telegram is still listed, without the
+  handle.
 - **Integration** — a callback advances the level, commits, and edits the
   message; `/me` under `/as` has no Privacy button.
 
