@@ -5,16 +5,32 @@ and redraws this same message. Only the caller's own row is ever written, so
 there is nothing to authorize beyond being linked.
 """
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram import F, Router
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
+from jbcub_bot.core.commands import CommandRegistrar
 from jbcub_bot.core.models import User
+from jbcub_bot.features.directory.render import (
+    PRIVACY_CALLBACK,
+    me_keyboard,
+    render_profile,
+)
 from jbcub_bot.features.directory.visibility import (
+    BY_NAME,
     CONFIGURABLE_FIELDS,
     LEVEL_EMOJI,
     LEVEL_LABELS,
     LEVELS,
+    Category,
     field_value,
     level_of,
+    next_level,
+    set_level,
 )
 
 BACK_CALLBACK = "dir:profile"
@@ -58,3 +74,55 @@ def privacy_keyboard(user: User) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton(text="← Back to profile",
                                       callback_data=BACK_CALLBACK)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+router = Router(name="directory.privacy")
+cmd = CommandRegistrar(router)
+
+_NOT_LINKED = "You are not linked yet. Contact an admin."
+
+
+@cmd.command("privacy", "Choose who sees each of your profile fields.")
+async def cmd_privacy(message: Message, principal: User, session):
+    await message.answer(render_privacy(principal),
+                         reply_markup=privacy_keyboard(principal))
+
+
+async def _show_privacy(cb: CallbackQuery, principal: User) -> None:
+    await cb.message.edit_text(render_privacy(principal),
+                               reply_markup=privacy_keyboard(principal))
+    await cb.answer()
+
+
+@router.callback_query(F.data == PRIVACY_CALLBACK)
+async def cb_open(cb: CallbackQuery, principal: User, session):
+    if principal is None:
+        await cb.answer(_NOT_LINKED, show_alert=True)
+        return
+    await _show_privacy(cb, principal)
+
+
+@router.callback_query(F.data == BACK_CALLBACK)
+async def cb_back(cb: CallbackQuery, principal: User, session):
+    if principal is None:
+        await cb.answer(_NOT_LINKED, show_alert=True)
+        return
+    await cb.message.edit_text(render_profile(principal, principal),
+                               reply_markup=me_keyboard(principal))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith(FIELD_CALLBACK_PREFIX))
+async def cb_cycle(cb: CallbackQuery, principal: User, session):
+    if principal is None:
+        await cb.answer(_NOT_LINKED, show_alert=True)
+        return
+    name = cb.data[len(FIELD_CALLBACK_PREFIX):]
+    spec = BY_NAME.get(name)
+    if spec is None or spec.category is not Category.CONFIGURABLE:
+        # A keyboard left over from an older deploy, or a hand-crafted payload.
+        await cb.answer("Unknown field.", show_alert=True)
+        return
+    set_level(principal, name, next_level(level_of(principal, name)))
+    session.commit()
+    await _show_privacy(cb, principal)
