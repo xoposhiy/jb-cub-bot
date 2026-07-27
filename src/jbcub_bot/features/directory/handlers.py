@@ -21,7 +21,7 @@ from jbcub_bot.features.directory.render import (
     render_cohort_list,
     render_profile,
 )
-from jbcub_bot.features.directory.search import list_cohort, search_users
+from jbcub_bot.features.directory.search import list_cohort, rank_users
 
 from aiogram.filters import CommandObject
 
@@ -79,7 +79,7 @@ async def name_search(message: Message, principal: User, session):
         await message.answer("You are not linked yet. Contact an admin.")
         return
     query = (message.text or "").strip()
-    results = search_users(session, query)
+    results = [user for _, user in rank_users(session, query)]
     if not results:
         await message.answer("No one found.")
     elif len(results) == 1:

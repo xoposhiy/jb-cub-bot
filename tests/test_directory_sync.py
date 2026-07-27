@@ -124,8 +124,8 @@ async def test_sync_creates_searchable_admin_only_in_rights(session, monkeypatch
     msg = SimpleNamespace(answer=AsyncMock())
     await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
 
-    from jbcub_bot.features.directory.search import search_users
-    results = search_users(session, "sidorov")
+    from jbcub_bot.features.directory.search import rank_users
+    results = [user for _, user in rank_users(session, "sidorov")]
     assert len(results) == 1
     assert results[0].role is Role.ADMIN
     assert results[0].full_name == "Sergey Sidorov"
