@@ -1,6 +1,7 @@
 import pytest
 
 from jbcub_bot.features.directory import accounts
+from jbcub_bot.features.directory.accounts import Verdict
 
 
 @pytest.mark.parametrize("typed", [
@@ -64,3 +65,76 @@ def test_status_at_the_limit_is_accepted():
 def test_an_unknown_field_is_a_programming_error():
     with pytest.raises(KeyError):
         accounts.normalize("birthday", "whatever")
+
+
+# --- the existence check ---------------------------------------------------
+
+def _answers(status, body=""):
+    async def fetch(url):
+        _answers.url = url
+        return status, body
+    return fetch
+
+
+def _fails():
+    async def fetch(url):
+        raise accounts.FetchFailed("connection reset")
+    return fetch
+
+
+async def test_github_200_means_the_account_exists():
+    fetch = _answers(200, '{"login": "alice"}')
+    assert await accounts.verify("github", "alice", fetch=fetch) is Verdict.EXISTS
+    assert _answers.url == "https://api.github.com/users/alice"
+
+
+async def test_github_404_means_no_such_account():
+    assert await accounts.verify("github", "nope", fetch=_answers(404)) \
+        is Verdict.MISSING
+
+
+async def test_github_rate_limit_is_unknown_not_missing():
+    # 60 anonymous requests an hour per IP: a shared IP running out of them
+    # must not look like "this user doesn't exist".
+    assert await accounts.verify("github", "alice", fetch=_answers(403)) \
+        is Verdict.UNKNOWN
+
+
+async def test_a_server_error_is_unknown():
+    assert await accounts.verify("github", "alice", fetch=_answers(500)) \
+        is Verdict.UNKNOWN
+
+
+async def test_an_unreachable_service_is_unknown():
+    assert await accounts.verify("github", "alice", fetch=_fails()) \
+        is Verdict.UNKNOWN
+
+
+async def test_codeforces_ok_status_means_the_account_exists():
+    fetch = _answers(200, '{"status":"OK","result":[{"handle":"alice"}]}')
+    assert await accounts.verify("codeforces", "alice", fetch=fetch) \
+        is Verdict.EXISTS
+    assert _answers.url == \
+        "https://codeforces.com/api/user.info?handles=alice"
+
+
+async def test_codeforces_failed_body_means_missing_despite_the_400():
+    # Codeforces answers 400 for a handle it doesn't know, so the body decides.
+    fetch = _answers(400, '{"status":"FAILED","comment":"handles: User with '
+                          'handle nope not found"}')
+    assert await accounts.verify("codeforces", "nope", fetch=fetch) \
+        is Verdict.MISSING
+
+
+async def test_codeforces_unparseable_body_is_unknown():
+    fetch = _answers(200, "<html>maintenance</html>")
+    assert await accounts.verify("codeforces", "alice", fetch=fetch) \
+        is Verdict.UNKNOWN
+
+
+async def test_a_field_with_nothing_to_check_verifies_trivially():
+    async def never_called(url):
+        raise AssertionError("status_line needs no network call")
+
+    assert await accounts.verify("status_line", "hi", fetch=never_called) \
+        is Verdict.EXISTS

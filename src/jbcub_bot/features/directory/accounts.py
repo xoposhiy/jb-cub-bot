@@ -6,7 +6,12 @@ before spending a request on it. A normalizer raises `ValueError` whose message
 is shown to the user verbatim.
 """
 
+import asyncio
+import enum
+import json
 import re
+
+import aiohttp
 
 _GITHUB_URL_RE = re.compile(
     r"(?:https?://)?(?:www\.)?github\.com/([^/?#\s]+)", re.IGNORECASE)
@@ -70,3 +75,81 @@ NORMALIZERS = {
 def normalize(field: str, text: str) -> str:
     """Canonical value for `field`, or ValueError with a message for the user."""
     return NORMALIZERS[field](text)
+
+
+class Verdict(enum.Enum):
+    EXISTS = "exists"
+    MISSING = "missing"    # the service said there is no such user
+    UNKNOWN = "unknown"    # the service didn't say
+
+
+class FetchFailed(Exception):
+    """The service could not be reached."""
+
+
+HTTP_TIMEOUT = 5.0
+
+
+async def _http_fetch(url: str) -> tuple[int, str]:
+    """GET `url` with a deadline, as (status, body).
+
+    aiohttp arrives with aiogram, so this adds no dependency. The deadline is
+    the point: one event loop runs the whole bot, and a request that never
+    answers would hold up every other update.
+    """
+    try:
+        async with asyncio.timeout(HTTP_TIMEOUT):
+            async with aiohttp.ClientSession() as http:
+                async with http.get(url) as response:
+                    return response.status, await response.text()
+    except (aiohttp.ClientError, TimeoutError) as exc:
+        raise FetchFailed(str(exc)) from exc
+
+
+async def _verify_github(handle: str, fetch) -> Verdict:
+    try:
+        status, _ = await fetch(f"https://api.github.com/users/{handle}")
+    except FetchFailed:
+        return Verdict.UNKNOWN
+    if status == 200:
+        return Verdict.EXISTS
+    if status == 404:
+        return Verdict.MISSING
+    return Verdict.UNKNOWN  # 403 rate limit, 5xx, anything unexpected
+
+
+async def _verify_codeforces(handle: str, fetch) -> Verdict:
+    try:
+        _, body = await fetch(
+            f"https://codeforces.com/api/user.info?handles={handle}")
+    except FetchFailed:
+        return Verdict.UNKNOWN
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return Verdict.UNKNOWN  # an HTML error page, not the API
+    status = payload.get("status") if isinstance(payload, dict) else None
+    if status == "OK":
+        return Verdict.EXISTS
+    # FAILED also covers malformed requests, but the handle passed our own
+    # format check before we got here, so "not found" is what's left.
+    if status == "FAILED":
+        return Verdict.MISSING
+    return Verdict.UNKNOWN
+
+
+_VERIFIERS = {"github": _verify_github, "codeforces": _verify_codeforces}
+
+
+async def verify(field: str, handle: str, fetch=_http_fetch) -> Verdict:
+    """Does the account exist? EXISTS for a field with nothing to check.
+
+    `handle` has been through `normalize`, so it holds only characters that are
+    safe in a URL path or query and needs no escaping.
+
+    `fetch` is a parameter so tests never touch the network.
+    """
+    verifier = _VERIFIERS.get(field)
+    if verifier is None:
+        return Verdict.EXISTS
+    return await verifier(handle, fetch)
