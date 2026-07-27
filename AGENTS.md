@@ -44,6 +44,19 @@ reader. Explain those in conversation instead, where they can be skipped.
   `StateFilter(None)` fails — that is, only while the sender is in a state.
   Exclude commands from a state handler (`~F.text.startswith("/")`) so
   `/cancel` still works.
+- **An intent handler returns `bool`.** `False` means "not mine" — the router
+  offers the message to the next intent, so a declining handler must not have
+  answered. Anything else (including `None`) ends the walk. Below its
+  threshold the name search declines; `nl_fallback` in `main.py` owns the
+  reply when nothing took the message.
+- **Name matching lives in `features/directory/matching.py`** and is pure
+  string work — no aiogram, no sqlalchemy. Every roster name is Latin while
+  queries arrive in Cyrillic, so comparison happens on `fold` (no diacritics,
+  no case, no punctuation) and `skeleton` (one code per name, whatever the
+  transliteration). Thresholds are the constants at the top of that module;
+  the rule tuples `GLIDES` and `RULES` are order-dependent, and
+  `tests/test_matching.py` is the table that keeps a new rule from fixing one
+  name and breaking three.
 - **Don't swallow unexpected exceptions in a handler.** Answer only the failures a user can act on (a bad mapping, a missing column); let the rest propagate — `build_dispatcher`'s `dp.errors` handler replies, logs, and DMs the full traceback to `BOOTSTRAP_ADMIN_IDS`. Add context by re-raising: `raise RuntimeError("/sync failed reading the Rights tab") from exc`. A bare `except Exception` that answers and returns is how a crash turns into a silent hang.
 - **Blocking I/O in an async handler freezes the whole bot** (one event loop, no threads). Google Sheets reads go through `read_rows()`, which adds a thread hop and a deadline.
 

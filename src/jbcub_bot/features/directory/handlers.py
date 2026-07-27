@@ -21,6 +21,7 @@ from jbcub_bot.features.directory.render import (
     render_cohort_list,
     render_profile,
 )
+from jbcub_bot.features.directory import matching
 from jbcub_bot.features.directory.search import list_cohort, rank_users
 
 from aiogram.filters import CommandObject
@@ -74,21 +75,30 @@ async def cmd_cohort(message: Message, principal: User, session):
     await message.answer("Your cohort:\n" + render_cohort_list(principal, mates))
 
 
-async def name_search(message: Message, principal: User, session):
+async def name_search(message: Message, principal: User, session) -> bool:
+    """Answer with a profile or a shortlist; return False when unsure.
+
+    Returning False leaves the message unanswered on purpose: the intent
+    router moves on, and whatever ends the chain gets to reply.
+    """
     if principal is None:
+        # Answering here rather than declining: an unlinked user gets told what
+        # to do instead of a puzzling "No one found."
         await message.answer("You are not linked yet. Contact an admin.")
-        return
-    query = (message.text or "").strip()
-    results = [user for _, user in rank_users(session, query)]
-    if not results:
-        await message.answer("No one found.")
-    elif len(results) == 1:
-        target = results[0]
+        return True
+    ranked = rank_users(session, (message.text or "").strip())
+    if not ranked:
+        return False
+    best, target = ranked[0]
+    runner_up = ranked[1][0] if len(ranked) > 1 else 0.0
+    if best - runner_up >= matching.LEAD:
         kb = admin_keyboard(target) if principal.role is Role.ADMIN else None
         await message.answer(render_profile(principal, target), reply_markup=kb)
-    else:
-        lines = [f"- {u.full_name}" for u in results[:20]]
-        await message.answer("Several people match:\n" + "\n".join(lines))
+        return True
+    close = [user for score, user in ranked if best - score <= matching.SPREAD]
+    lines = [f"- {user.full_name}" for user in close[:20]]
+    await message.answer("Several people match:\n" + "\n".join(lines))
+    return True
 
 
 name_search_intent = Intent(

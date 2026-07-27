@@ -49,6 +49,12 @@ def describe_update(update: Update) -> str:
     return " · ".join(parts)
 
 
+# What the bot says when no intent took the message. Search is the only intent
+# today, so this is its "not found"; when the chain grows it becomes the
+# generic "I didn't understand that".
+NOTHING_MATCHED = "No one found."
+
+
 def build_dispatcher(session_factory, bootstrap_ids: set | None = None) -> Dispatcher:
     dp = Dispatcher()
     dp.message.middleware(PrincipalMiddleware(session_factory, bootstrap_ids))
@@ -63,11 +69,17 @@ def build_dispatcher(session_factory, bootstrap_ids: set | None = None) -> Dispa
 
     # NL fallback: any non-command text runs through the intent router --
     # unless the sender is in a state. A Dispatcher's own handlers run before
-    # its sub-routers, so without StateFilter(None) the `.+` search intent
-    # would swallow every value a feature is waiting for.
+    # its sub-routers, so without StateFilter(None) this handler would consume
+    # every value a feature is waiting for. The `.+` search intent no longer
+    # swallows the message by matching it -- below its threshold it declines --
+    # but it still runs before any sub-router, so StateFilter(None) stays
+    # load-bearing.
     @dp.message(StateFilter(None), F.text & ~F.text.startswith("/"))
     async def nl_fallback(message: Message, principal, session):
-        await _intent_router.dispatch(message.text, message, principal, session)
+        handled = await _intent_router.dispatch(message.text, message,
+                                                principal, session)
+        if not handled:
+            await message.answer(NOTHING_MATCHED)
 
     @dp.errors()
     async def on_unhandled_error(event: ErrorEvent, bot: Bot) -> bool:
