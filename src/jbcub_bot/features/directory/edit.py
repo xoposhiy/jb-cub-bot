@@ -276,3 +276,34 @@ async def _reprompt(message: Message, data: dict, user: User, spec: FieldSpec,
     await _redraw(message, data,
                   f"{problem}\n\n{render_prompt(user, spec)}",
                   prompt_keyboard(spec))
+
+
+@router.callback_query(F.data.startswith(CLEAR_CALLBACK_PREFIX))
+@require_linked
+async def cb_clear(cb: CallbackQuery, principal: User, session,
+                   state: FSMContext):
+    """Ask first: removing a value is destructive, however small."""
+    spec = editable_spec(cb.data[len(CLEAR_CALLBACK_PREFIX):])
+    if spec is None:
+        await cb.answer(UNKNOWN_FIELD, show_alert=True)
+        return
+    if not isinstance(cb.message, Message):
+        await cb.answer(EXPIRED, show_alert=True)
+        return
+    await cb.message.edit_text(render_clear_confirm(spec),
+                               reply_markup=clear_confirm_keyboard(spec))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith(CLEAR_DO_CALLBACK_PREFIX))
+@require_linked
+async def cb_clear_do(cb: CallbackQuery, principal: User, session,
+                      state: FSMContext):
+    spec = editable_spec(cb.data[len(CLEAR_DO_CALLBACK_PREFIX):])
+    if spec is None:
+        await cb.answer(UNKNOWN_FIELD, show_alert=True)
+        return
+    setattr(principal, editable_column(spec), None)
+    session.commit()
+    await state.clear()
+    await _show_screen(cb, principal, f"✅ {spec.label} cleared.")

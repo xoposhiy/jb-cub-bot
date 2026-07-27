@@ -417,6 +417,59 @@ async def test_opening_the_screen_from_a_callback():
     assert "Edit your profile" in _edits(fake_bot)[-1].text
 
 
+async def test_clear_asks_before_removing_anything():
+    factory = _session_factory()
+    _seed_student(factory, github_self="alice")
+    dp = build_dispatcher(session_factory=factory)
+    fake_bot = FakeBot()
+
+    await _open_prompt(dp, fake_bot, "github")
+    await dp.feed_update(
+        fake_bot,
+        _callback_update(fake_bot, 222,
+                         f"{edit.CLEAR_CALLBACK_PREFIX}github", update_id=3),
+        dispatcher=dp)
+
+    assert _stored(factory, "github_self") == "alice"  # nothing gone yet
+    assert "Clear your GitHub?" in _edits(fake_bot)[-1].text
+
+
+async def test_confirming_clears_the_value_and_leaves_the_roster_alone():
+    factory = _session_factory()
+    _seed_student(factory, github_self="alice", github_sheet="alice-roster")
+    dp = build_dispatcher(session_factory=factory)
+    fake_bot = FakeBot()
+
+    await dp.feed_update(
+        fake_bot,
+        _callback_update(fake_bot, 222,
+                         f"{edit.CLEAR_DO_CALLBACK_PREFIX}github", update_id=3),
+        dispatcher=dp)
+
+    assert _stored(factory, "github_self") is None
+    assert _stored(factory, "github_sheet") == "alice-roster"
+    redraw = _edits(fake_bot)[-1]
+    assert "✅ GitHub cleared." in redraw.text
+    assert "GitHub: alice-roster" in redraw.text  # the roster's value shows now
+
+
+async def test_clearing_an_unknown_field_is_refused():
+    factory = _session_factory()
+    _seed_student(factory, gmail="i@gmail.com")
+    dp = build_dispatcher(session_factory=factory)
+    fake_bot = FakeBot()
+
+    await dp.feed_update(
+        fake_bot,
+        _callback_update(fake_bot, 222,
+                         f"{edit.CLEAR_DO_CALLBACK_PREFIX}gmail", update_id=3),
+        dispatcher=dp)
+
+    assert _stored(factory, "gmail") == "i@gmail.com"
+    assert _edits(fake_bot) == []
+    assert len(_alerts(fake_bot)) == 1
+
+
 def test_manifest_lists_the_new_commands():
     names = {c.name for c in directory.manifest.commands}
     assert {"edit", "cancel"} <= names
