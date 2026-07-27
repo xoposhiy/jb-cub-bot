@@ -17,6 +17,7 @@ from jbcub_bot.core.models import Role, User
 from jbcub_bot.core.tokens import issue_link_token
 from jbcub_bot.features.directory.render import (
     admin_keyboard,
+    me_keyboard,
     render_cohort_list,
     render_profile,
 )
@@ -55,9 +56,13 @@ async def read_rows(sheet_id: str, credentials, range_: str = "A:Z") -> list[lis
 
 
 @cmd.command("me", "Show your own profile.")
-async def cmd_me(message: Message, principal: User, session):
-    kb = admin_keyboard(principal) if principal.role is Role.ADMIN else None
-    await message.answer(render_profile(principal, principal), reply_markup=kb)
+async def cmd_me(message: Message, principal: User, session, impersonator=None):
+    # `impersonator` is only in the handler context while /as is in flight; a
+    # button press afterwards would arrive as the admin, so hide the screen.
+    await message.answer(
+        render_profile(principal, principal),
+        reply_markup=me_keyboard(principal, allow_privacy=impersonator is None),
+    )
 
 
 @cmd.command("cohort", "List the people in your cohort.")
