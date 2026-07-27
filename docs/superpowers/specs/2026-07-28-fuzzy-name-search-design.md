@@ -24,7 +24,8 @@ imports neither aiogram nor sqlalchemy, so it is testable as string→string.
 handles `José`/`Jose'` → `jose`, `ё` → `е`, `й` → `и`, `Hüseyn` → `huseyn`,
 because the diacritic is a separate code point after decomposition.
 
-**Transliteration** — a 37-entry Cyrillic→Latin dict in the same module.
+**Transliteration** — a Cyrillic→Latin dict in the same module: the 33 Russian
+letters plus five Ukrainian and Belarusian ones.
 Rejected `unidecode`: the output feeds our own collapse rules anyway, and the
 table is small enough that owning it beats a dependency we would fight.
 
@@ -80,11 +81,16 @@ reading the scoring code.
 whose pattern matches, in registration order, and stops at the first that
 returns `True`; `None` counts as handled so a future handler that forgets to
 return cannot fail silently. Below-threshold search returns `False` **without
-answering**, and a fallback intent registered last owns the `No one found.`
-reply. Only one intent exists today, so the change is cheap now and impossible
-later.
+answering**. Only one intent exists today, so the change is cheap now and
+impossible later.
 
-Rejected: a `can_handle` predicate on `Intent`. It moves the same scoring
+The last word belongs to `nl_fallback` in `main.py`, which answers when
+`dispatch` comes back `False`. Rejected: a catch-all intent registered last.
+Intents are registered in feature-discovery order, so "last" would be an
+accident of package naming, and the fake intent would need hiding from
+`/help`, which renders every intent it is given.
+
+Also rejected: a `can_handle` predicate on `Intent`. It moves the same scoring
 in front of the handler and then has to compute it twice or cache it.
 
 Also rejected: Postgres `pg_trgm` + `unaccent` (does nothing for
@@ -97,9 +103,9 @@ magnitude from now).
 - **New:** `features/directory/matching.py`, `tests/test_matching.py`.
 - **Changed:** `search.py` (`search_users` → `rank_users`, returning
   `(score, User)` sorted and cut at the threshold), `handlers.py`
-  (`name_search` ranks, returns `bool`, applies the leader rule; new fallback
-  intent), `core/intents.py` (bool contract, walk all matches),
-  `directory/__init__.py`, `AGENTS.md`.
+  (`name_search` ranks, returns `bool`, applies the leader rule),
+  `core/intents.py` (bool contract, walk all matches), `main.py`
+  (`nl_fallback` answers when nothing handled the message), `AGENTS.md`.
 
 ## Testing strategy
 
@@ -109,8 +115,8 @@ magnitude from now).
   name and breaking three.
 - **`test_directory_search.py`** — ranking order, the threshold, Cyrillic
   queries against the Latin roster, a query longer than the name.
-- **`test_intents.py`** — `False` passes the turn to the next intent; the
-  fallback answers last.
+- **`test_intents.py`** — `False` passes the turn to the next intent; `None`
+  still counts as handled.
 - **Integration** — a two-way tie renders the list, a clear leader renders the
   profile, and small talk reaches neither.
 
