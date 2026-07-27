@@ -9,11 +9,31 @@ Only the caller's own row is ever written, so there is nothing to authorize
 beyond being linked.
 """
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.methods import EditMessageText
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
+from jbcub_bot.core.commands import CommandRegistrar
 from jbcub_bot.core.models import User
-from jbcub_bot.features.directory.render import PROFILE_CALLBACK
-from jbcub_bot.features.directory.screens import EMPTY, short_value
+from jbcub_bot.features.directory import accounts
+from jbcub_bot.features.directory.accounts import Verdict
+from jbcub_bot.features.directory.render import EDIT_CALLBACK, PROFILE_CALLBACK
+from jbcub_bot.features.directory.screens import (
+    EMPTY,
+    EXPIRED,
+    NOT_LINKED,
+    UNKNOWN_FIELD,
+    require_linked,
+    short_value,
+)
 from jbcub_bot.features.directory.visibility import (
     BY_NAME,
     EDITABLE_FIELDS,
@@ -93,3 +113,166 @@ def clear_confirm_keyboard(spec: FieldSpec) -> InlineKeyboardMarkup:
             callback_data=f"{CLEAR_DO_CALLBACK_PREFIX}{spec.name}"),
         InlineKeyboardButton(text="Cancel", callback_data=CANCEL_CALLBACK),
     ]])
+
+
+router = Router(name="directory.edit")
+cmd = CommandRegistrar(router)
+
+_NOTHING_TO_CANCEL = "Nothing to cancel."
+_CANCELLED = "Editing cancelled."
+_STALE_STATE = "That edit screen is from an older version — send /edit again."
+
+
+class EditProfile(StatesGroup):
+    # One state for every field: which field is being edited lives in the FSM
+    # data, so adding an editable field adds no state.
+    value = State()
+
+
+async def _redraw(message: Message, data: dict, text: str, keyboard) -> None:
+    """Put `text` on the screen the prompt came from, or send a fresh one.
+
+    Goes through bot(EditMessageText(...)) because the value arrives as the
+    user's own message -- there is no bot message here to call edit_text on,
+    only the chat and message ids stashed when the prompt was drawn.
+
+    That message may be gone (the user deleted it, or the state outlived the
+    deploy that stored the ids). Deleting your own message is not a bug worth a
+    traceback, so a new screen is sent instead.
+    """
+    chat_id, message_id = data.get("chat_id"), data.get("message_id")
+    if chat_id is not None and message_id is not None:
+        try:
+            await message.bot(EditMessageText(
+                chat_id=chat_id, message_id=message_id,
+                text=text, reply_markup=keyboard))
+            return
+        except TelegramBadRequest:
+            pass
+    await message.answer(text, reply_markup=keyboard)
+
+
+@cmd.command("edit", "Edit your status, GitHub or Codeforces.")
+async def cmd_edit(message: Message, principal: User, session,
+                   state: FSMContext | None = None, impersonator=None):
+    # `state` is optional because /as reaches this handler through
+    # dispatcher.propagate_event("message", ...), which skips the Dispatcher's
+    # outer middlewares -- FSMContextMiddleware among them. A required `state`
+    # would make every `/as <ref> /edit` a TypeError.
+    #
+    # `impersonator` is only in the handler context while /as is in flight.
+    # Mirrors cmd_me and cmd_privacy: the follow-up callback would arrive
+    # without the impersonation ref and land on the admin's own row, so show
+    # the target's screen with nothing tappable instead of a live keyboard.
+    if state is not None:
+        await state.clear()
+    await message.answer(
+        render_edit(principal),
+        reply_markup=None if impersonator is not None else edit_keyboard(principal),
+    )
+
+
+@cmd.command("cancel", "Stop editing a profile field.")
+async def cmd_cancel(message: Message, principal: User, session,
+                     state: FSMContext | None = None):
+    if state is None:  # propagated by /as, where no state exists -- see cmd_edit
+        await message.answer(_NOTHING_TO_CANCEL)
+        return
+    data = await state.get_data()
+    if await state.get_state() is None:
+        await message.answer(_NOTHING_TO_CANCEL)
+        return
+    await state.clear()
+    await _redraw(message, data, render_edit(principal, _CANCELLED),
+                  edit_keyboard(principal))
+
+
+async def _show_screen(cb: CallbackQuery, user: User, notice: str = "") -> None:
+    if not isinstance(cb.message, Message):
+        await cb.answer(EXPIRED, show_alert=True)
+        return
+    await cb.message.edit_text(render_edit(user, notice),
+                               reply_markup=edit_keyboard(user))
+    await cb.answer()
+
+
+@router.callback_query(F.data == EDIT_CALLBACK)
+@require_linked
+async def cb_open(cb: CallbackQuery, principal: User, session,
+                  state: FSMContext):
+    await state.clear()
+    await _show_screen(cb, principal)
+
+
+@router.callback_query(F.data == CANCEL_CALLBACK)
+@require_linked
+async def cb_cancel(cb: CallbackQuery, principal: User, session,
+                    state: FSMContext):
+    await state.clear()
+    await _show_screen(cb, principal)
+
+
+@router.callback_query(F.data.startswith(FIELD_CALLBACK_PREFIX))
+@require_linked
+async def cb_field(cb: CallbackQuery, principal: User, session,
+                   state: FSMContext):
+    spec = editable_spec(cb.data[len(FIELD_CALLBACK_PREFIX):])
+    if spec is None:
+        # A keyboard left over from an older deploy, or a hand-crafted payload.
+        await cb.answer(UNKNOWN_FIELD, show_alert=True)
+        return
+    if not isinstance(cb.message, Message):
+        await cb.answer(EXPIRED, show_alert=True)
+        return
+    await state.set_state(EditProfile.value)
+    await state.update_data(field=spec.name, chat_id=cb.message.chat.id,
+                            message_id=cb.message.message_id)
+    await cb.message.edit_text(render_prompt(principal, spec),
+                               reply_markup=prompt_keyboard(spec))
+    await cb.answer()
+
+
+@router.message(EditProfile.value, F.text & ~F.text.startswith("/"))
+async def on_value(message: Message, principal: User, session,
+                   state: FSMContext):
+    """Save what the user typed, or explain why it can't be saved.
+
+    Commands are excluded from this handler rather than intercepted, so /cancel
+    -- and anything else -- still works while a prompt is open.
+    """
+    if principal is None or principal.id is None:
+        await state.clear()
+        await message.answer(NOT_LINKED)
+        return
+    data = await state.get_data()
+    spec = editable_spec(data.get("field", ""))
+    if spec is None:
+        await state.clear()
+        await message.answer(_STALE_STATE)
+        return
+    try:
+        value = accounts.normalize(spec.name, message.text)
+    except ValueError as exc:
+        await _reprompt(message, data, principal, spec, str(exc))
+        return
+    verdict = await accounts.verify(spec.name, value)
+    if verdict is Verdict.MISSING:
+        await _reprompt(message, data, principal, spec,
+                        f"{spec.label} has no user {value}.")
+        return
+    setattr(principal, editable_column(spec), value)
+    session.commit()
+    await state.clear()
+    notice = (f"✅ {spec.label} updated." if verdict is Verdict.EXISTS else
+              f"⚠️ Saved. {spec.label} didn't answer, so I couldn't "
+              f"verify {value}.")
+    await _redraw(message, data, render_edit(principal, notice),
+                  edit_keyboard(principal))
+
+
+async def _reprompt(message: Message, data: dict, user: User, spec: FieldSpec,
+                    problem: str) -> None:
+    """Say what was wrong and keep asking -- the state stays open."""
+    await _redraw(message, data,
+                  f"{problem}\n\n{render_prompt(user, spec)}",
+                  prompt_keyboard(spec))

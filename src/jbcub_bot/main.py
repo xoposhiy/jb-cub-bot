@@ -4,6 +4,7 @@ import sys
 import threading
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.filters import StateFilter
 from aiogram.types import ErrorEvent, Message, Update
 
 import jbcub_bot.features as features_pkg
@@ -60,8 +61,11 @@ def build_dispatcher(session_factory, bootstrap_ids: set | None = None) -> Dispa
         for intent in feature.manifest.intents:
             _intent_router.register(intent)
 
-    # NL fallback: any non-command text runs through the intent router.
-    @dp.message(F.text & ~F.text.startswith("/"))
+    # NL fallback: any non-command text runs through the intent router --
+    # unless the sender is in a state. A Dispatcher's own handlers run before
+    # its sub-routers, so without StateFilter(None) the `.+` search intent
+    # would swallow every value a feature is waiting for.
+    @dp.message(StateFilter(None), F.text & ~F.text.startswith("/"))
     async def nl_fallback(message: Message, principal, session):
         await _intent_router.dispatch(message.text, message, principal, session)
 
