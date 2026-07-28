@@ -222,6 +222,17 @@ async def cmd_start(message: Message, principal: User, session,
         if user is None:
             await message.answer("This link is invalid or expired.")
             return
+        # telegram_id is unique: binding an account that already holds another
+        # profile dies on the commit, and the person just never gets a reply.
+        # Say so instead, and leave the invite unused so it can be re-sent.
+        taken = identity.find_by_telegram_id(session, message.from_user.id)
+        if taken is not None and taken.id != user.id:
+            await message.answer(
+                f"This Telegram account is already linked to {taken.full_name}. "
+                "The invite hasn't been used — ask an admin to reset that "
+                "binding first."
+            )
+            return
         identity.bind_by_token(session, message.from_user.id,
                                message.from_user.username, user)
         await message.answer(f"Linked as {user.full_name}.")
