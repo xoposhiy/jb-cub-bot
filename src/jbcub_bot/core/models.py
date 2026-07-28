@@ -39,6 +39,7 @@ class User(Base):
     past_cohorts: Mapped[list] = mapped_column(JSON, default=list)
     visibility: Mapped[dict] = mapped_column(JSON, default=dict)
     link_nonce: Mapped[str | None] = mapped_column(String)
+    link_issued_at: Mapped[int | None] = mapped_column(BigInteger)
 
     @property
     def full_name(self) -> str:

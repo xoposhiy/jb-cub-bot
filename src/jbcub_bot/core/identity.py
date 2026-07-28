@@ -78,5 +78,6 @@ def bind_by_token(session, telegram_id: int, username: str | None, user: User) -
     if username:
         user.handle_observed = username
     user.link_nonce = None  # single-use
+    user.link_issued_at = None
     session.commit()
     return user

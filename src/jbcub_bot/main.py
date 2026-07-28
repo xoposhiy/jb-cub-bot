@@ -3,7 +3,7 @@ import logging
 import sys
 import threading
 
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import StateFilter
 from aiogram.types import ErrorEvent, Message, Update
 
@@ -80,6 +80,26 @@ def build_dispatcher(session_factory, bootstrap_ids: set | None = None) -> Dispa
                                                 principal, session)
         if not handled:
             await message.answer(NOTHING_MATCHED)
+
+    # Last word: a message no handler took must still get an answer. Sub-routers
+    # run after the Dispatcher's own handlers, so this router is included last
+    # and only sees what everything above it declined — unknown commands, and
+    # anything that isn't text.
+    fallback = Router(name="fallback")
+
+    @fallback.message()
+    async def nothing_understood(message: Message):
+        command = (message.text or "").split()[0] if message.text else ""
+        if command.startswith("/"):
+            await message.answer(
+                f"I don't know {command}. /help lists what I can do."
+            )
+        else:
+            await message.answer(
+                "I only read text. /help lists what I can do."
+            )
+
+    dp.include_router(fallback)
 
     @dp.errors()
     async def on_unhandled_error(event: ErrorEvent, bot: Bot) -> bool:
