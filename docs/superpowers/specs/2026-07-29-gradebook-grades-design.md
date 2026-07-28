@@ -221,6 +221,12 @@ without it one future multi-line blob would fail the send outright.
 Departed students keep their grades: they are historical, and the profile
 already carries `⚠️ Departed` for the admin reading it.
 
+**Teachers see everything an admin sees here**, staff remarks included. The tab
+carries them in a `Comment` category and also inside course cells (`все плохо`
+sits under `Core Algorithms Midterm results`), so no choice of columns could
+separate remarks from grades; withholding them would have to mean withholding
+the screen. Decided deliberately, not by omission.
+
 ## The source sheet behind a profile
 
 `parse_cohort_index` already reads each cohort's `Link` and throws it away after
