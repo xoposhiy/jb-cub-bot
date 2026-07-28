@@ -37,6 +37,17 @@ def test_admin_still_sees_a_hidden_handle_in_the_cohort_list():
     assert render_cohort_list(admin, mates) == "- Ivan Ivanov (@ivanov)"
 
 
+def test_cohort_list_marks_a_departed_mate_for_the_admin_who_can_see_them():
+    # Only an admin is shown a departed person at all, and an unmarked line
+    # would read as "still in the cohort".
+    admin = User(first_name="A", last_name="Admin", role=Role.ADMIN,
+                 primary_cohort="2024")
+    mates = [_student("Eve", "Expelled", handle_observed="eve",
+                      departed_at="2026-07-28")]
+    assert render_cohort_list(admin, mates) == \
+        "- Eve Expelled (@eve) — ⚠️ departed 2026-07-28"
+
+
 def test_cohort_list_keeps_one_line_per_mate():
     viewer = _student("V", "Viewer")
     mates = [_student("A", "One", handle_observed="a"), _student("B", "Two")]

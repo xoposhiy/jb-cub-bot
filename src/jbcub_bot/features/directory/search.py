@@ -10,7 +10,20 @@ def name_tokens(user: User) -> list[str]:
     return words + [h for h in (user.handle_sheet, user.handle_observed) if h]
 
 
-def rank_users(session, query: str) -> list[tuple[float, User]]:
+def _visible(stmt, include_departed: bool):
+    """Hide the people the roster stopped naming unless the caller asked for them.
+
+    An opt-in parameter rather than a global filter: a caller that wants them
+    has to say so at the call site, where whether the viewer is an admin is
+    known -- and a new caller that forgets gets the safe answer.
+    """
+    if include_departed:
+        return stmt
+    return stmt.where(User.departed_at.is_(None))
+
+
+def rank_users(session, query: str, *,
+               include_departed: bool = False) -> list[tuple[float, User]]:
     """Everyone matching `query` well enough, best first.
 
     The whole roster is scored in Python. It is a few dozen rows, and no SQL
@@ -18,14 +31,16 @@ def rank_users(session, query: str) -> list[tuple[float, User]]:
     """
     if len(matching.fold(query)) < matching.MIN_QUERY_LEN:
         return []
+    stmt = _visible(select(User), include_departed)
     hits = [(score, user)
-            for user in session.scalars(select(User)).all()
+            for user in session.scalars(stmt).all()
             if (score := matching.score(query, name_tokens(user)))
             >= matching.ACCEPT]
     hits.sort(key=lambda hit: (-hit[0], hit[1].full_name))
     return hits
 
 
-def list_cohort(session, primary_cohort: str) -> list[User]:
+def list_cohort(session, primary_cohort: str, *,
+                include_departed: bool = False) -> list[User]:
     stmt = select(User).where(User.primary_cohort == primary_cohort)
-    return list(session.scalars(stmt).all())
+    return list(session.scalars(_visible(stmt, include_departed)).all())

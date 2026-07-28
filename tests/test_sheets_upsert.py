@@ -48,6 +48,92 @@ def test_upsert_blank_role_keeps_default(session):
     assert u.role is Role.STUDENT
 
 
+def test_upsert_clears_the_departed_mark_when_the_roster_names_them_again(session):
+    # Re-appearing in the roster is the only way back: nobody clears the mark by
+    # hand, and a returning student's fields must start updating again.
+    session.add(User(matriculation="1", last_name="Back", primary_cohort="2024",
+                     departed_at="2026-07-01"))
+    session.commit()
+
+    sheets.upsert_users(session, [{"matriculation": "1", "last_name": "Back"}])
+
+    assert session.query(User).filter_by(matriculation="1").one().departed_at is None
+
+
+def test_mark_departed_marks_the_member_this_roster_no_longer_names(session):
+    session.add_all([
+        User(matriculation="1", last_name="Stays", primary_cohort="2024"),
+        User(matriculation="2", last_name="Left", primary_cohort="2024"),
+    ])
+    session.commit()
+
+    marked = sheets.mark_departed(session, "2024", [{"matriculation": "1"}],
+                                  "2026-07-28")
+
+    assert marked == 1
+    stays, left = (session.query(User).filter_by(matriculation=m).one()
+                   for m in ("1", "2"))
+    assert stays.departed_at is None
+    assert left.departed_at == "2026-07-28"
+
+
+def test_mark_departed_leaves_a_rights_only_admin_alone(session):
+    from jbcub_bot.core.models import Role
+
+    # Admins and teachers come from the Rights tab: no cohort, keyed on their
+    # handle. Every cohort roster is missing them, so a sync that swept up
+    # whoever it could not find would hide the program's own staff.
+    session.add(User(handle_sheet="boss", last_name="Boss", role=Role.ADMIN))
+    session.commit()
+
+    marked = sheets.mark_departed(session, "2024", [{"matriculation": "1"}],
+                                  "2026-07-28")
+
+    assert marked == 0
+    assert session.query(User).filter_by(handle_sheet="boss").one().departed_at is None
+
+
+def test_mark_departed_never_reaches_into_another_cohort(session):
+    # 2023's students are absent from 2024's roster by definition.
+    session.add(User(matriculation="9", last_name="Older", primary_cohort="2023"))
+    session.commit()
+
+    marked = sheets.mark_departed(session, "2024", [{"matriculation": "1"}],
+                                  "2026-07-28")
+
+    assert marked == 0
+    assert session.query(User).filter_by(matriculation="9").one().departed_at is None
+
+
+def test_mark_departed_spares_a_member_who_has_no_matriculation_yet(session):
+    # The roster is keyed on matriculation, so a row without one was never
+    # matched against it and its absence there says nothing.
+    session.add(User(matriculation=None, last_name="Pending",
+                     primary_cohort="2024"))
+    session.commit()
+
+    marked = sheets.mark_departed(session, "2024", [{"matriculation": "1"}],
+                                  "2026-07-28")
+
+    assert marked == 0
+    assert session.query(User).filter_by(last_name="Pending").one().departed_at is None
+
+
+def test_mark_departed_keeps_the_date_of_the_sync_that_first_missed_them(session):
+    # The date answers "when did they leave the roster?" -- a later sync
+    # overwriting it with today would turn the answer into "just now, always".
+    session.add(User(matriculation="2", last_name="Left", primary_cohort="2024"))
+    session.commit()
+    sheets.mark_departed(session, "2024", [{"matriculation": "1"}], "2026-07-01")
+
+    marked = sheets.mark_departed(session, "2024", [{"matriculation": "1"}],
+                                  "2026-07-28")
+
+    assert marked == 0  # nothing new to report on a repeat sync
+    assert session.query(User).filter_by(matriculation="2").one().departed_at == \
+        "2026-07-01"
+
+
 def test_reconcile_reports_drift_unmatched_duplicates(session):
     session.add(User(matriculation="1", last_name="Ivan",
                      handle_observed="ivan_new"))

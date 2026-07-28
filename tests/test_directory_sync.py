@@ -1,4 +1,5 @@
 import time
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -235,6 +236,83 @@ async def test_sync_reports_the_rows_it_ignored_below_the_roster(session, monkey
     assert "1 rows read" in read
     assert "3 rows below the roster ignored" in read
     assert session.query(User).filter_by(matriculation="30000009").count() == 0
+
+
+async def test_sync_marks_and_reports_the_students_the_roster_dropped(session, monkeypatch):
+    # The rows below the roster are the expelled/transferred ones. Earlier syncs
+    # imported them, so they linger with frozen data unless the sync says so.
+    session.add(User(matriculation="30000009", last_name="Expelled",
+                     first_name="Eve", primary_cohort="2024"))
+    session.commit()
+
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA":
+            return [COHORT_HEADER, _cohort_row("30000001", "Ivanov", "Ivan", "ivan")]
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER, ["30000001", "Ivanov", "Ivan", "Admin", "ivan"]]
+        return []
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows", fake_fetch)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
+                        lambda *a: None)
+    msg = SimpleNamespace(answer=AsyncMock())
+    await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
+
+    gone = session.query(User).filter_by(matriculation="30000009").one()
+    assert gone.departed_at == date.today().isoformat()
+    said = [c.args[0] for c in msg.answer.await_args_list]
+    assert any("1 marked departed" in m for m in said)
+
+
+async def test_sync_reports_nothing_marked_when_the_roster_is_unchanged(session, monkeypatch):
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA":
+            return [COHORT_HEADER, _cohort_row("30000001", "Ivanov", "Ivan", "ivan")]
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER, ["30000001", "Ivanov", "Ivan", "Admin", "ivan"]]
+        return []
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows", fake_fetch)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
+                        lambda *a: None)
+    msg = SimpleNamespace(answer=AsyncMock())
+    await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
+
+    said = [c.args[0] for c in msg.answer.await_args_list]
+    assert any("0 marked departed" in m for m in said)
+    assert session.query(User).filter_by(matriculation="30000001").one().departed_at \
+        is None
+
+
+async def test_sync_aborts_rather_than_mark_a_whole_cohort_departed(session, monkeypatch):
+    # A blank first data row or a mis-set Cohorts link yields zero roster
+    # records, which would read as "everyone left" and hide the cohort from
+    # itself. Abort in the parse phase, before anything is written.
+    session.add(User(matriculation="30000001", last_name="Ivanov",
+                     first_name="Ivan", primary_cohort="2024"))
+    session.commit()
+
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA":
+            return [COHORT_HEADER, []]  # a blank row where the roster should start
+        return []
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows", fake_fetch)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
+                        lambda *a: None)
+    msg = SimpleNamespace(answer=AsyncMock())
+    await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
+
+    last = msg.answer.await_args.args[0]
+    assert last.startswith("Sync aborted (cohort 2024):")
+    assert session.query(User).filter_by(matriculation="30000001").one().departed_at \
+        is None
 
 
 async def test_sync_aborts_on_a_misspelled_field_column_in_the_cohorts_tab(

@@ -106,11 +106,17 @@ def render_cohort_list(viewer: User, mates: list[User]) -> str:
 
     Goes through visible_fields rather than reading handle_observed: telegram
     is a configurable field, so this list would otherwise leak a handle its
-    owner hid.
+    owner hid. `departed_at` comes through the same gate, so the mark appears
+    for the admin who was shown the person and for nobody else -- an unmarked
+    line would read as "still in the cohort".
     """
     lines = []
     for mate in mates:
-        handle = visible_fields(viewer, mate).get("telegram")
-        name = mate.full_name
-        lines.append(f"- {name} ({handle})" if handle else f"- {name}")
+        fields = visible_fields(viewer, mate)
+        line = f"- {mate.full_name}"
+        if fields.get("telegram"):
+            line += f" ({fields['telegram']})"
+        if fields.get("departed_at"):
+            line += f" — ⚠️ departed {fields['departed_at']}"
+        lines.append(line)
     return "\n".join(lines)

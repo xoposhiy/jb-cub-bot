@@ -192,6 +192,10 @@ def upsert_users(session, records: list[dict], key: str = "matriculation") -> No
         if user is None:
             user = User(**{key: key_value})
             session.add(user)
+        # Named by the roster again, so they are back: clearing the mark here
+        # (rather than in mark_departed) means a return is undone by the same
+        # pass that resumes updating their fields.
+        user.departed_at = None
         for field_name in SHEET_OWNED:
             if field_name in record:
                 value = record[field_name]
@@ -201,6 +205,40 @@ def upsert_users(session, records: list[dict], key: str = "matriculation") -> No
                     value = Role(value)
                 setattr(user, field_name, value)
     # Caller commits — keeps multi-sheet /sync atomic.
+
+
+def mark_departed(session, cohort: str, records: list[dict], today: str,
+                  key: str = "matriculation") -> int:
+    """Mark this cohort's members that `records` no longer names. Returns how many.
+
+    Scoped to `primary_cohort == cohort` deliberately: every other cohort's
+    students and every Rights-only row (admins and teachers, keyed on their
+    handle, with no cohort at all) are missing from these records too, and
+    marking them would hide the program's own staff from everyone.
+
+    A member with no `key` of their own is spared as well -- the roster is keyed
+    on it, so a row that was never matched against the roster says nothing by
+    being absent from it.
+
+    `today` is a parameter, not a `date.today()` call, so the caller owns what
+    "now" means and a test can pin it.
+
+    Already-marked rows are left alone: the date says when the roster stopped
+    naming them, which a later sync overwriting it would turn into "just now".
+
+    Caller commits -- keeps multi-sheet /sync atomic.
+    """
+    present = {r.get(key) for r in records if r.get(key)}
+    stmt = select(User).where(
+        User.primary_cohort == cohort, User.departed_at.is_(None)
+    )
+    marked = 0
+    for user in session.scalars(stmt).all():
+        key_value = getattr(user, key)
+        if key_value and key_value not in present:
+            user.departed_at = today
+            marked += 1
+    return marked
 
 
 @dataclass

@@ -59,6 +59,16 @@ def test_render_shows_admin_only_fields_to_an_admin():
     assert "Birthday: 2000-01-02" in text
 
 
+def test_render_leads_with_the_departed_marker_for_an_admin():
+    # An admin who searched someone up must see they are gone before reading
+    # anything else on the profile -- the data below it stopped updating.
+    admin = User(first_name="A", last_name="Admin", role=Role.ADMIN)
+    target = User(first_name="Eve", last_name="Expelled", role=Role.STUDENT,
+                  primary_cohort="2024", departed_at="2026-07-28")
+    assert render_profile(admin, target).startswith(
+        "⚠️ Departed: 2026-07-28\nName: Eve Expelled")
+
+
 def test_me_keyboard_offers_editing_and_privacy():
     kb = me_keyboard(User(first_name="S", last_name="Student",
                           role=Role.STUDENT))

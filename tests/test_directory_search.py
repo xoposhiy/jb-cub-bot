@@ -59,3 +59,41 @@ def test_list_cohort_by_primary(session):
     _seed(session)
     names = {u.full_name for u in list_cohort(session, "2024")}
     assert names == {"Iaroslav Belozerov", "Igor Chsheglov"}
+
+
+# --- departed students ----------------------------------------------------
+
+def _depart(session, last_name):
+    user = session.query(User).filter_by(last_name=last_name).one()
+    user.departed_at = "2026-07-28"
+    session.commit()
+
+
+def test_search_skips_a_departed_person(session):
+    # Their row keeps the data the roster had when they left; leaving them
+    # findable means answering questions about someone who is gone.
+    _seed(session)
+    _depart(session, "Smith")
+    assert rank_users(session, "asmith") == []
+
+
+def test_search_finds_a_departed_person_when_the_viewer_may_see_them(session):
+    _seed(session)
+    _depart(session, "Smith")
+    assert _names(rank_users(session, "asmith", include_departed=True)) == \
+        ["Anna Smith"]
+
+
+def test_list_cohort_skips_a_departed_member(session):
+    _seed(session)
+    _depart(session, "Chsheglov")
+    assert [u.full_name for u in list_cohort(session, "2024")] == \
+        ["Iaroslav Belozerov"]
+
+
+def test_list_cohort_includes_a_departed_member_when_asked(session):
+    _seed(session)
+    _depart(session, "Chsheglov")
+    names = {u.full_name
+             for u in list_cohort(session, "2024", include_departed=True)}
+    assert names == {"Iaroslav Belozerov", "Igor Chsheglov"}

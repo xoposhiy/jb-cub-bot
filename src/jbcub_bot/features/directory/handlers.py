@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import date
 
 from aiogram import F, Router
 from aiogram.types import (
@@ -49,6 +50,11 @@ def set_status(session, user: User, text: str) -> None:
     session.commit()
 
 
+def is_admin(principal: User | None) -> bool:
+    """Whether a departed profile is theirs to see. Named because two readers ask."""
+    return principal is not None and principal.role is Role.ADMIN
+
+
 async def read_rows(sheet_id: str, credentials, range_: str = "A:Z") -> list[list[str]]:
     """`fetch_rows` off the event loop, with a deadline.
 
@@ -76,7 +82,8 @@ async def cmd_cohort(message: Message, principal: User, session):
     if not principal.primary_cohort:
         await message.answer("No cohort on file.")
         return
-    mates = list_cohort(session, principal.primary_cohort)
+    mates = list_cohort(session, principal.primary_cohort,
+                        include_departed=is_admin(principal))
     await message.answer("Your cohort:\n" + render_cohort_list(principal, mates))
 
 
@@ -91,7 +98,8 @@ async def name_search(message: Message, principal: User, session) -> bool:
         # to do instead of a puzzling "No one found."
         await message.answer("You are not linked yet. Contact an admin.")
         return True
-    ranked = rank_users(session, (message.text or "").strip())
+    ranked = rank_users(session, (message.text or "").strip(),
+                        include_departed=is_admin(principal))
     if not ranked:
         return False
     best, target = ranked[0]
@@ -305,6 +313,16 @@ async def cmd_sync(message: Message, principal: User, session):
             raise RuntimeError(
                 f"/sync failed reading cohort {entry['cohort']} (sheet {sheet_id})"
             ) from exc
+        # No roster rows at all is never a cohort that emptied out; it is a blank
+        # first data row or a link pointing at the wrong sheet. Writing it would
+        # mark every one of its students departed and hide the cohort from itself.
+        if not records:
+            await message.answer(
+                f"Sync aborted (cohort {entry['cohort']}): the sheet yielded no "
+                "roster rows, which would mark the whole cohort departed. Check "
+                "the Link and that the first data row names someone."
+            )
+            return
         for record in records:
             record["primary_cohort"] = entry["cohort"]
         parsed_cohorts.append((entry["cohort"], records))
@@ -346,11 +364,16 @@ async def cmd_sync(message: Message, principal: User, session):
     # --- Write phase: everything parsed OK, now upsert + reconcile. ---
     await message.answer("All sheets read. Writing to database…")
     try:
+        today = date.today().isoformat()
         for cohort_name, records in parsed_cohorts:
             sheets.upsert_users(session, records)
+            # After the upsert, so anyone the roster names again is already back
+            # before the ones it dropped get marked.
+            departed = sheets.mark_departed(session, cohort_name, records, today)
             rep = sheets.reconcile(session, records)
             await message.answer(
-                f"{cohort_name}: {len(records)} rows, drift={rep.drift or '-'}, "
+                f"{cohort_name}: {len(records)} rows, "
+                f"{departed} marked departed, drift={rep.drift or '-'}, "
                 f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}")
         # Rights rows have no matriculation — key on the Telegram handle so
         # admins/teachers get matched (or created) as searchable rows.

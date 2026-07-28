@@ -47,6 +47,9 @@ class FieldSpec:
 
 # Order here is the order the profile renders in.
 FIELDS = (
+    # First on purpose: a departed profile stopped updating when the roster
+    # dropped the person, so an admin has to read that before anything below it.
+    FieldSpec("departed_at", "⚠️ Departed", Category.ADMIN_ONLY),
     FieldSpec("first_name", "First name", Category.ALWAYS),
     FieldSpec("last_name", "Last name", Category.ALWAYS),
     FieldSpec("role", "Role", Category.ALWAYS),

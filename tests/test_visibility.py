@@ -40,6 +40,7 @@ def test_every_configurable_field_has_a_default_and_others_do_not():
 
 def test_field_order_matches_the_rendered_profile_order():
     assert [f.name for f in visibility.FIELDS] == [
+        "departed_at",
         "first_name", "last_name", "role", "primary_cohort",
         "telegram", "telegram_id", "status_line",
         "gmail", "cubemail", "github", "codeforces",
@@ -281,6 +282,18 @@ def test_student_never_sees_personal_admin_only_fields():
     assert "birthday" not in fields
     assert "citizenship" not in fields
     assert "comment" not in fields
+
+
+def test_only_an_admin_sees_the_departed_mark():
+    # A departed row is admin-only altogether, so this is belt and braces -- but
+    # the mark is also the one field that must never be hinted at to a student.
+    target = _u(role=Role.STUDENT, primary_cohort="2024",
+                departed_at="2026-07-28")
+    assert visible_fields(_u(role=Role.ADMIN), target)["departed_at"] == \
+        "2026-07-28"
+    for role in (Role.STUDENT, Role.TEACHER):
+        viewer = _u(role=role, primary_cohort="2024")
+        assert "departed_at" not in visible_fields(viewer, target)
 
 
 def test_student_never_sees_admin_only():

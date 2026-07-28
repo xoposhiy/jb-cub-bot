@@ -39,6 +39,9 @@ class User(Base):
     primary_cohort: Mapped[str | None] = mapped_column(String, index=True)
     past_cohorts: Mapped[list] = mapped_column(JSON, default=list)
     visibility: Mapped[dict] = mapped_column(JSON, default=dict)
+    # ISO date the roster stopped naming them; NULL means active. A date rather
+    # than a flag so an admin can see when the person left.
+    departed_at: Mapped[str | None] = mapped_column(String)
     link_nonce: Mapped[str | None] = mapped_column(String)
     link_issued_at: Mapped[int | None] = mapped_column(BigInteger)
 
