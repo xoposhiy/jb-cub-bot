@@ -11,6 +11,10 @@ student, one column per course, the cell holding whatever that course came to.
 grades from their profile, grouped by semester. Students never see grades —
 their own or anyone's.
 
+Second, smaller goal in the same sync pass and the same profile: an admin
+reading a profile should be able to open the spreadsheet the row came from. The
+cohort name is already on the screen, so that name becomes the link.
+
 ## What the tab actually looks like
 
 Measured across all three cohorts (`sdt-2025-2028`, `sdt-2024-2027`,
@@ -217,17 +221,72 @@ without it one future multi-line blob would fail the send outright.
 Departed students keep their grades: they are historical, and the profile
 already carries `⚠️ Departed` for the admin reading it.
 
+## The source sheet behind a profile
+
+`parse_cohort_index` already reads each cohort's `Link` and throws it away after
+taking the id, so nothing remembers where a row came from. `users` gains
+`source_link`, set the way `primary_cohort` already is: `cmd_sync` injects it
+into every record and `upsert_users` copies it as a sheet-owned field. Rights
+rows get the Rights spreadsheet's own URL, so staff — who have no cohort at all
+— are covered too.
+
+Rejected: a `cohorts` table. It is three rows behind a join, and it has no
+answer for a Rights-only row. The cost of `source_link` is three strings
+duplicated across 56 users, which at this scale buys simplicity cheaply. Adding
+it to `SHEET_OWNED` also lets a `Cohorts` header literally named `source_link`
+be read from the sheet; harmless, and the same is already true of
+`primary_cohort`.
+
+`sheets.sheet_url` normalizes what it finds: a `Link` cell may hold a full URL
+(kept as-is, including any `#gid` an admin aimed at a particular tab) or a bare
+spreadsheet id, which `extract_sheet_id` already accepts and which must be
+turned into a URL before it can be a link.
+
+**The link is admin-only, but the cohort name is not.** `primary_cohort` is
+`Category.ALWAYS`, so every linked user sees it; the spreadsheet holds the whole
+cohort's private data, so no student may see its URL. `source_link` is therefore
+an `ADMIN_ONLY` entry in `FIELDS`, and `render_profile` folds it into the cohort
+line instead of printing a line of its own — the same folding `first_name` and
+`last_name` already get. A non-admin's `visible_fields` never contains it, so
+their cohort line is plain text with nothing to strip.
+
+Rendered with **`entities`, not `parse_mode`.** The text stays exactly
+`Cohort: sdt-2023-2026` and a `text_link` entity covers the value. The bot sets
+no `parse_mode` anywhere, and turning HTML on for this one line would mean
+escaping every other value in every message — `status_line` is user-supplied and
+course names contain `&`. So `render_profile` returns text plus entities;
+`cmd_me`, `name_search` and the privacy screen's return path pass them along.
+Offsets are counted in UTF-16 code units, not Python characters, because that is
+what Telegram measures and because `⚠️ Departed` renders above the cohort line.
+
+A target with no cohort (Rights-only staff) has no value to attach the link to,
+so it gets its own `Source: Rights sheet` line with the link on the label.
+
+Rejected: appending the raw URL to the cohort line. No machinery at all — clients
+auto-link a bare URL — but it puts 60 characters of noise on every admin's view
+of every profile.
+
 ## Files
 
 - **New:** `core/gradebook.py`, `features/directory/grades.py`, an Alembic
-  revision creating `grades`, `tests/test_gradebook_parse.py`,
-  `tests/test_gradebook_store.py`, `tests/test_grades_screen.py`.
-- **Changed:** `core/models.py` (`Grade`), `core/config.py` (`gradebook_tab`),
-  `.env.example`, `features/directory/render.py` (`profile_keyboard`),
-  `features/directory/visibility.py` (`is_staff`),
-  `features/directory/handlers.py` (grades pass in `cmd_sync`, `name_search` and
-  `cb_admin_back` use `profile_keyboard`), `features/directory/__init__.py`
-  (include `grades.router`), `tests/test_directory_sync.py`, `AGENTS.md`.
+  revision creating `grades` and adding `users.source_link`,
+  `tests/test_gradebook_parse.py`, `tests/test_gradebook_store.py`,
+  `tests/test_grades_screen.py`.
+- **Changed:** `core/models.py` (`Grade`, `User.source_link`), `core/sheets.py`
+  (`source_link` in `SHEET_OWNED`, `sheet_url`), `core/config.py`
+  (`gradebook_tab`), `.env.example`, `features/directory/render.py`
+  (`profile_keyboard`; `render_profile` returns text plus entities and folds the
+  link into the cohort line), `features/directory/visibility.py` (`is_staff`,
+  `source_link` in `FIELDS`), `features/directory/handlers.py` (grades pass in
+  `cmd_sync`, `source_link` injected per cohort and for Rights rows,
+  `name_search` and `cb_admin_back` use `profile_keyboard`, both profile sends
+  pass entities), `features/directory/privacy.py` (its return path passes
+  entities), `features/directory/__init__.py` (include `grades.router`),
+  `tests/test_directory_sync.py`, `tests/test_directory_render.py`,
+  `tests/test_visibility.py` (it pins the exact ordered field list, so
+  `source_link` goes in it directly after `primary_cohort` — the two belong
+  together, and the renderer folds the field rather than reading its position),
+  `AGENTS.md`.
 
 ## Testing strategy
 
@@ -246,7 +305,14 @@ already carries `⚠️ Departed` for the admin reading it.
   teacher and admin, absent when the target has no rows; a student tapping a
   stale button refused; a bootstrap admin allowed through.
 - **`test_directory_sync.py`** — a broken Gradebook reports and the roster still
-  syncs and commits; a cohort whose Gradebook fails does not stop the next one.
+  syncs and commits; a cohort whose Gradebook fails does not stop the next one;
+  `source_link` stored per cohort and from the Rights sheet for a staff row.
+- **`test_directory_render.py`** — the exact-output regression anchor keeps
+  holding for a non-admin, whose cohort line stays plain with no entity; an
+  admin gets one `text_link` entity whose UTF-16 offset and length cover exactly
+  the cohort value, asserted on a profile that carries `⚠️ Departed` above it and
+  on one that does not; a staff row with no cohort gets the `Source:` line
+  instead.
 
 ## Out of scope (YAGNI)
 
