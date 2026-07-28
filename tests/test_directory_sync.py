@@ -8,7 +8,20 @@ from jbcub_bot.features.directory import handlers
 from jbcub_bot.features.directory.handlers import cmd_sync
 from jbcub_bot.core.models import Role, User
 
-# Headers matching mapping/sdt-2025-2028.yaml (all mapped columns must be present).
+# The Cohorts tab: 'Cohort' and 'Link' describe the cohort, every other column
+# names one of our fields and holds that field's column name in the cohort sheet.
+COHORTS_HEADER = ["Cohort", "Link", "matriculation", "last_name", "first_name",
+                  "handle_sheet", "gmail", "cubemail", "birthday", "citizenship",
+                  "comment"]
+
+
+def _cohorts_row(cohort, link):
+    return [cohort, link, "Matriculation Num.", "Last name", "First name",
+            "Telegram", "Email", "CUB Email", "Birthday date", "Citizenship",
+            "Comment"]
+
+
+# A cohort's own sheet, named as that row of the Cohorts tab says.
 COHORT_HEADER = ["Matriculation Num.", "Last name", "First name", "Telegram",
                  "Email", "CUB Email", "GitHub", "Codeforces", "Birthday date",
                  "Citizenship", "Comment"]
@@ -18,9 +31,9 @@ def _cohort_row(matr, last, first, tg):
     return [matr, last, first, tg, "", "", "", "", "", "", ""]
 
 
-# Headers matching mapping/rights.yaml.
-RIGHTS_HEADER = ["Matriculation Number", "Last name", "First name", "Role",
-                 "Telegram"]
+# The Rights tab is ours to shape, so its columns are our field names already.
+RIGHTS_HEADER = ["matriculation", "last_name", "first_name", "role",
+                 "handle_sheet"]
 
 
 def _settings():
@@ -30,8 +43,6 @@ def _settings():
         rights_sheet_id="RIGHTS",
         cohorts_tab="Cohorts",
         rights_tab="Rights",
-        rights_mapping="rights.yaml",
-        mapping_dir="mapping",
     )
 
 
@@ -63,9 +74,8 @@ async def test_sync_aborts_on_credential_error_without_raising(session, monkeypa
 async def test_sync_aborts_and_writes_nothing_on_cohort_parse_error(session, monkeypatch):
     def fake_fetch(sheet_id, sa, range_="A:Z"):
         if range_ == "Cohorts!A:Z":
-            return [["Cohort", "Link", "Mapping"],
-                    ["2024", "AAA", "sdt-2025-2028.yaml"],
-                    ["2099", "BBB", "sdt-2025-2028.yaml"]]
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA"),
+                    _cohorts_row("2099", "BBB")]
         if sheet_id == "AAA":
             return [COHORT_HEADER, _cohort_row("30000001", "Ivanov", "Ivan", "ivan")]
         if sheet_id == "BBB":
@@ -84,7 +94,7 @@ async def test_sync_aborts_and_writes_nothing_on_cohort_parse_error(session, mon
 async def test_sync_happy_path(session, monkeypatch):
     def fake_fetch(sheet_id, sa, range_="A:Z"):
         if range_ == "Cohorts!A:Z":
-            return [["Cohort", "Link", "Mapping"], ["2024", "AAA", "sdt-2025-2028.yaml"]]
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
         if sheet_id == "AAA":
             return [COHORT_HEADER, _cohort_row("30000001", "Ivanov", "Ivan", "ivan")]
         if range_ == "Rights!A:Z":
@@ -110,7 +120,7 @@ async def test_sync_creates_searchable_admin_only_in_rights(session, monkeypatch
     # must still become a real, searchable User row, keyed by Telegram handle.
     def fake_fetch(sheet_id, sa, range_="A:Z"):
         if range_ == "Cohorts!A:Z":
-            return [["Cohort", "Link", "Mapping"], ["2024", "AAA", "sdt-2025-2028.yaml"]]
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
         if sheet_id == "AAA":
             return [COHORT_HEADER, _cohort_row("30000001", "Ivanov", "Ivan", "ivan")]
         if range_ == "Rights!A:Z":
@@ -138,7 +148,7 @@ async def test_sync_labels_the_phase_and_reraises_an_unexpected_sheet_error(
     # than be swallowed into a bare "aborted".
     def fake_fetch(sheet_id, sa, range_="A:Z"):
         if range_ == "Cohorts!A:Z":
-            return [["Cohort", "Link", "Mapping"], ["2024", "AAA", "sdt-2025-2028.yaml"]]
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
         raise ConnectionResetError("connection reset by peer")
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows", fake_fetch)
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
@@ -173,10 +183,54 @@ async def test_sync_times_out_instead_of_freezing_on_a_stalled_sheet_read(
     assert isinstance(err.value.__cause__, TimeoutError)
 
 
+async def test_sync_aborts_on_a_misspelled_field_column_in_the_cohorts_tab(
+        session, monkeypatch):
+    # The mapping now lives in a hand-edited header, so a typo there is the
+    # likeliest mistake -- and must be named, not silently dropped.
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [["Cohort", "Link", "matriculation", "last_nmae"],
+                    ["2024", "AAA", "Matriculation Num.", "Last name"]]
+        return []
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows", fake_fetch)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
+                        lambda *a: None)
+    msg = SimpleNamespace(answer=AsyncMock())
+    await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
+    last = msg.answer.await_args.args[0]
+    assert last.startswith("Sync aborted (Cohorts tab):")
+    assert "last_nmae" in last
+    assert session.query(User).count() == 0
+
+
+async def test_sync_aborts_when_rights_has_no_handle_column(session, monkeypatch):
+    # Rights rows are keyed on handle_sheet: without that column every row is
+    # skipped and the sync would claim success having written nothing.
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA":
+            return [COHORT_HEADER, _cohort_row("30000001", "Ivanov", "Ivan", "ivan")]
+        if range_ == "Rights!A:Z":
+            return [["last_name", "first_name", "role"], ["Ivanov", "Ivan", "Admin"]]
+        return []
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows", fake_fetch)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
+                        lambda *a: None)
+    msg = SimpleNamespace(answer=AsyncMock())
+    await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
+    last = msg.answer.await_args.args[0]
+    assert last.startswith("Sync aborted (Rights tab):")
+    assert "handle_sheet" in last
+    assert session.query(User).count() == 0
+
+
 async def test_sync_aborts_and_writes_nothing_on_invalid_role(session, monkeypatch):
     def fake_fetch(sheet_id, sa, range_="A:Z"):
         if range_ == "Cohorts!A:Z":
-            return [["Cohort", "Link", "Mapping"], ["2024", "AAA", "sdt-2025-2028.yaml"]]
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
         if sheet_id == "AAA":
             return [COHORT_HEADER, _cohort_row("30000001", "Ivanov", "Ivan", "ivan")]
         if range_ == "Rights!A:Z":

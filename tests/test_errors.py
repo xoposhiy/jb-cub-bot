@@ -130,7 +130,6 @@ async def test_report_logs_even_with_no_admins_configured(caplog):
 COHORT_SETTINGS = SimpleNamespace(
     google_service_account_file="sa.json", google_service_account_json="",
     rights_sheet_id="RIGHTS", cohorts_tab="Cohorts", rights_tab="Rights",
-    rights_mapping="rights.yaml", mapping_dir="mapping",
 )
 
 

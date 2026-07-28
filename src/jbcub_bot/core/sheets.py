@@ -1,6 +1,5 @@
+import difflib
 import re
-
-import yaml
 
 _SHEET_ID_RE = re.compile(r"/spreadsheets/d/([A-Za-z0-9_-]+)")
 _HANDLE_URL_RE = re.compile(
@@ -10,6 +9,19 @@ _HANDLE_URL_RE = re.compile(
 
 class MappingError(Exception):
     pass
+
+
+SHEET_OWNED = (
+    "last_name", "first_name", "handle_sheet", "gmail",
+    "github_sheet", "codeforces_sheet",
+    "birthday", "citizenship", "comment",
+    "primary_cohort", "past_cohorts", "role",
+)
+
+# Every field name a sheet header may use. `matriculation` is the student key,
+# not a sheet-owned field. `cubemail` is accepted but has no User column yet, so
+# it is read and dropped -- the sheets have named it since before this check.
+KNOWN_FIELDS = frozenset(SHEET_OWNED + ("matriculation", "cubemail"))
 
 
 def normalize_handle(value: str | None) -> str | None:
@@ -28,11 +40,6 @@ def normalize_handle(value: str | None) -> str | None:
     return handle or None
 
 
-def load_mapping(path: str) -> dict:
-    with open(path, encoding="utf-8") as fh:
-        return yaml.safe_load(fh)
-
-
 def extract_sheet_id(link: str) -> str:
     match = _SHEET_ID_RE.search(link)
     if match:
@@ -40,29 +47,88 @@ def extract_sheet_id(link: str) -> str:
     return link.strip()
 
 
+# The two Cohorts columns that describe the cohort itself. Every other column
+# there is one of our field names.
+COHORT_INDEX_COLUMNS = ("Cohort", "Link")
+
+
+def _known_field(name: str) -> str:
+    """Return `name` if it is one of our field names, else explain the typo.
+
+    Header cells are hand-typed by admins, so a misspelling is the likeliest
+    mistake -- and the most expensive one, since an unrecognized column would
+    otherwise drop a whole field's data without a word.
+    """
+    if name in KNOWN_FIELDS:
+        return name
+    near = difflib.get_close_matches(name, sorted(KNOWN_FIELDS), n=1)
+    hint = f" (did you mean {near[0]!r}?)" if near else ""
+    raise MappingError(f"unknown field {name!r}{hint}")
+
+
+def _require(mapping: dict, required, subject: str | None = None) -> None:
+    missing = [f for f in required if f not in mapping]
+    if missing:
+        prefix = f"{subject}: " if subject else ""
+        raise MappingError(
+            prefix + "missing a column for "
+            + ", ".join(repr(f) for f in missing)
+        )
+
+
 def parse_cohort_index(rows: list[list[str]]) -> list[dict]:
+    """Read the Cohorts tab: one row per cohort, carrying its own field mapping.
+
+    Past 'Cohort' and 'Link', each header cell names one of our fields and the
+    cell beneath it names that field's column in the cohort's own sheet. That
+    keeps the mapping next to the link it belongs to, editable by an admin.
+    """
     if not rows:
         return []
     header = [h.strip() for h in rows[0]]
     index = {col: i for i, col in enumerate(header)}
     if "Cohort" not in index or "Link" not in index:
         raise MappingError("Cohorts tab needs 'Cohort' and 'Link' columns")
+    fields = [
+        (i, _known_field(col))
+        for i, col in enumerate(header)
+        if col and col not in COHORT_INDEX_COLUMNS
+    ]
 
-    def cell(row, name):
-        i = index.get(name)
-        return row[i].strip() if i is not None and i < len(row) else ""
+    def cell(row, i):
+        return row[i].strip() if i < len(row) else ""
 
     out = []
     for row in rows[1:]:
-        cohort = cell(row, "Cohort")
+        cohort = cell(row, index["Cohort"])
         if not cohort:
             continue
+        # A blank cell means this cohort's sheet has no such column.
+        mapping = {field: cell(row, i) for i, field in fields if cell(row, i)}
+        # upsert_users keys students on matriculation; without it every row of
+        # the cohort is skipped and /sync reports success having written nothing.
+        _require(mapping, ("matriculation",), f"cohort {cohort!r}")
         out.append({
             "cohort": cohort,
-            "link": cell(row, "Link"),
-            "mapping": cell(row, "Mapping") or f"{cohort}.yaml",
+            "link": cell(row, index["Link"]),
+            "mapping": mapping,
         })
     return out
+
+
+def identity_mapping(header: list[str], required=()) -> dict:
+    """Mapping for a tab whose columns already use our own field names.
+
+    The Rights tab is ours to shape, so it skips the translation step and only
+    has its header checked.
+    """
+    mapping = {}
+    for col in header:
+        col = col.strip()
+        if col:
+            mapping[_known_field(col)] = col
+    _require(mapping, required)
+    return mapping
 
 
 def normalize_rows(rows: list[list[str]], mapping: dict) -> list[dict]:
@@ -72,7 +138,13 @@ def normalize_rows(rows: list[list[str]], mapping: dict) -> list[dict]:
     index = {col: i for i, col in enumerate(header)}
     for field, column in mapping.items():
         if column not in index:
-            raise MappingError(f"column {column!r} for field {field!r} not found")
+            # The fix is to make the Cohorts cell match a real column, so name
+            # the ones this sheet has rather than only the one it lacks.
+            available = ", ".join(repr(c) for c in header if c.strip())
+            raise MappingError(
+                f"column {column!r} for field {field!r} not found; "
+                f"this sheet has: {available or '(no named columns)'}"
+            )
     out = []
     for row in rows[1:]:
         record = {}
@@ -91,13 +163,6 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 
 from jbcub_bot.core.models import Role, User
-
-SHEET_OWNED = (
-    "last_name", "first_name", "handle_sheet", "gmail",
-    "github_sheet", "codeforces_sheet",
-    "birthday", "citizenship", "comment",
-    "primary_cohort", "past_cohorts", "role",
-)
 
 
 def upsert_users(session, records: list[dict], key: str = "matriculation") -> None:

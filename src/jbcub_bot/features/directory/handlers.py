@@ -297,9 +297,8 @@ async def cmd_sync(message: Message, principal: User, session):
         sheet_id = sheets.extract_sheet_id(entry["link"])
         try:
             rows = await read_rows(sheet_id, sa)
-            mapping = sheets.load_mapping(f"{settings.mapping_dir}/{entry['mapping']}")
-            records = sheets.normalize_rows(rows, mapping)
-        except (sheets.MappingError, FileNotFoundError) as exc:
+            records = sheets.normalize_rows(rows, entry["mapping"])
+        except sheets.MappingError as exc:
             await message.answer(f"Sync aborted (cohort {entry['cohort']}): {exc}")
             return
         except Exception as exc:
@@ -315,11 +314,13 @@ async def cmd_sync(message: Message, principal: User, session):
     try:
         rights_rows = await read_rows(settings.rights_sheet_id, sa,
                                       f"{settings.rights_tab}!A:Z")
-        rights_mapping = sheets.load_mapping(
-            f"{settings.mapping_dir}/{settings.rights_mapping}"
+        # The Rights tab names its columns with our own field names, so it maps
+        # to itself. Rows are keyed on the handle, so that column must be there.
+        rights_mapping = sheets.identity_mapping(
+            rights_rows[0] if rights_rows else [], required=("handle_sheet",)
         )
         rights_records = sheets.normalize_rows(rights_rows, rights_mapping)
-    except (sheets.MappingError, FileNotFoundError) as exc:
+    except sheets.MappingError as exc:
         await message.answer(f"Sync aborted (Rights tab): {exc}")
         return
     except Exception as exc:

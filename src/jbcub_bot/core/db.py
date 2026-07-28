@@ -7,8 +7,8 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from jbcub_bot.core.config import get_settings
 
-# Resolved from the working directory, like the `mapping_dir` setting and
-# alembic.ini's own `prepend_sys_path = .`.
+# Resolved from the working directory, like alembic.ini's own
+# `prepend_sys_path = .`.
 _ALEMBIC_INI = "alembic.ini"
 
 

@@ -14,7 +14,6 @@ dependencies = [
     "google-auth>=2.56.2",
     "itsdangerous>=2.2.0",
     "pydantic-settings>=2.14.2",
-    "pyyaml>=6.0.3",
     "sqlalchemy>=2.0.51",
 ]
 

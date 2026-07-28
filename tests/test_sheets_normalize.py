@@ -1,14 +1,6 @@
 import pytest
 
-from jbcub_bot.core.sheets import MappingError, load_mapping, normalize_rows
-
-
-def test_load_mapping(tmp_path):
-    p = tmp_path / "m.yaml"
-    p.write_text("matriculation: \"Matr\"\nlast_name: \"Last name\"\n",
-                 encoding="utf-8")
-    m = load_mapping(str(p))
-    assert m == {"matriculation": "Matr", "last_name": "Last name"}
+from jbcub_bot.core.sheets import MappingError, normalize_rows
 
 
 def test_normalize_rows_maps_by_header():
@@ -55,6 +47,18 @@ def test_normalize_rows_missing_column_raises():
         normalize_rows(rows, mapping)
 
 
+def test_normalize_rows_missing_column_error_lists_the_columns_the_sheet_has():
+    # The fix is always "make the Cohorts cell match a real column", so the
+    # error has to show which columns the cohort sheet actually offers.
+    rows = [[" ", "First name", "Telegram"], ["Ivanov", "Ivan", "ivanov"]]
+    mapping = {"last_name": "Last name"}
+    with pytest.raises(MappingError) as err:
+        normalize_rows(rows, mapping)
+    assert "last_name" in str(err.value)
+    assert "'Last name'" in str(err.value)
+    assert "First name" in str(err.value)
+
+
 def test_extract_sheet_id_from_url():
     from jbcub_bot.core.sheets import extract_sheet_id
     url = "https://docs.google.com/spreadsheets/d/1AbC-dEf_123/edit#gid=0"
@@ -66,23 +70,96 @@ def test_extract_sheet_id_passthrough_bare_id():
     assert extract_sheet_id("  1AbC-dEf_123 ") == "1AbC-dEf_123"
 
 
-def test_parse_cohort_index():
+def test_parse_cohort_index_reads_each_cohorts_mapping_from_its_row():
+    # Every column past Cohort/Link is one of our field names; the cell under it
+    # is what that field is called in that cohort's own sheet. Two cohorts can
+    # name the same field differently.
     from jbcub_bot.core.sheets import parse_cohort_index
     rows = [
-        ["Cohort", "Link", "Mapping"],
-        ["2024", "https://docs.google.com/spreadsheets/d/AAA/edit", "sdt-2025-2028.yaml"],
-        ["2023", "BBB", ""],  # no mapping -> default
-        ["", "ignored", ""],  # blank cohort skipped
+        ["Cohort", "Link", "matriculation", "last_name", "handle_sheet"],
+        ["2024", "https://docs.google.com/spreadsheets/d/AAA/edit",
+         "Matriculation Num.", "Last name", "Telegram"],
+        ["2023", "BBB", "Matr", "Surname", "TG"],
+        ["", "ignored", "x", "y", "z"],  # blank cohort skipped
+    ]
+    assert parse_cohort_index(rows) == [
+        {"cohort": "2024",
+         "link": "https://docs.google.com/spreadsheets/d/AAA/edit",
+         "mapping": {"matriculation": "Matriculation Num.",
+                     "last_name": "Last name", "handle_sheet": "Telegram"}},
+        {"cohort": "2023", "link": "BBB",
+         "mapping": {"matriculation": "Matr", "last_name": "Surname",
+                     "handle_sheet": "TG"}},
+    ]
+
+
+def test_parse_cohort_index_treats_a_blank_cell_as_a_field_that_cohort_lacks():
+    # A cohort sheet with no Citizenship column leaves the cell empty rather
+    # than needing a separate mapping. A short row means the same thing.
+    from jbcub_bot.core.sheets import parse_cohort_index
+    rows = [
+        ["Cohort", "Link", "matriculation", "citizenship", "comment"],
+        ["2024", "AAA", "Matr", "", "Comment"],
+        ["2023", "BBB", "Matr"],  # row ends early
     ]
     out = parse_cohort_index(rows)
-    assert out == [
-        {"cohort": "2024", "link": "https://docs.google.com/spreadsheets/d/AAA/edit",
-         "mapping": "sdt-2025-2028.yaml"},
-        {"cohort": "2023", "link": "BBB", "mapping": "2023.yaml"},
+    assert out[0]["mapping"] == {"matriculation": "Matr", "comment": "Comment"}
+    assert out[1]["mapping"] == {"matriculation": "Matr"}
+
+
+def test_parse_cohort_index_rejects_an_unknown_field_name():
+    # A typo in the header would otherwise silently drop a whole column of data.
+    from jbcub_bot.core.sheets import parse_cohort_index
+    rows = [
+        ["Cohort", "Link", "matriculation", "last_nmae"],
+        ["2024", "AAA", "Matr", "Last name"],
     ]
+    with pytest.raises(MappingError) as err:
+        parse_cohort_index(rows)
+    assert "last_nmae" in str(err.value)
+    assert "last_name" in str(err.value)  # suggests the near miss
+
+
+def test_parse_cohort_index_requires_matriculation():
+    # upsert_users keys students on matriculation: without it every row is
+    # silently skipped and the sync reports success having written nothing.
+    from jbcub_bot.core.sheets import parse_cohort_index
+    rows = [
+        ["Cohort", "Link", "last_name"],
+        ["2024", "AAA", "Last name"],
+    ]
+    with pytest.raises(MappingError) as err:
+        parse_cohort_index(rows)
+    assert "matriculation" in str(err.value)
 
 
 def test_parse_cohort_index_missing_columns_raises():
     from jbcub_bot.core.sheets import parse_cohort_index
     with pytest.raises(MappingError):
         parse_cohort_index([["Cohort"], ["2024"]])  # no Link column
+
+
+def test_identity_mapping_maps_each_header_field_to_itself():
+    # The Rights tab names its columns with our own field names, so it needs no
+    # translation -- only a check that we recognize every one of them.
+    from jbcub_bot.core.sheets import identity_mapping
+    header = ["first_name", "last_name", "handle_sheet", "role", ""]
+    assert identity_mapping(header) == {
+        "first_name": "first_name", "last_name": "last_name",
+        "handle_sheet": "handle_sheet", "role": "role",
+    }
+
+
+def test_identity_mapping_rejects_an_unknown_field_name():
+    from jbcub_bot.core.sheets import identity_mapping
+    with pytest.raises(MappingError) as err:
+        identity_mapping(["first_name", "rolle"])
+    assert "rolle" in str(err.value)
+    assert "role" in str(err.value)
+
+
+def test_identity_mapping_enforces_required_fields():
+    from jbcub_bot.core.sheets import identity_mapping
+    with pytest.raises(MappingError) as err:
+        identity_mapping(["first_name", "role"], required=("handle_sheet",))
+    assert "handle_sheet" in str(err.value)
