@@ -69,9 +69,15 @@ class PrincipalMiddleware(BaseMiddleware):
             ref = data.get("impersonate_ref")
             if ref is not None and principal is not None \
                     and principal.role is Role.ADMIN:
-                data["principal"] = identity.find_impersonation_target(
-                    session, ref
-                )
+                target = identity.find_impersonation_target(session, ref)
+                # /as shows the bot as its target sees it, and what a departed
+                # target sees is the refusal. Kept separate from the caller's
+                # own check above so the bootstrap exemption covers only the
+                # admin's own access, never their view of somebody else.
+                if target is not None and target.departed_at:
+                    await refuse_departed(event)
+                    return None
+                data["principal"] = target
                 data["impersonator"] = principal
             else:
                 data["principal"] = principal

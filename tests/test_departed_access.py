@@ -134,6 +134,44 @@ async def test_a_student_still_on_the_roster_is_unaffected():
     assert any("Ivan" in text for text in said)
 
 
+async def _admin(factory, telegram_id=999):
+    setup = factory()
+    setup.add(User(last_name="Adminova", first_name="Anna",
+                   telegram_id=telegram_id, role=Role.ADMIN))
+    setup.commit()
+    setup.close()
+
+
+async def test_impersonating_a_departed_student_shows_their_block():
+    # /as exists to see the bot as someone else sees it, and what a departed
+    # student sees is the refusal. Rendering their profile instead would tell an
+    # admin their access still works.
+    factory = _session_factory()
+    _seed(factory)
+    await _admin(factory)
+    bot, dp = FakeBot(), build_dispatcher(factory)
+    await dp.feed_update(bot, _message_update(bot, 999, f"/as {DEPARTED_TID} /me"),
+                         dispatcher=dp)
+    said = _texts(bot)
+    # "Showing as Eve Expelled:" is fine -- cmd_as names the target before
+    # handing over. What must not come back is her profile.
+    assert DEPARTED_NOTICE in said
+    assert not any("Cohort: 2024" in text for text in said)
+
+
+async def test_impersonating_a_student_still_on_the_roster_works():
+    # The guard above must not break /as for everyone else.
+    factory = _session_factory()
+    _seed(factory)
+    await _admin(factory)
+    bot, dp = FakeBot(), build_dispatcher(factory)
+    await dp.feed_update(bot, _message_update(bot, 999, f"/as {ACTIVE_TID} /me"),
+                         dispatcher=dp)
+    said = _texts(bot)
+    assert DEPARTED_NOTICE not in said
+    assert any("Ivan" in text for text in said)
+
+
 async def test_a_bootstrap_admin_is_never_locked_out_by_the_mark():
     # BOOTSTRAP_ADMIN_IDS is the way back in when the roster is wrong. If the
     # mark could shut that door, a bad /sync would leave nobody able to fix it.
