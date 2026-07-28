@@ -52,15 +52,27 @@ def admin_keyboard(target: User) -> InlineKeyboardMarkup | None:
     return InlineKeyboardMarkup(inline_keyboard=[admin_row(target.matriculation)])
 
 
+def invite_row(matriculation: str) -> list[InlineKeyboardButton]:
+    return [InlineKeyboardButton(text="✉️ Issue Invite",
+                                 callback_data=f"dir:link:{matriculation}")]
+
+
 def admin_actions_keyboard(target: User) -> InlineKeyboardMarkup:
+    """The one action that applies, plus Back.
+
+    Linking is exclusive: an invite for a profile that already has a
+    telegram_id would hand it to whoever taps the link and drop the current
+    holder without a word. So a linked profile only offers Reset — which asks
+    for confirmation and says what it does — and the invite appears once the
+    profile is free. Nothing to reset on an unlinked profile either, so the
+    two are never on screen together.
+    """
     m = target.matriculation
-    rows = [[InlineKeyboardButton(text="✉️ Issue Invite",
-                                  callback_data=f"dir:link:{m}")]]
-    # Nothing to reset on an unlinked profile — the button would only invite a
-    # confirmation dialog that then reports success for a no-op.
-    if target.telegram_id is not None:
-        rows.append([InlineKeyboardButton(text="♻️ Reset telegram_id",
-                                          callback_data=f"dir:reset:{m}")])
+    if target.telegram_id is None:
+        rows = [invite_row(m)]
+    else:
+        rows = [[InlineKeyboardButton(text="♻️ Reset telegram_id",
+                                      callback_data=f"dir:reset:{m}")]]
     rows.append([InlineKeyboardButton(text="⬅️ Back",
                                       callback_data=f"{ADMIN_BACK_CALLBACK}:{m}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

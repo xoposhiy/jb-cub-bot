@@ -195,6 +195,9 @@ async def test_crashing_callback_handler_stops_the_spinner_and_reports(monkeypat
     factory = _factory()
     admin = factory()
     admin.add(User(last_name="A", first_name="Ann", telegram_id=777, role=Role.ADMIN))
+    # An unlinked target, so cb_issue_link gets past its own checks and reaches
+    # the exploding get_settings — the crash this test is about.
+    admin.add(User(last_name="Ivan", matriculation="30000001", role=Role.STUDENT))
     admin.commit()
     admin.close()
 

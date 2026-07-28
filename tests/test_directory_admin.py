@@ -18,7 +18,8 @@ def test_admin_keyboard_hides_actions_behind_one_button():
     assert datas == ["dir:admin:30000001"]
 
 
-async def test_cb_admin_open_reveals_actions_and_back(session):
+async def test_cb_admin_open_offers_reset_when_linked(session):
+    """A linked profile gets Reset, not Invite: linking is exclusive."""
     session.add(User(last_name="Ivan", matriculation="30000001",
                      telegram_id=111, role=Role.STUDENT))
     session.commit()
@@ -33,15 +34,11 @@ async def test_cb_admin_open_reveals_actions_and_back(session):
 
     kb = cb.message.edit_reply_markup.await_args.kwargs["reply_markup"]
     datas = [btn.callback_data for row in kb.inline_keyboard for btn in row]
-    assert datas == [
-        "dir:link:30000001",
-        "dir:reset:30000001",
-        "dir:admin_back:30000001",
-    ]
+    assert datas == ["dir:reset:30000001", "dir:admin_back:30000001"]
     cb.answer.assert_awaited_once()
 
 
-async def test_cb_admin_open_hides_reset_when_not_linked(session):
+async def test_cb_admin_open_offers_invite_when_not_linked(session):
     session.add(User(last_name="Ivan", matriculation="30000001",
                      telegram_id=None, role=Role.STUDENT))
     session.commit()
@@ -188,6 +185,37 @@ async def test_cb_reset_admin_confirms_before_clearing(session):
     await cb_reset_do(cb2, principal=admin, session=session)
     assert target.telegram_id is None
     cb2.answer.assert_awaited_once()
+
+    # …and hands over the invite, the reason the reset was done at all.
+    kb = cb2.message.edit_text.await_args.kwargs["reply_markup"]
+    datas = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+    assert datas == ["dir:link:30000001"]
+
+
+async def test_cb_issue_link_refused_while_the_profile_is_still_linked(session):
+    """Reset is where handing the profile to someone else gets confirmed.
+
+    The menu hides Invite on a linked profile, but an older message still
+    carries the button — pressing it must not quietly move the profile.
+    """
+    target = User(first_name="I", last_name="Ivan", matriculation="30000001",
+                  telegram_id=111, role=Role.STUDENT)
+    session.add(target)
+    session.commit()
+    admin = User(last_name="Admin", role=Role.ADMIN, telegram_id=999)
+
+    cb = SimpleNamespace(
+        data="dir:link:30000001",
+        answer=AsyncMock(),
+        message=SimpleNamespace(answer=AsyncMock()),
+        bot=SimpleNamespace(me=AsyncMock()),
+    )
+    await cb_issue_link(cb, principal=admin, session=session)
+
+    alert = cb.answer.await_args.args[0]
+    assert "I Ivan" in alert and "Reset telegram_id" in alert
+    cb.message.answer.assert_not_awaited()  # no link handed out
+    assert target.link_nonce is None  # no token burned either
 
 
 async def test_cb_issue_link_denied_for_non_admin(session):

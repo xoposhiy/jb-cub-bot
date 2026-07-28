@@ -21,6 +21,7 @@ from jbcub_bot.features.directory.render import (
     admin_actions_keyboard,
     admin_keyboard,
     admin_row,
+    invite_row,
     me_keyboard,
     render_cohort_list,
     render_profile,
@@ -152,11 +153,21 @@ async def cb_issue_link(cb: CallbackQuery, principal: User, session):
         await cb.answer("Admins only.", show_alert=True)
         return
     matriculation = cb.data.split(":", 2)[2]
-    try:
-        token = issue_link_token(session, matriculation, get_settings().link_secret)
-    except ValueError:
+    target = identity.find_by_matriculation(session, matriculation)
+    if target is None:
         await cb.answer("Not found.", show_alert=True)
         return
+    # The menu hides this button on a linked profile, but an older message still
+    # carries it — and issuing the invite anyway would silently move the profile
+    # to whoever taps the link. Reset is where that decision gets confirmed.
+    if target.telegram_id is not None:
+        await cb.answer(
+            f"Already linked to a Telegram account. Reset telegram_id for "
+            f"{target.full_name} first.",
+            show_alert=True,
+        )
+        return
+    token = issue_link_token(session, matriculation, get_settings().link_secret)
     bot_user = await cb.bot.me()
     ttl = get_settings().link_ttl_seconds
     expires = f"{ttl // 3600}h" if ttl >= 3600 else f"{max(ttl // 60, 1)} min"
@@ -188,7 +199,8 @@ async def cb_reset(cb: CallbackQuery, principal: User, session):
         f"🧐 Reset telegram_id for {matriculation}? This unlinks their Telegram "
                 f"account — they'll still have access if their telegram handle match the profile "
                 f"or need a new one-time link to access the bot.\n\n👿 Use it in case of when user lost access to their Telegram account and created a new one. "
-                f"Probably you also need to change their Telegram handle in that case. Change it in the Google Sheet to actual value and run /sync.",
+                f"Probably you also need to change their Telegram handle in that case. Change it in the Google Sheet to actual value and run /sync."
+                f"\n\n✉️ Issue Invite becomes available once the profile is unlinked.",
         reply_markup=kb,
     )
     await cb.answer()
@@ -201,7 +213,18 @@ async def cb_reset_do(cb: CallbackQuery, principal: User, session):
         return
     matriculation = cb.data.split(":", 2)[2]
     ok = identity.reset_binding(session, matriculation)
-    await cb.message.edit_text("Reset done." if ok else "Not found.")
+    if not ok:
+        await cb.message.edit_text("Not found.")
+        await cb.answer()
+        return
+    # Issuing the invite is the whole point of the reset, so offer it here
+    # rather than making the admin search for the person again.
+    await cb.message.edit_text(
+        f"Reset done. {matriculation} is unlinked — the invite below is how "
+        "they get back in.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[invite_row(matriculation)]),
+    )
     await cb.answer()
 
 
