@@ -52,16 +52,18 @@ def admin_keyboard(target: User) -> InlineKeyboardMarkup | None:
     return InlineKeyboardMarkup(inline_keyboard=[admin_row(target.matriculation)])
 
 
-def admin_actions_keyboard(matriculation: str) -> InlineKeyboardMarkup:
-    m = matriculation
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✉️ Issue Invite",
-                              callback_data=f"dir:link:{m}")],
-        [InlineKeyboardButton(text="♻️ Reset telegram_id",
-                              callback_data=f"dir:reset:{m}")],
-        [InlineKeyboardButton(text="⬅️ Back",
-                              callback_data=f"{ADMIN_BACK_CALLBACK}:{m}")],
-    ])
+def admin_actions_keyboard(target: User) -> InlineKeyboardMarkup:
+    m = target.matriculation
+    rows = [[InlineKeyboardButton(text="✉️ Issue Invite",
+                                  callback_data=f"dir:link:{m}")]]
+    # Nothing to reset on an unlinked profile — the button would only invite a
+    # confirmation dialog that then reports success for a no-op.
+    if target.telegram_id is not None:
+        rows.append([InlineKeyboardButton(text="♻️ Reset telegram_id",
+                                          callback_data=f"dir:reset:{m}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Back",
+                                      callback_data=f"{ADMIN_BACK_CALLBACK}:{m}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def me_keyboard(user: User, *,

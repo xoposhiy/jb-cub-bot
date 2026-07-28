@@ -7,6 +7,12 @@ def find_by_telegram_id(session, telegram_id: int) -> User | None:
     return session.scalar(select(User).where(User.telegram_id == telegram_id))
 
 
+def find_by_matriculation(session, matriculation: str) -> User | None:
+    return session.scalar(
+        select(User).where(User.matriculation == matriculation)
+    )
+
+
 def find_impersonation_target(session, ref: str) -> User | None:
     user = session.scalar(select(User).where(User.matriculation == ref))
     if user is not None:
@@ -44,9 +50,7 @@ def resolve(session, telegram_id: int, username: str | None) -> User | None:
 
 
 def reset_binding(session, matriculation: str) -> bool:
-    user = session.scalar(
-        select(User).where(User.matriculation == matriculation)
-    )
+    user = find_by_matriculation(session, matriculation)
     if user is None:
         return False
     user.telegram_id = None

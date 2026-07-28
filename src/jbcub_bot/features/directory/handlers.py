@@ -119,8 +119,14 @@ async def cb_admin_open(cb: CallbackQuery, principal: User, session):
         await cb.answer("Admins only.", show_alert=True)
         return
     matriculation = cb.data.split(":", 2)[2]
+    # Read the row rather than trusting the profile that was rendered: which
+    # actions apply depends on whether the person is linked right now.
+    target = identity.find_by_matriculation(session, matriculation)
+    if target is None:
+        await cb.answer("Not found.", show_alert=True)
+        return
     await cb.message.edit_reply_markup(
-        reply_markup=admin_actions_keyboard(matriculation))
+        reply_markup=admin_actions_keyboard(target))
     await cb.answer()
 
 

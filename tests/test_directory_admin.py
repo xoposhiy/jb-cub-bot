@@ -19,6 +19,9 @@ def test_admin_keyboard_hides_actions_behind_one_button():
 
 
 async def test_cb_admin_open_reveals_actions_and_back(session):
+    session.add(User(last_name="Ivan", matriculation="30000001",
+                     telegram_id=111, role=Role.STUDENT))
+    session.commit()
     admin = User(last_name="Admin", role=Role.ADMIN, telegram_id=999)
 
     cb = SimpleNamespace(
@@ -36,6 +39,38 @@ async def test_cb_admin_open_reveals_actions_and_back(session):
         "dir:admin_back:30000001",
     ]
     cb.answer.assert_awaited_once()
+
+
+async def test_cb_admin_open_hides_reset_when_not_linked(session):
+    session.add(User(last_name="Ivan", matriculation="30000001",
+                     telegram_id=None, role=Role.STUDENT))
+    session.commit()
+    admin = User(last_name="Admin", role=Role.ADMIN, telegram_id=999)
+
+    cb = SimpleNamespace(
+        data="dir:admin:30000001",
+        answer=AsyncMock(),
+        message=SimpleNamespace(edit_reply_markup=AsyncMock()),
+    )
+    await cb_admin_open(cb, principal=admin, session=session)
+
+    kb = cb.message.edit_reply_markup.await_args.kwargs["reply_markup"]
+    datas = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+    assert datas == ["dir:link:30000001", "dir:admin_back:30000001"]
+
+
+async def test_cb_admin_open_not_found(session):
+    admin = User(last_name="Admin", role=Role.ADMIN, telegram_id=999)
+
+    cb = SimpleNamespace(
+        data="dir:admin:DOESNOTEXIST",
+        answer=AsyncMock(),
+        message=SimpleNamespace(edit_reply_markup=AsyncMock()),
+    )
+    await cb_admin_open(cb, principal=admin, session=session)
+
+    cb.answer.assert_awaited_once_with("Not found.", show_alert=True)
+    cb.message.edit_reply_markup.assert_not_awaited()
 
 
 async def test_cb_admin_back_collapses_again(session):
