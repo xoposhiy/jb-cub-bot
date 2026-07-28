@@ -40,6 +40,64 @@ def test_normalize_rows_normalizes_handle():
     assert out == [{"last_name": "Ivanov", "handle_sheet": "ivanov"}]
 
 
+def test_normalize_rows_stops_at_the_first_row_with_neither_name_nor_matriculation():
+    # A roster sheet ends at a blank separator row; below it sit expelled and
+    # transferred students, 'del' markers and 'Total:' tallies. Reading past the
+    # break would re-import people who left.
+    rows = [
+        ["Matr", "Last name", "First name"],
+        ["30000001", "Ivanov", "Ivan"],
+        ["30000002", "Yurttas", "Mert"],
+        [],                                   # the break
+        ["", "", ""],
+        ["30000009", "Expelled", "Eve"],      # below the break: ignored
+    ]
+    mapping = {"matriculation": "Matr", "last_name": "Last name",
+               "first_name": "First name"}
+    out = normalize_rows(rows, mapping)
+    assert [r["last_name"] for r in out] == ["Ivanov", "Yurttas"]
+
+
+def test_normalize_rows_stops_on_a_separator_row_that_still_has_other_cells():
+    # The break is not always an empty row -- 'Total:  31' and '@handle  del'
+    # rows carry cells but no name and no matriculation.
+    rows = [
+        ["Matr", "Last name", "First name", "Comment"],
+        ["30000001", "Ivanov", "Ivan", ""],
+        ["", "", "", "Total: 1"],
+        ["30000009", "Expelled", "Eve", ""],
+    ]
+    mapping = {"matriculation": "Matr", "last_name": "Last name",
+               "first_name": "First name", "comment": "Comment"}
+    assert [r["last_name"] for r in normalize_rows(rows, mapping)] == ["Ivanov"]
+
+
+def test_normalize_rows_keeps_a_student_whose_matriculation_is_not_assigned_yet():
+    # Only a row missing *both* ends the roster: a student still waiting for a
+    # matriculation number must not truncate everyone below them.
+    rows = [
+        ["Matr", "Last name", "First name"],
+        ["", "Nomatric", "Nina"],
+        ["30000002", "Petrov", "Pyotr"],
+    ]
+    mapping = {"matriculation": "Matr", "last_name": "Last name",
+               "first_name": "First name"}
+    out = normalize_rows(rows, mapping)
+    assert [r["last_name"] for r in out] == ["Nomatric", "Petrov"]
+
+
+def test_normalize_rows_keeps_a_row_with_a_matriculation_but_no_name():
+    rows = [
+        ["Matr", "Last name", "First name"],
+        ["30000001", "", ""],
+        ["30000002", "Petrov", "Pyotr"],
+    ]
+    mapping = {"matriculation": "Matr", "last_name": "Last name",
+               "first_name": "First name"}
+    out = normalize_rows(rows, mapping)
+    assert [r["matriculation"] for r in out] == ["30000001", "30000002"]
+
+
 def test_normalize_rows_missing_column_raises():
     rows = [["Last name"], ["Ivanov"]]
     mapping = {"matriculation": "Matr", "last_name": "Last name"}

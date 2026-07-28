@@ -308,7 +308,12 @@ async def cmd_sync(message: Message, principal: User, session):
         for record in records:
             record["primary_cohort"] = entry["cohort"]
         parsed_cohorts.append((entry["cohort"], records))
-        await message.answer(f"Cohort {entry['cohort']}: {len(records)} rows read.")
+        # The roster ends at the first row naming nobody; below it sit students
+        # who left. Ignoring them is intended, ignoring them quietly is not.
+        ignored = max(0, len(rows) - 1 - len(records))
+        tail = f" {ignored} rows below the roster ignored." if ignored else ""
+        await message.answer(
+            f"Cohort {entry['cohort']}: {len(records)} rows read.{tail}")
 
     await message.answer("Reading Rights…")
     try:

@@ -183,6 +183,35 @@ async def test_sync_times_out_instead_of_freezing_on_a_stalled_sheet_read(
     assert isinstance(err.value.__cause__, TimeoutError)
 
 
+async def test_sync_reports_the_rows_it_ignored_below_the_roster(session, monkeypatch):
+    # Dropping the tail of expelled students is the point, but dropping it
+    # silently reads as "all 61 imported". The count has to be said out loud.
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA":
+            return [COHORT_HEADER,
+                    _cohort_row("30000001", "Ivanov", "Ivan", "ivan"),
+                    [],  # the break
+                    _cohort_row("30000009", "Expelled", "Eve", "eve"),
+                    _cohort_row("30000010", "Moved", "Max", "max")]
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER, ["30000001", "Ivanov", "Ivan", "Admin", "ivan"]]
+        return []
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows", fake_fetch)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
+                        lambda *a: None)
+    msg = SimpleNamespace(answer=AsyncMock())
+    await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
+
+    said = [c.args[0] for c in msg.answer.await_args_list]
+    read = next(m for m in said if m.startswith("Cohort 2024:"))
+    assert "1 rows read" in read
+    assert "3 rows below the roster ignored" in read
+    assert session.query(User).filter_by(matriculation="30000009").count() == 0
+
+
 async def test_sync_aborts_on_a_misspelled_field_column_in_the_cohorts_tab(
         session, monkeypatch):
     # The mapping now lives in a hand-edited header, so a typo there is the

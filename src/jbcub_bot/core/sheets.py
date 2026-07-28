@@ -131,6 +131,21 @@ def identity_mapping(header: list[str], required=()) -> dict:
     return mapping
 
 
+# A row identifies a person by name or by matriculation number. One that does
+# neither is the blank separator a roster sheet puts between its current
+# students and the expelled/transferred ones kept below for history -- so it
+# ends the import rather than being skipped. Requiring *both* to be missing
+# keeps a student still awaiting a matriculation number from cutting the
+# roster short.
+_ROSTER_IDENTITY = ("matriculation", "last_name", "first_name")
+
+
+def _ends_the_roster(record: dict) -> bool:
+    return not any(
+        (record.get(field) or "").strip() for field in _ROSTER_IDENTITY
+    )
+
+
 def normalize_rows(rows: list[list[str]], mapping: dict) -> list[dict]:
     if not rows:
         return []
@@ -151,6 +166,8 @@ def normalize_rows(rows: list[list[str]], mapping: dict) -> list[dict]:
         for field, column in mapping.items():
             i = index[column]
             record[field] = row[i] if i < len(row) else ""
+        if _ends_the_roster(record):
+            break
         if "handle_sheet" in record:
             record["handle_sheet"] = normalize_handle(record["handle_sheet"])
         out.append(record)
