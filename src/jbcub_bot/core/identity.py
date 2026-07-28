@@ -25,9 +25,12 @@ def find_impersonation_target(session, ref: str) -> User | None:
 def try_claim_by_handle(session, telegram_id: int, username: str | None) -> User | None:
     if not username:
         return None
+    # A departed row is not claimable: binding it would write a telegram_id on
+    # every message from someone the bot is going to refuse anyway.
     matches = session.scalars(
         select(User).where(
-            User.handle_sheet == username, User.telegram_id.is_(None)
+            User.handle_sheet == username, User.telegram_id.is_(None),
+            User.departed_at.is_(None),
         )
     ).all()
     if len(matches) != 1:

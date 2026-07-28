@@ -30,6 +30,14 @@ def test_claimed_record_not_reclaimed_by_handle(session):
     assert got is None  # already claimed; handle no longer a valid path
 
 
+def test_a_departed_row_is_not_claimed_by_a_matching_handle(session):
+    # Claiming binds a telegram_id. Doing that to someone the roster dropped
+    # would write to their row on every message, only to refuse them after.
+    u = _add(session, handle_sheet="ivanov", departed_at="2026-07-28")
+    assert identity.resolve(session, 555, "ivanov") is None
+    assert u.telegram_id is None  # nothing written
+
+
 def test_unknown_user_returns_none(session):
     assert identity.resolve(session, 42, "nobody") is None
 

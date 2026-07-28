@@ -49,4 +49,9 @@ def verify_link_token(session, token: str, secret: str, ttl: int) -> User | None
         return None
     if int(time.time()) - user.link_issued_at > ttl:
         return None
+    if user.departed_at:
+        # The roster dropped them between the invite and the tap. Binding here
+        # would hand out a login the middleware refuses on the very next
+        # message; putting them back in the sheet is what restores access.
+        return None
     return user

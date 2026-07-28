@@ -165,6 +165,15 @@ async def cb_issue_link(cb: CallbackQuery, principal: User, session):
     if target is None:
         await cb.answer("Not found.", show_alert=True)
         return
+    # An invite would bind them a login the middleware refuses on their next
+    # message, so say no here rather than let an admin send a dead link.
+    if target.departed_at:
+        await cb.answer(
+            f"{target.full_name} left the roster on {target.departed_at}. "
+            f"Put them back in the cohort sheet and re-sync to restore access.",
+            show_alert=True,
+        )
+        return
     # The menu hides this button on a linked profile, but an older message still
     # carries it — and issuing the invite anyway would silently move the profile
     # to whoever taps the link. Reset is where that decision gets confirmed.

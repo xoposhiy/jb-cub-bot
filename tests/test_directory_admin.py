@@ -218,6 +218,30 @@ async def test_cb_issue_link_refused_while_the_profile_is_still_linked(session):
     assert target.link_nonce is None  # no token burned either
 
 
+async def test_cb_issue_link_refused_for_someone_the_roster_dropped(session):
+    # The invite would be accepted by Telegram and then refused by the bot, so
+    # the admin has to hear "no" here rather than after sending a dead link.
+    target = User(first_name="E", last_name="Expelled",
+                  matriculation="30000009", role=Role.STUDENT,
+                  departed_at="2026-07-28")
+    session.add(target)
+    session.commit()
+    admin = User(last_name="Admin", role=Role.ADMIN, telegram_id=999)
+
+    cb = SimpleNamespace(
+        data="dir:link:30000009",
+        answer=AsyncMock(),
+        message=SimpleNamespace(answer=AsyncMock()),
+        bot=SimpleNamespace(me=AsyncMock()),
+    )
+    await cb_issue_link(cb, principal=admin, session=session)
+
+    alert = cb.answer.await_args.args[0]
+    assert "E Expelled" in alert and "roster" in alert.lower()
+    cb.message.answer.assert_not_awaited()  # no link handed out
+    assert target.link_nonce is None  # no token burned either
+
+
 async def test_cb_issue_link_denied_for_non_admin(session):
     target = User(last_name="Ivan", matriculation="30000001", role=Role.STUDENT)
     session.add(target)

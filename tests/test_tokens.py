@@ -33,6 +33,17 @@ def test_token_is_a_usable_telegram_deep_link_parameter(session):
     assert len(tok) <= tokens.TELEGRAM_PAYLOAD_LIMIT
 
 
+def test_invite_for_a_departed_person_is_refused(session):
+    # An invite is the other way in. Honouring one for someone the roster
+    # dropped would bind them a telegram_id the middleware then refuses --
+    # putting them back in the sheet is what restores access.
+    u = _student(session)
+    tok = tokens.issue_link_token(session, "30000001", SECRET)
+    u.departed_at = "2026-07-28"
+    session.commit()
+    assert tokens.verify_link_token(session, tok, SECRET, ttl=1000) is None
+
+
 def test_expired_token_rejected(session):
     _student(session)
     tok = tokens.issue_link_token(session, "30000001", SECRET)
