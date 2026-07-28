@@ -12,16 +12,15 @@ class MappingError(Exception):
 
 
 SHEET_OWNED = (
-    "last_name", "first_name", "handle_sheet", "gmail",
+    "last_name", "first_name", "handle_sheet", "gmail", "cubemail",
     "github_sheet", "codeforces_sheet",
     "birthday", "citizenship", "comment",
     "primary_cohort", "past_cohorts", "role",
 )
 
 # Every field name a sheet header may use. `matriculation` is the student key,
-# not a sheet-owned field. `cubemail` is accepted but has no User column yet, so
-# it is read and dropped -- the sheets have named it since before this check.
-KNOWN_FIELDS = frozenset(SHEET_OWNED + ("matriculation", "cubemail"))
+# not a sheet-owned field.
+KNOWN_FIELDS = frozenset(SHEET_OWNED + ("matriculation",))
 
 
 def normalize_handle(value: str | None) -> str | None:

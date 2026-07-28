@@ -64,7 +64,7 @@ def test_screen_never_mentions_an_admin_only_field():
 def test_keyboard_puts_two_fields_per_row_and_back_alone():
     kb = privacy_keyboard(_me())
     widths = [len(row) for row in kb.inline_keyboard]
-    assert widths == [2, 2, 1, 1]  # 5 configurable fields, then Back
+    assert widths == [2, 2, 2, 1]  # 6 configurable fields, then Back
     assert kb.inline_keyboard[-1][0].callback_data == PROFILE_CALLBACK
     assert kb.inline_keyboard[-1][0].text == "← Back to profile"
 

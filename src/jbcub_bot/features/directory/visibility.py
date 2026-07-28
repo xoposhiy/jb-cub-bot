@@ -57,6 +57,7 @@ FIELDS = (
               editable=True,
               edit_hint="Send your new status — one line, up to 120 characters."),
     FieldSpec("gmail", "Gmail", Category.CONFIGURABLE, COHORT),
+    FieldSpec("cubemail", "CUB email", Category.CONFIGURABLE, COHORT),
     FieldSpec("github", "GitHub", Category.CONFIGURABLE, COHORT,
               sources=("github_self", "github_sheet"), editable=True,
               edit_hint="Send your GitHub username, or a link to your profile."),

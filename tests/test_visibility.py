@@ -24,9 +24,10 @@ def _u(**kw):
 
 # --- the field table -------------------------------------------------------
 
-def test_configurable_fields_are_the_five_expected_ones():
+def test_configurable_fields_are_the_six_expected_ones():
     names = [f.name for f in visibility.CONFIGURABLE_FIELDS]
-    assert names == ["telegram", "status_line", "gmail", "github", "codeforces"]
+    assert names == ["telegram", "status_line", "gmail", "cubemail",
+                     "github", "codeforces"]
 
 
 def test_every_configurable_field_has_a_default_and_others_do_not():
@@ -41,7 +42,7 @@ def test_field_order_matches_the_rendered_profile_order():
     assert [f.name for f in visibility.FIELDS] == [
         "first_name", "last_name", "role", "primary_cohort",
         "telegram", "telegram_id", "status_line",
-        "gmail", "github", "codeforces",
+        "gmail", "cubemail", "github", "codeforces",
         "matriculation", "birthday", "citizenship", "comment",
     ]
 
@@ -168,6 +169,30 @@ def test_student_non_cohort_sees_telegram_but_not_gmail():
     assert "gmail" not in fields
     assert fields["last_name"] == target.last_name
     assert fields["first_name"] == target.first_name
+
+
+def test_cub_email_is_as_private_as_gmail():
+    # The roster owns it, but it is still a personal contact detail, so it must
+    # follow gmail's cohort default rather than being readable program-wide.
+    viewer = _u(role=Role.STUDENT, primary_cohort="2024")
+    target = _u(role=Role.STUDENT, primary_cohort="2021",
+                cubemail="i@constructor.university")
+    assert level_of(target, "cubemail") == COHORT
+    assert "cubemail" not in visible_fields(viewer, target)
+    mate = _u(role=Role.STUDENT, primary_cohort="2021")
+    assert visible_fields(mate, target)["cubemail"] == "i@constructor.university"
+
+
+def test_owner_may_hide_their_cub_email_from_their_cohort():
+    viewer = _u(role=Role.STUDENT, primary_cohort="2024")
+    target = _u(role=Role.STUDENT, primary_cohort="2024",
+                cubemail="i@constructor.university",
+                visibility={"cubemail": STAFF_ONLY})
+    assert "cubemail" not in visible_fields(viewer, target)
+
+
+def test_cub_email_is_not_editable_because_the_roster_owns_it():
+    assert visibility.BY_NAME["cubemail"].editable is False
 
 
 def test_student_cannot_see_a_staff_only_field():

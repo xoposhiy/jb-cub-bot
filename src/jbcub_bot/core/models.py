@@ -27,6 +27,7 @@ class User(Base):
     handle_observed: Mapped[str | None] = mapped_column(String)
     telegram_id: Mapped[int | None] = mapped_column(BigInteger, unique=True)
     gmail: Mapped[str | None] = mapped_column(String)
+    cubemail: Mapped[str | None] = mapped_column(String)
     github_sheet: Mapped[str | None] = mapped_column(String)
     github_self: Mapped[str | None] = mapped_column(String)
     codeforces_sheet: Mapped[str | None] = mapped_column(String)

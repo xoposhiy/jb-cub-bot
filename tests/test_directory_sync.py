@@ -115,6 +115,31 @@ async def test_sync_happy_path(session, monkeypatch):
     assert "Sync done." in msg.answer.await_args.args[0]
 
 
+async def test_sync_stores_the_cub_email(session, monkeypatch):
+    # The sheets have named a `cubemail` column since before the field existed,
+    # so /sync read it and dropped it on the floor for want of a User column.
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA":
+            return [COHORT_HEADER,
+                    ["30000001", "Ivanov", "Ivan", "ivan", "ivan@gmail.com",
+                     "iivanov@constructor.university", "", "", "", "", ""]]
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER,
+                    ["30000001", "Ivanov", "Ivan", "Student", "ivan"]]
+        return []
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows", fake_fetch)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
+                        lambda *a: None)
+    msg = SimpleNamespace(answer=AsyncMock())
+    await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
+    u = session.query(User).filter_by(matriculation="30000001").one()
+    assert u.cubemail == "iivanov@constructor.university"
+    assert u.gmail == "ivan@gmail.com"
+
+
 async def test_sync_creates_searchable_admin_only_in_rights(session, monkeypatch):
     # An admin who appears only in the Rights tab (no cohort, no matriculation)
     # must still become a real, searchable User row, keyed by Telegram handle.
