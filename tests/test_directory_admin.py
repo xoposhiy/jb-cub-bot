@@ -2,15 +2,93 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from jbcub_bot.features.directory.render import admin_keyboard
-from jbcub_bot.features.directory.handlers import cb_issue_link, cb_reset, cb_reset_do
+from jbcub_bot.features.directory.handlers import (
+    cb_admin_back,
+    cb_admin_open,
+    cb_issue_link,
+    cb_reset,
+    cb_reset_do,
+)
 from jbcub_bot.core.models import Role, User
 
 
-def test_admin_keyboard_has_link_and_reset():
+def test_admin_keyboard_hides_actions_behind_one_button():
     kb = admin_keyboard(User(last_name="Ivan", matriculation="30000001"))
     datas = [btn.callback_data for row in kb.inline_keyboard for btn in row]
-    assert "dir:link:30000001" in datas
-    assert "dir:reset:30000001" in datas
+    assert datas == ["dir:admin:30000001"]
+
+
+async def test_cb_admin_open_reveals_actions_and_back(session):
+    admin = User(last_name="Admin", role=Role.ADMIN, telegram_id=999)
+
+    cb = SimpleNamespace(
+        data="dir:admin:30000001",
+        answer=AsyncMock(),
+        message=SimpleNamespace(edit_reply_markup=AsyncMock()),
+    )
+    await cb_admin_open(cb, principal=admin, session=session)
+
+    kb = cb.message.edit_reply_markup.await_args.kwargs["reply_markup"]
+    datas = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+    assert datas == [
+        "dir:link:30000001",
+        "dir:reset:30000001",
+        "dir:admin_back:30000001",
+    ]
+    cb.answer.assert_awaited_once()
+
+
+async def test_cb_admin_back_collapses_again(session):
+    admin = User(last_name="Admin", role=Role.ADMIN, telegram_id=999)
+
+    cb = SimpleNamespace(
+        data="dir:admin_back:30000001",
+        answer=AsyncMock(),
+        message=SimpleNamespace(edit_reply_markup=AsyncMock()),
+    )
+    await cb_admin_back(cb, principal=admin, session=session)
+
+    kb = cb.message.edit_reply_markup.await_args.kwargs["reply_markup"]
+    datas = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+    assert datas == ["dir:admin:30000001"]
+
+
+async def test_cb_admin_back_on_own_profile_restores_me_buttons(session):
+    admin = User(last_name="Admin", role=Role.ADMIN, telegram_id=999,
+                 matriculation="30000009")
+
+    cb = SimpleNamespace(
+        data="dir:admin_back:30000009",
+        answer=AsyncMock(),
+        message=SimpleNamespace(edit_reply_markup=AsyncMock()),
+    )
+    await cb_admin_back(cb, principal=admin, session=session)
+
+    kb = cb.message.edit_reply_markup.await_args.kwargs["reply_markup"]
+    datas = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+    assert datas == ["dir:edit", "dir:privacy", "dir:admin:30000009"]
+
+
+async def test_cb_admin_open_denied_for_non_admin(session):
+    non_admin = User(last_name="Petya", role=Role.STUDENT, telegram_id=222)
+
+    cb = SimpleNamespace(
+        data="dir:admin:30000001",
+        answer=AsyncMock(),
+        message=SimpleNamespace(edit_reply_markup=AsyncMock()),
+    )
+    await cb_admin_open(cb, principal=non_admin, session=session)
+    cb.answer.assert_awaited_once_with("Admins only.", show_alert=True)
+    cb.message.edit_reply_markup.assert_not_awaited()
+
+    cb2 = SimpleNamespace(
+        data="dir:admin:30000001",
+        answer=AsyncMock(),
+        message=SimpleNamespace(edit_reply_markup=AsyncMock()),
+    )
+    await cb_admin_open(cb2, principal=None, session=session)
+    cb2.answer.assert_awaited_once_with("Admins only.", show_alert=True)
+    cb2.message.edit_reply_markup.assert_not_awaited()
 
 
 def test_admin_keyboard_none_without_matriculation():
@@ -99,6 +177,32 @@ async def test_cb_issue_link_denied_for_non_admin(session):
     cb2 = SimpleNamespace(data="dir:link:30000001", answer=AsyncMock())
     await cb_issue_link(cb2, principal=None, session=session)
     cb2.answer.assert_awaited_once_with("Admins only.", show_alert=True)
+
+
+async def test_cb_issue_link_explains_what_the_invite_does(session, monkeypatch):
+    from jbcub_bot.features.directory import handlers
+
+    monkeypatch.setattr(
+        handlers, "get_settings",
+        lambda: SimpleNamespace(link_secret="s3cret", link_ttl_seconds=86400),
+    )
+    target = User(last_name="Ivan", matriculation="30000001", role=Role.STUDENT)
+    session.add(target)
+    session.commit()
+
+    admin = User(last_name="Admin", role=Role.ADMIN, telegram_id=999)
+    cb = SimpleNamespace(
+        data="dir:link:30000001",
+        answer=AsyncMock(),
+        message=SimpleNamespace(answer=AsyncMock()),
+        bot=SimpleNamespace(me=AsyncMock(return_value=SimpleNamespace(username="jbcub"))),
+    )
+    await cb_issue_link(cb, principal=admin, session=session)
+
+    text = cb.message.answer.await_args.args[0]
+    assert "https://t.me/jbcub?start=" in text
+    assert "works once" in text  # the link is explained, not just pasted
+    assert "24h" in text
 
 
 async def test_cb_issue_link_not_found(session):

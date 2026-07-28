@@ -6,6 +6,8 @@ from jbcub_bot.features.directory.visibility import FIELDS, visible_fields
 PRIVACY_CALLBACK = "dir:privacy"
 PROFILE_CALLBACK = "dir:profile"
 EDIT_CALLBACK = "dir:edit"
+ADMIN_CALLBACK = "dir:admin"
+ADMIN_BACK_CALLBACK = "dir:admin_back"
 
 # first_name and last_name render as one "Name" line; every other label comes
 # from the field table.
@@ -33,15 +35,33 @@ def render_profile(viewer: User, target: User) -> str:
     return "\n".join(lines)
 
 
+def admin_row(matriculation: str) -> list[InlineKeyboardButton]:
+    """The collapsed entry point: admin actions live one tap away.
+
+    Keeping them behind a button stops a plain profile from looking like a
+    control panel — and stops "Reset telegram_id" from sitting under a
+    thumb that only wanted to read a phone number.
+    """
+    return [InlineKeyboardButton(text="🛠 Admin",
+                                 callback_data=f"{ADMIN_CALLBACK}:{matriculation}")]
+
+
 def admin_keyboard(target: User) -> InlineKeyboardMarkup | None:
     if not target.matriculation:
         return None
-    m = target.matriculation
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Issue link", callback_data=f"dir:link:{m}"),
-        InlineKeyboardButton(text="Reset telegram_id",
-                             callback_data=f"dir:reset:{m}"),
-    ]])
+    return InlineKeyboardMarkup(inline_keyboard=[admin_row(target.matriculation)])
+
+
+def admin_actions_keyboard(matriculation: str) -> InlineKeyboardMarkup:
+    m = matriculation
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✉️ Issue Invite",
+                              callback_data=f"dir:link:{m}")],
+        [InlineKeyboardButton(text="♻️ Reset telegram_id",
+                              callback_data=f"dir:reset:{m}")],
+        [InlineKeyboardButton(text="⬅️ Back",
+                              callback_data=f"{ADMIN_BACK_CALLBACK}:{m}")],
+    ])
 
 
 def me_keyboard(user: User, *,

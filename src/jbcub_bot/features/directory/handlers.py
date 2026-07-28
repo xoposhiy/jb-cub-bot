@@ -16,7 +16,11 @@ from jbcub_bot.core.intents import Intent
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.core.tokens import issue_link_token
 from jbcub_bot.features.directory.render import (
+    ADMIN_BACK_CALLBACK,
+    ADMIN_CALLBACK,
+    admin_actions_keyboard,
     admin_keyboard,
+    admin_row,
     me_keyboard,
     render_cohort_list,
     render_profile,
@@ -109,6 +113,33 @@ name_search_intent = Intent(
 )
 
 
+@router.callback_query(F.data.startswith(f"{ADMIN_CALLBACK}:"))
+async def cb_admin_open(cb: CallbackQuery, principal: User, session):
+    if principal is None or principal.role is not Role.ADMIN:
+        await cb.answer("Admins only.", show_alert=True)
+        return
+    matriculation = cb.data.split(":", 2)[2]
+    await cb.message.edit_reply_markup(
+        reply_markup=admin_actions_keyboard(matriculation))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith(f"{ADMIN_BACK_CALLBACK}:"))
+async def cb_admin_back(cb: CallbackQuery, principal: User, session):
+    if principal is None or principal.role is not Role.ADMIN:
+        await cb.answer("Admins only.", show_alert=True)
+        return
+    matriculation = cb.data.split(":", 2)[2]
+    # An admin looking at their own profile came from /me, so put its own
+    # buttons back too — not just the collapsed Admin row.
+    if principal.matriculation and principal.matriculation == matriculation:
+        markup = me_keyboard(principal)
+    else:
+        markup = InlineKeyboardMarkup(inline_keyboard=[admin_row(matriculation)])
+    await cb.message.edit_reply_markup(reply_markup=markup)
+    await cb.answer()
+
+
 @router.callback_query(F.data.startswith("dir:link:"))
 async def cb_issue_link(cb: CallbackQuery, principal: User, session):
     if principal is None or principal.role is not Role.ADMIN:
@@ -121,8 +152,17 @@ async def cb_issue_link(cb: CallbackQuery, principal: User, session):
         await cb.answer("Not found.", show_alert=True)
         return
     bot_user = await cb.bot.me()
+    ttl = get_settings().link_ttl_seconds
+    expires = f"{ttl // 3600}h" if ttl >= 3600 else f"{max(ttl // 60, 1)} min"
     await cb.message.answer(
-        f"One-time link:\nhttps://t.me/{bot_user.username}?start={token}"
+        f"✉️ Invite for {matriculation}:\n"
+        f"https://t.me/{bot_user.username}?start={token}\n\n"
+        "Send this to the person. Opening it links whichever Telegram account "
+        "taps it to their roster profile, so they can use the bot without "
+        "their handle matching the Google Sheet.\n\n"
+        f"It works once and expires in {expires}. Anyone who gets the link can "
+        "claim the profile — send it in a private chat, and issue a new one if "
+        "it leaks."
     )
     await cb.answer()
 
@@ -141,7 +181,7 @@ async def cb_reset(cb: CallbackQuery, principal: User, session):
     await cb.message.answer(
         f"🧐 Reset telegram_id for {matriculation}? This unlinks their Telegram "
                 f"account — they'll still have access if their telegram handle match the profile "
-                f"or need a new one-time link to access the bot.\n\n👿 Use it in case of when user lost access to their Telegram account and created a new one"
+                f"or need a new one-time link to access the bot.\n\n👿 Use it in case of when user lost access to their Telegram account and created a new one. "
                 f"Probably you also need to change their Telegram handle in that case. Change it in the Google Sheet to actual value and run /sync.",
         reply_markup=kb,
     )

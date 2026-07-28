@@ -72,7 +72,7 @@ def test_me_keyboard_has_nothing_for_a_student_when_not_interactive():
                             role=Role.STUDENT), interactive=False) is None
 
 
-def test_me_keyboard_puts_self_service_above_the_admin_buttons():
+def test_me_keyboard_puts_self_service_above_the_admin_button():
     admin = User(first_name="A", last_name="Admin", role=Role.ADMIN,
                  matriculation="30000001")
     kb = me_keyboard(admin)
@@ -80,7 +80,7 @@ def test_me_keyboard_puts_self_service_above_the_admin_buttons():
         EDIT_CALLBACK, PRIVACY_CALLBACK,
     ]
     assert [b.callback_data for b in kb.inline_keyboard[1]] == [
-        "dir:link:30000001", "dir:reset:30000001",
+        "dir:admin:30000001",
     ]
 
 
