@@ -1,6 +1,6 @@
 from jbcub_bot.core.loader import Manifest
 from jbcub_bot.core.models import Role
-from jbcub_bot.features.directory import edit, grades, privacy
+from jbcub_bot.features.directory import cohort, edit, grades, privacy
 from jbcub_bot.features.directory.handlers import cmd, name_search_intent, router
 
 # The privacy and edit screens keep their own routers so they can live in their
@@ -8,10 +8,11 @@ from jbcub_bot.features.directory.handlers import cmd, name_search_intent, route
 router.include_router(privacy.router)
 router.include_router(edit.router)
 router.include_router(grades.router)
+router.include_router(cohort.router)
 
 manifest = Manifest(
     name="directory",
-    commands=cmd.specs + privacy.cmd.specs + edit.cmd.specs,
+    commands=cmd.specs + privacy.cmd.specs + edit.cmd.specs + cohort.cmd.specs,
     intents=[name_search_intent],
     min_role=Role.STUDENT,
     help_text="Find classmates and manage your own profile.",

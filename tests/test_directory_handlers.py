@@ -2,8 +2,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import jbcub_bot.features.directory as directory
+from jbcub_bot.features.directory.cohort import cmd_cohort
 from jbcub_bot.features.directory.handlers import (
-    cmd_cohort,
     name_search,
     name_search_intent,
     set_status,
@@ -53,7 +53,8 @@ def _viewer(role):
 async def test_cohort_list_omits_a_departed_mate_for_a_student(session):
     _seed_departed(session)
     msg = SimpleNamespace(answer=AsyncMock())
-    await cmd_cohort(msg, principal=_viewer(Role.STUDENT), session=session)
+    await cmd_cohort(msg, principal=_viewer(Role.STUDENT), session=session,
+                     command=SimpleNamespace(args=None))
     assert "Expelled" not in msg.answer.await_args.args[0]
 
 
@@ -61,15 +62,19 @@ async def test_cohort_list_omits_a_departed_mate_for_a_teacher(session):
     # Teachers see every field a student may hide, but not a person who left.
     _seed_departed(session)
     msg = SimpleNamespace(answer=AsyncMock())
-    await cmd_cohort(msg, principal=_viewer(Role.TEACHER), session=session)
+    await cmd_cohort(msg, principal=_viewer(Role.TEACHER), session=session,
+                     command=SimpleNamespace(args=None))
     assert "Expelled" not in msg.answer.await_args.args[0]
 
 
-async def test_cohort_list_shows_a_departed_mate_to_an_admin(session):
+async def test_cohort_list_omits_a_departed_mate_for_an_admin_too(session):
+    # A roster listing is about who is here now; an admin finds a departed
+    # person by name instead.
     _seed_departed(session)
-    msg = SimpleNamespace(answer=AsyncMock())
-    await cmd_cohort(msg, principal=_viewer(Role.ADMIN), session=session)
-    assert "Eve Expelled" in msg.answer.await_args.args[0]
+    msg = SimpleNamespace(answer=AsyncMock(), answer_document=AsyncMock())
+    await cmd_cohort(msg, principal=_viewer(Role.ADMIN), session=session,
+                     command=SimpleNamespace(args=None))
+    assert "Expelled" not in msg.answer.await_args.args[0]
 
 
 async def test_search_by_handle_does_not_reach_a_departed_profile(session):

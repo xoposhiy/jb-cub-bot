@@ -26,10 +26,9 @@ from jbcub_bot.features.directory.render import (
     me_keyboard,
     profile_entities,
     profile_keyboard,
-    render_cohort_list,
     render_profile,
 )
-from jbcub_bot.features.directory.search import list_cohort, rank_users
+from jbcub_bot.features.directory.search import rank_users
 
 from aiogram.filters import CommandObject
 
@@ -78,16 +77,6 @@ async def cmd_me(message: Message, principal: User, session,
         reply_markup=me_keyboard(principal, impersonate_ref=impersonate_ref),
         entities=profile_entities(principal, principal, text),
     )
-
-
-@cmd.command("cohort", "List the people in your cohort.")
-async def cmd_cohort(message: Message, principal: User, session):
-    if not principal.primary_cohort:
-        await message.answer("No cohort on file.")
-        return
-    mates = list_cohort(session, principal.primary_cohort,
-                        include_departed=is_admin(principal))
-    await message.answer("Your cohort:\n" + render_cohort_list(principal, mates))
 
 
 async def name_search(message: Message, principal: User, session) -> bool:
