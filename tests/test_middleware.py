@@ -2,13 +2,18 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from aiogram.methods import AnswerCallbackQuery, SendMessage
-from aiogram.types import CallbackQuery, Chat, Message, User as TgUser
+from aiogram.types import CallbackQuery, Chat, Message, Update, User as TgUser
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from jbcub_bot.core import impersonation
+from jbcub_bot.core.db import Base
 from jbcub_bot.core.middleware import (
     GROUP_NOTICE, HasRole, PrincipalMiddleware, role_rank,
 )
 from jbcub_bot.core.models import Role, User
+from jbcub_bot.main import build_dispatcher
 
 
 def test_role_rank_ordering():
@@ -260,3 +265,80 @@ async def test_group_guard_runs_before_the_identity_lookup(session, monkeypatch)
     # telegram_id 999999 has no row at all -- if the guard needed a lookup
     # to refuse, this would blow up before reaching the assertion above.
     await mw(handler, _message(fake_bot, 999999, "/me", "group"), {})
+
+
+async def test_group_command_as_a_photo_caption_is_still_refused(session):
+    # aiogram's Command filter matches message.text or message.caption, so a
+    # command sent as a photo caption is just as deliberate an address as
+    # typing it -- reading only .text would mistake it for background chatter.
+    mw = PrincipalMiddleware(session_factory=lambda: session)
+    fake_bot = FakeBot()
+    called = False
+
+    async def handler(event, data):
+        nonlocal called
+        called = True
+
+    event = Message(
+        message_id=1,
+        date=datetime.now(timezone.utc),
+        chat=Chat(id=777, type="group"),
+        from_user=TgUser(id=777, is_bot=False, first_name="tg"),
+        caption="/cohort 2024",
+    ).as_(fake_bot)
+
+    await mw(handler, event, {})
+
+    assert called is False
+    texts = [m.text for m in fake_bot.sent if isinstance(m, SendMessage)]
+    assert texts == [GROUP_NOTICE]
+
+
+# --- the same guard, through a real dispatcher --------------------------
+#
+# The tests above call mw() directly with a stub handler, which proves the
+# guard itself decides right but not what aiogram does with that decision.
+# Returning None from an outer middleware is supposed to mean "handled" --
+# but if that ever changed (e.g. to some UNHANDLED sentinel meant to "let
+# other routers decide"), main.py's catch-all fallback router would answer
+# every group message right alongside the guard, which is the exact spam
+# this feature exists to prevent, and the mw()-only tests above would never
+# notice. test_departed_access.py sets the standard for this: route through
+# build_dispatcher() and a real Update, the same as production.
+
+
+def _dispatcher_session_factory():
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine)
+
+
+def _update(fake_bot, telegram_id: int, text: str, chat_type: str) -> Update:
+    msg = _message(fake_bot, telegram_id, text, chat_type)
+    return Update(update_id=1, message=msg).as_(fake_bot)
+
+
+async def test_group_plain_text_gets_no_send_through_a_real_dispatcher():
+    dp = build_dispatcher(_dispatcher_session_factory())
+    fake_bot = FakeBot()
+
+    await dp.feed_update(fake_bot, _update(fake_bot, 777, "hello there", "group"))
+
+    # Not just "the guard's handler wasn't called" -- nothing else in the
+    # dispatcher (in particular the fallback router) answered either.
+    assert fake_bot.sent == []
+
+
+async def test_group_command_gets_exactly_one_send_through_a_real_dispatcher():
+    dp = build_dispatcher(_dispatcher_session_factory())
+    fake_bot = FakeBot()
+
+    await dp.feed_update(fake_bot, _update(fake_bot, 777, "/me", "group"))
+
+    # Exactly one -- the guard's refusal, not the guard's refusal *plus* the
+    # fallback router's "I don't know /me" on top of it.
+    texts = [m.text for m in fake_bot.sent if isinstance(m, SendMessage)]
+    assert texts == [GROUP_NOTICE]

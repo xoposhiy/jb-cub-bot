@@ -28,20 +28,33 @@ class HasRole:
         return role_rank(principal.role) >= role_rank(self.min_role)
 
 
-async def refuse_departed(event) -> None:
+async def _refuse(event, notice: str) -> None:
     """Tell the caller why nothing happened.
 
     An alert for a button press, a message otherwise: a toast under a tapped
     button scrolls away unread, and silence would look like the bot is broken
-    rather than closed.
+    rather than closed. The `answer is None` case (an event type with nothing
+    to reply to) is unreachable from either call site today -- both guards
+    already know they have a message or a callback -- but it costs nothing
+    to keep, and a future caller may not.
     """
     answer = getattr(event, "answer", None)
     if answer is None:
-        return  # an event type with nothing to reply to
+        return
     if isinstance(event, CallbackQuery):
-        await answer(DEPARTED_NOTICE, show_alert=True)
+        await answer(notice, show_alert=True)
     else:
-        await answer(DEPARTED_NOTICE)
+        await answer(notice)
+
+
+async def refuse_departed(event) -> None:
+    """See `_refuse`: the departed_at wording."""
+    await _refuse(event, DEPARTED_NOTICE)
+
+
+async def refuse_group_chat(event) -> None:
+    """See `_refuse`: the group-chat wording."""
+    await _refuse(event, GROUP_NOTICE)
 
 
 def _chat_of(event):
@@ -49,29 +62,16 @@ def _chat_of(event):
 
     A callback's chat lives on the message the button was attached to, not
     on the callback itself; an update with neither isn't this guard's
-    business, so callers let it through rather than guess.
+    business, so callers let it through rather than guess. That includes an
+    inline-mode callback (`inline_message_id` instead of `message`), which is
+    unreachable today because no inline handler exists and `allowed_updates`
+    excludes inline queries -- revisit this branch if inline mode is ever
+    added, since it would then bypass the guard silently.
     """
     if isinstance(event, CallbackQuery):
         message = event.message
         return message.chat if message is not None else None
     return getattr(event, "chat", None)
-
-
-async def refuse_group_chat(event) -> None:
-    """Tell the caller why nothing happened, mirroring refuse_departed.
-
-    A CallbackQuery always gets an alert -- the way refuse_departed answers
-    a button tap -- since a toast under it would scroll away unread in a
-    busy group. A command gets a plain reply. An ordinary group message
-    never reaches this function: see the guard in __call__.
-    """
-    answer = getattr(event, "answer", None)
-    if answer is None:
-        return  # an event type with nothing to reply to
-    if isinstance(event, CallbackQuery):
-        await answer(GROUP_NOTICE, show_alert=True)
-    else:
-        await answer(GROUP_NOTICE)
 
 
 class PrincipalMiddleware(BaseMiddleware):
@@ -93,7 +93,12 @@ class PrincipalMiddleware(BaseMiddleware):
             # group is spam that Telegram will rate-limit.
             chat = _chat_of(event)
             if chat is not None and chat.type != "private":
-                text = getattr(event, "text", None)
+                # aiogram's Command filter matches text *or* caption, so a
+                # photo posted with "/cohort 2024" as its caption is just as
+                # deliberate an address as typing the command -- reading only
+                # .text would read it as background chatter and stay silent.
+                text = getattr(event, "text", None) or \
+                    getattr(event, "caption", None)
                 if isinstance(event, CallbackQuery) or \
                         (text is not None and text.startswith("/")):
                     await refuse_group_chat(event)
