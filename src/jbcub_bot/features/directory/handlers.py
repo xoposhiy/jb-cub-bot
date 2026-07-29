@@ -100,10 +100,14 @@ async def _abort_sync(
 
 
 async def _show_no_commit_failure(progress) -> None:
-    if progress is not None:
+    if progress is None:
+        return
+    try:
         await progress.edit_text(
             "❌ Sync failed before any roster changes were committed."
         )
+    except Exception:
+        _log.exception("Failed to update the /sync failure status")
 
 
 async def _show_partial_failure(
@@ -112,19 +116,23 @@ async def _show_partial_failure(
     rights_records: list[dict],
     rights_sheet_id: str,
 ) -> None:
-    rights_outcome = sync_diagnostics.RightsOutcome(
-        staff_records=len(rights_records),
-        issues=(),
-        source_url=sheets.sheet_url(rights_sheet_id),
-    )
-    await message.answer(sync_diagnostics.render_final(
-        outcomes,
-        rights_outcome,
-        completion_note=(
-            "The processed cohorts above remain updated; "
-            "the remaining sources were not completed."
-        ),
-    ))
+    try:
+        rights_outcome = sync_diagnostics.RightsOutcome(
+            staff_records=len(rights_records),
+            issues=(),
+            source_url=sheets.sheet_url(rights_sheet_id),
+            updated=False,
+        )
+        await message.answer(sync_diagnostics.render_final(
+            outcomes,
+            rights_outcome,
+            completion_note=(
+                "The processed cohorts above remain updated; "
+                "the remaining sources were not completed."
+            ),
+        ))
+    except Exception:
+        _log.exception("Failed to send the /sync partial-failure summary")
 
 
 async def _send_cohort_report(
@@ -570,8 +578,19 @@ async def cmd_sync(message: Message, principal: User, session):
             ),
             source_url=sheets.sheet_url(link),
         )
-        await _send_cohort_report(message, outcome)
         outcomes.append(outcome)
+        try:
+            await _send_cohort_report(message, outcome)
+        except Exception as exc:
+            await _show_partial_failure(
+                message,
+                outcomes,
+                rights_records,
+                settings.rights_sheet_id,
+            )
+            raise RuntimeError(
+                f"/sync failed reporting cohort {cohort_name}"
+            ) from exc
 
     # Rights rows have no matriculation — key on the Telegram handle so
     # admins/teachers get matched (or created) as searchable rows.

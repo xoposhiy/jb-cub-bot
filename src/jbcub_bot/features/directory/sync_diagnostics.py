@@ -36,6 +36,7 @@ class RightsOutcome:
     staff_records: int
     issues: tuple[IssueGroup, ...]
     source_url: str
+    updated: bool = True
 
 
 @dataclass(frozen=True)
@@ -296,6 +297,7 @@ def render_final(
             for outcome in cohorts
         )
         or bool(rights.issues)
+        or not rights.updated
         or completion_note is not None
     )
     status = "⚠️ Sync completed with warnings" if has_warnings else "✅ Sync completed"
@@ -305,7 +307,10 @@ def render_final(
         f"{_final_gradebook_status(outcome)}"
         for outcome in cohorts
     )
-    lines.append(f"Rights: {counted(rights.staff_records, 'staff record')}")
+    if rights.updated:
+        lines.append(f"Rights: {counted(rights.staff_records, 'staff record')}")
+    else:
+        lines.append("Rights: not updated; previous data kept")
     sections = ["\n".join(lines)]
     sections.extend(_format_group(group) for group in rights.issues)
     if completion_note is not None:

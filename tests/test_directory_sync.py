@@ -1,3 +1,4 @@
+import logging
 import time
 from datetime import date
 from types import SimpleNamespace
@@ -74,6 +75,23 @@ def _sync_message():
         answer_document=AsyncMock(),
     )
     return message, progress
+
+
+def _seed_previous_grade(session, user: User, value: str) -> int:
+    session.add(user)
+    session.flush()
+    grade = Grade(
+        user_id=user.id,
+        cohort="2024",
+        term="Fall 2023",
+        category="Mandatory",
+        label="Legacy course",
+        value=value,
+        position=2,
+    )
+    session.add(grade)
+    session.commit()
+    return grade.id
 
 
 NO_COMMIT_FAILURE = "❌ Sync failed before any roster changes were committed."
@@ -478,6 +496,37 @@ async def test_sync_times_out_instead_of_freezing_on_a_stalled_sheet_read(
     assert message.answer.await_count == 1
 
 
+async def test_no_commit_edit_failure_keeps_the_original_read_error(
+    session,
+    monkeypatch,
+    caplog,
+):
+    read_error = ConnectionResetError("cohort index read failed")
+
+    def fail_read(sheet_id, sa, range_="A:Z"):
+        raise read_error
+
+    monkeypatch.setattr(handlers, "fetch_rows", fail_read)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message, progress = _sync_message()
+    progress.edit_text.side_effect = OSError("failure edit failed")
+
+    with caplog.at_level(logging.ERROR, logger=handlers.__name__):
+        with pytest.raises(RuntimeError) as err:
+            await cmd_sync(
+                message,
+                principal=User(last_name="A", role=Role.ADMIN),
+                session=session,
+            )
+
+    assert str(err.value) == "/sync failed reading the Cohorts tab"
+    assert err.value.__cause__ is read_error
+    assert "failure edit failed" in caplog.text
+    progress.edit_text.assert_awaited_once_with(NO_COMMIT_FAILURE)
+    assert message.answer.await_count == 1
+
+
 async def test_sync_labels_and_reraises_an_unexpected_rights_read_error(
     session,
     monkeypatch,
@@ -554,6 +603,51 @@ async def test_sync_labels_a_first_cohort_write_failure_without_claiming_changes
     assert session.query(User).count() == 0
 
 
+async def test_committed_cohort_send_failure_reports_partial_state_then_reraises(
+    session,
+    monkeypatch,
+):
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000001", "Ivanov", "Ivan", "ivan"),
+            ]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(["Ivanov", "Ivan", "91%"])
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message, progress = _sync_message()
+    send_error = ConnectionResetError("cohort report send failed")
+    message.answer.side_effect = [progress, send_error, None]
+
+    with pytest.raises(RuntimeError) as err:
+        await cmd_sync(
+            message,
+            principal=User(last_name="A", role=Role.ADMIN),
+            session=session,
+        )
+
+    assert str(err.value) == "/sync failed reporting cohort 2024"
+    assert err.value.__cause__ is send_error
+    user = session.query(User).filter_by(matriculation="30000001").one()
+    assert user.primary_cohort == "2024"
+    assert session.query(Grade).filter_by(user_id=user.id, cohort="2024").count() == 1
+    assert message.answer.await_count == 3
+    partial_text = message.answer.await_args_list[-1].args[0]
+    assert partial_text.startswith("⚠️ Sync completed with warnings")
+    assert "2024 — 1 roster student; 1 Gradebook row matched" in partial_text
+    assert "Rights: not updated; previous data kept" in partial_text
+    assert partial_text.endswith(PARTIAL_COMPLETION_NOTE)
+
+
 async def test_later_cohort_write_failure_sends_partial_warning_then_reraises(
     session,
     monkeypatch,
@@ -620,6 +714,70 @@ async def test_later_cohort_write_failure_sends_partial_warning_then_reraises(
     assert session.query(User).filter_by(matriculation="30000002").count() == 0
 
 
+async def test_partial_warning_send_failure_keeps_the_original_write_error(
+    session,
+    monkeypatch,
+    caplog,
+):
+    original_upsert = handlers.sheets.upsert_users
+
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [
+                COHORTS_HEADER,
+                _cohorts_row("2024", "AAA"),
+                _cohorts_row("2025", "BBB"),
+            ]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000001", "Ivanov", "Ivan", "ivan"),
+            ]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(["Ivanov", "Ivan", "91%"])
+        if sheet_id == "BBB" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000002", "Petrov", "Petr", "petr"),
+            ]
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER]
+        return []
+
+    write_error = OSError("second cohort write failed")
+
+    def fail_second_cohort(session_arg, records, key="matriculation"):
+        if records and records[0].get("primary_cohort") == "2025":
+            raise write_error
+        return original_upsert(session_arg, records, key=key)
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    monkeypatch.setattr(handlers.sheets, "upsert_users", fail_second_cohort)
+    message, progress = _sync_message()
+    message.answer.side_effect = [
+        progress,
+        None,
+        ConnectionResetError("warning summary send failed"),
+    ]
+
+    with caplog.at_level(logging.ERROR, logger=handlers.__name__):
+        with pytest.raises(RuntimeError) as err:
+            await cmd_sync(
+                message,
+                principal=User(last_name="A", role=Role.ADMIN),
+                session=session,
+            )
+
+    assert str(err.value) == "/sync failed writing cohort 2025"
+    assert err.value.__cause__ is write_error
+    assert "warning summary send failed" in caplog.text
+    assert message.answer.await_count == 3
+    assert session.query(User).filter_by(matriculation="30000001").count() == 1
+    assert session.query(User).filter_by(matriculation="30000002").count() == 0
+
+
 async def test_rights_write_failure_sends_partial_warning_then_reraises(
     session,
     monkeypatch,
@@ -668,6 +826,8 @@ async def test_rights_write_failure_sends_partial_warning_then_reraises(
     assert message.answer_document.await_count == 0
     final_text = message.answer.await_args_list[-1].args[0]
     assert final_text.startswith("⚠️ Sync completed with warnings")
+    assert "Rights: not updated; previous data kept" in final_text
+    assert "Rights: 1 staff record" not in final_text
     assert final_text.endswith(PARTIAL_COMPLETION_NOTE)
     assert "Traceback" not in final_text
     assert session.query(User).filter_by(matriculation="30000001").count() == 1
@@ -948,6 +1108,17 @@ async def test_sync_aborts_and_writes_nothing_on_invalid_role(session, monkeypat
 
 
 async def test_broken_gradebook_does_not_rollback_roster(session, monkeypatch):
+    previous_grade_id = _seed_previous_grade(
+        session,
+        User(
+            matriculation="30000001",
+            last_name="Ivanov",
+            first_name="Ivan",
+            primary_cohort="2024",
+        ),
+        "previous read-failure grade",
+    )
+
     def fake_fetch(sheet_id, sa, range_="A:Z"):
         if range_ == "Cohorts!A:Z":
             return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
@@ -975,6 +1146,9 @@ async def test_broken_gradebook_does_not_rollback_roster(session, monkeypatch):
     assert "ConnectionResetError" in cohort_text or "boom" in cohort_text
     assert final_text.startswith("⚠️ Sync completed with warnings")
     assert "grades not updated, previous data kept" in final_text
+    retained = session.get(Grade, previous_grade_id)
+    assert retained is not None
+    assert retained.value == "previous read-failure grade"
 
 
 async def test_empty_gradebook_error_keeps_warning_and_source_button(
@@ -1016,6 +1190,17 @@ async def test_empty_gradebook_error_keeps_warning_and_source_button(
 
 
 async def test_gradebook_failure_does_not_stop_next_cohort(session, monkeypatch):
+    previous_grade_id = _seed_previous_grade(
+        session,
+        User(
+            matriculation="30000001",
+            last_name="Ivanov",
+            first_name="Ivan",
+            primary_cohort="2024",
+        ),
+        "previous parse-failure grade",
+    )
+
     def fake_fetch(sheet_id, sa, range_="A:Z"):
         if range_ == "Cohorts!A:Z":
             return [
@@ -1050,6 +1235,9 @@ async def test_gradebook_failure_does_not_stop_next_cohort(session, monkeypatch)
     assert "Gradebook header row not found" in first_report
     assert any(text.startswith("✅ 2025 processed") for text in said)
     assert "2025 — 1 roster student; 1 Gradebook row matched" in said[-1]
+    retained = session.get(Grade, previous_grade_id)
+    assert retained is not None
+    assert retained.value == "previous parse-failure grade"
 
 
 async def test_sync_stores_cohort_and_rights_source_links(session, monkeypatch):

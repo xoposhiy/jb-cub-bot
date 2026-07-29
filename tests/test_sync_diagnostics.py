@@ -205,6 +205,30 @@ def test_final_summary_names_every_cohort_and_the_rights_count():
     assert "1 of 2" not in text
 
 
+def test_final_summary_says_when_rights_were_not_updated():
+    cohort = CohortOutcome(
+        cohort="2024",
+        roster_students=1,
+        ignored_roster_rows=0,
+        gradebook=grades.GradesSyncReport(source_people=1, matched_people=1),
+        gradebook_error=None,
+        issues=(),
+        source_url="https://docs.google.com/spreadsheets/d/AAA",
+    )
+    rights = RightsOutcome(
+        staff_records=6,
+        issues=(),
+        source_url="https://docs.google.com/spreadsheets/d/RIGHTS",
+        updated=False,
+    )
+
+    text = render_final([cohort], rights)
+
+    assert text.startswith("⚠️ Sync completed with warnings")
+    assert "Rights: not updated; previous data kept" in text
+    assert "Rights: 6 staff records" not in text
+
+
 def test_gradebook_error_is_the_first_issue_after_the_facts():
     outcome = CohortOutcome(
         cohort="sdt-2025-2028",
