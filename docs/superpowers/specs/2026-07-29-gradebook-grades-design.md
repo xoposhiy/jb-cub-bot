@@ -195,9 +195,15 @@ same test is already inlined in `visible_fields` — putting it beside `is_admin
 in `handlers.py` would make `grades.py` import the module that imports it.
 
 The screen replaces the profile message (`edit_text`) and opens on the **latest
-semester**, that being the last one by column order. Under it: the other
-semesters, three buttons per row, and `⬅️ Back`, which re-renders the profile
-through `render_profile` and the same `profile_keyboard`.
+semester**, that being the last one by column order. Under it: every semester,
+three buttons per row, the open one marked `📍`, and `⬅️ Back`, which re-renders
+the profile through `render_profile` and the same `profile_keyboard`.
+
+Tapping the open semester is **acknowledged and skipped**, not re-sent: an edit
+that changes nothing is a `message is not modified` error from Telegram, not a
+no-op, and the profile's Grades button opens the latest semester — so its own
+button in the keyboard is one tap away from that error. Comparing the rendered
+text against the message's is enough, since the mark moves with it.
 
 Plain text, no `parse_mode` — the bot sets none anywhere, which is what keeps
 `Matrix Algebra & Advanced Calculus I` from breaking the send. Categories are

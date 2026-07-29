@@ -89,6 +89,10 @@ def sync_cohort(
 _TERM_BUTTONS_PER_ROW = 3
 _TEXT_LIMIT = 4096
 _TRUNCATE_MARK = "\n… (truncated)"
+# The screen names the open semester in its first line, but the keyboard is the
+# only place a reader compares it against the others -- so it says which one is
+# already on screen, and a tap that changes nothing looks deliberate.
+_ACTIVE_TERM_MARK = "📍"
 
 
 def load_grades(session, user_id: int) -> list[Grade]:
@@ -131,10 +135,12 @@ def render_screen(term: str, rows: list[Grade]) -> str:
     return text
 
 
-def semester_keyboard(matriculation: str, terms: list[str]) -> InlineKeyboardMarkup:
+def semester_keyboard(
+    matriculation: str, terms: list[str], active: str | None = None
+) -> InlineKeyboardMarkup:
     buttons = [
         InlineKeyboardButton(
-            text=term,
+            text=f"{_ACTIVE_TERM_MARK} {term}" if term == active else term,
             callback_data=f"{GRADES_CALLBACK}:{matriculation}:{index}",
         )
         for index, term in enumerate(terms)
@@ -173,10 +179,17 @@ async def cb_grades(cb: CallbackQuery, principal: User, session):
     if not isinstance(cb.message, Message):
         await cb.answer(EXPIRED, show_alert=True)
         return
-    await cb.message.edit_text(
-        render_screen(term, groups[term]),
-        reply_markup=semester_keyboard(matriculation, terms),
-    )
+    # Tapping the semester already open would send an edit that changes
+    # nothing -- which Telegram rejects ("message is not modified") instead of
+    # ignoring. The profile's Grades button opens the latest term, so that tap
+    # is one button away. Comparing the text is enough: it is the whole screen
+    # apart from the active mark, which moves with it.
+    screen = render_screen(term, groups[term])
+    if cb.message.text != screen:
+        await cb.message.edit_text(
+            screen,
+            reply_markup=semester_keyboard(matriculation, terms, active=term),
+        )
     await cb.answer()
 
 
