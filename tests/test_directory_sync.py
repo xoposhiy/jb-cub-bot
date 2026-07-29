@@ -228,6 +228,45 @@ async def test_cohort_problems_share_one_grouped_message_and_source_button(
     assert button.url == "https://docs.google.com/spreadsheets/d/AAA"
 
 
+async def test_current_roster_row_without_matriculation_prevents_false_success(
+    session,
+    monkeypatch,
+):
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("", "Awaiting", "Number", "awaiting"),
+            ]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(["Awaiting", "Number", "91%"])
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message, _ = _sync_message()
+
+    await cmd_sync(
+        message,
+        principal=User(last_name="Admin", role=Role.ADMIN),
+        session=session,
+    )
+
+    texts = [call.args[0] for call in message.answer.await_args_list]
+    cohort_report = next(text for text in texts if text.endswith(
+        "Awaiting Number — missing matriculation number"
+    ))
+    assert cohort_report.startswith("⚠️ 2024 processed")
+    assert "Current roster rows cannot receive grades (1)" in cohort_report
+    assert "Gradebook rows without a roster match" not in cohort_report
+    assert texts[-1].startswith("⚠️ Sync completed with warnings")
+
+
 async def test_rights_problems_share_the_final_message_and_source_button(
     session,
     monkeypatch,

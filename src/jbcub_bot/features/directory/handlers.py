@@ -602,7 +602,12 @@ async def cmd_sync(message: Message, principal: User, session):
                 sheet_id, sa, f"{settings.gradebook_tab}!A:ZZ"
             )
             report = grades.sync_cohort(
-                session, cohort_name, gradebook_rows, mapping, matching.fold
+                session,
+                cohort_name,
+                gradebook_rows,
+                mapping,
+                matching.fold,
+                current_roster_records=records,
             )
             session.commit()
         except Exception as exc:

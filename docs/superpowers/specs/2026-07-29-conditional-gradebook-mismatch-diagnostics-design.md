@@ -22,6 +22,10 @@ warning.
   silent again.
 - Do not read, parse, classify, or match names below the roster separator.
   Existing roster normalization continues to stop at the separator.
+- A current normalized roster row without a matriculation number or both name
+  fields gets its own actionable warning because grades cannot be safely
+  assigned to it. This uses only the already-normalized rows above the
+  separator.
 - Do not add fuzzy matching or suggested pairs. Grades remain exact-match-only,
   and the diagnostic presents evidence without guessing identities.
 - Describe Gradebook coverage in terms of current roster students, so ignored
@@ -36,7 +40,9 @@ Cover three cases: all current students present with extra Gradebook rows
 produces no mismatch warning; a missing current student with extra Gradebook
 rows shows both directional lists; and a missing current student without extra
 rows shows only the missing-student list. Pin the current-roster coverage text
-and verify no historical roster data is introduced into grade matching.
+and verify no historical roster data is introduced into grade matching. Cover
+current rows with a missing matriculation number or incomplete name so they
+cannot produce a false-success report.
 
 ## Rejected
 

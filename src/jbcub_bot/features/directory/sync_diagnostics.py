@@ -130,6 +130,15 @@ def build_issue_groups(
                     for item in grades_report.ambiguous_roster_match
                 ),
             ))
+        if grades_report.unmatchable_roster_rows:
+            groups.append(IssueGroup(
+                title="Current roster rows cannot receive grades",
+                effect=(
+                    "Grades could not be assigned for these current roster rows."
+                ),
+                action="Add the missing roster identity fields and re-run /sync",
+                items=tuple(grades_report.unmatchable_roster_rows),
+            ))
 
     if roster.duplicates:
         groups.append(IssueGroup(
@@ -209,6 +218,8 @@ def _gradebook_fact(outcome: CohortOutcome) -> str:
 def _current_roster_found(outcome: CohortOutcome) -> int:
     if outcome.gradebook is None:
         return 0
+    if outcome.gradebook.current_roster_people:
+        return outcome.gradebook.current_roster_found
     return max(
         0,
         outcome.roster_students

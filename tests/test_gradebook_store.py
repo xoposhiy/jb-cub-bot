@@ -124,6 +124,54 @@ def test_only_current_roster_students_without_source_rows_are_reported(session):
     assert report.missing_gradebook_rows == ["Current Student"]
 
 
+def test_current_roster_row_without_matriculation_is_unmatchable_but_found(
+    session,
+):
+    report = sync_cohort(
+        session,
+        "2024",
+        _rows(["Active", "Awaiting", "Number", "91%", "", "pass"]),
+        MAPPING,
+        matching.fold,
+        current_roster_records=[{
+            "matriculation": "",
+            "last_name": "Awaiting",
+            "first_name": "Number",
+        }],
+    )
+
+    assert report.current_roster_people == 1
+    assert report.current_roster_found == 1
+    assert report.missing_gradebook_rows == []
+    assert report.unmatchable_roster_rows == [
+        "Awaiting Number — missing matriculation number"
+    ]
+
+
+def test_current_roster_row_without_full_name_is_unmatchable_and_not_found(
+    session,
+):
+    report = sync_cohort(
+        session,
+        "2024",
+        _rows(["Active", "Surname", "", "91%", "", "pass"]),
+        MAPPING,
+        matching.fold,
+        current_roster_records=[{
+            "matriculation": "30000001",
+            "last_name": "Surname",
+            "first_name": "",
+        }],
+    )
+
+    assert report.current_roster_people == 1
+    assert report.current_roster_found == 0
+    assert report.missing_gradebook_rows == []
+    assert report.unmatchable_roster_rows == [
+        "Surname — missing first name"
+    ]
+
+
 def test_replace_is_bounded_to_cohort(session):
     user = User(last_name="Ivanov", first_name="Ivan", primary_cohort="2024")
     session.add(user)

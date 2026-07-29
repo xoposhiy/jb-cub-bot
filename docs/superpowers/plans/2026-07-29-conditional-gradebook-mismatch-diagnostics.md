@@ -4,7 +4,7 @@
 
 **Goal:** Show unmatched Gradebook names only while a current roster student is missing a Gradebook row, and report coverage against the current roster.
 
-**Architecture:** Keep Gradebook parsing and exact matching unchanged. Make the pure diagnostics builder conditionally expose the already-computed `no_roster_match` list based on `missing_gradebook_rows`, and derive user-facing coverage from `CohortOutcome.roster_students` minus that missing-current list. No code reads or interprets roster rows below the separator.
+**Architecture:** Keep Gradebook parsing and exact matching unchanged. Make the pure diagnostics builder conditionally expose the already-computed `no_roster_match` list based on `missing_gradebook_rows`. Pass the already-normalized current roster records into grade resolution so coverage and unmatchable-row diagnostics cannot claim success for a current row without a usable profile; no code reads or interprets roster rows below the separator.
 
 **Tech Stack:** Python 3.13, pytest, existing `GradesSyncReport` and pure `sync_diagnostics` renderer.
 
@@ -14,6 +14,8 @@
 - Do not read, parse, classify, or match names below the roster separator.
 - Do not add fuzzy matching or suggested identity pairs.
 - Duplicate and ambiguous-name diagnostics retain their independent behavior.
+- Current rows without a matriculation number or both name fields must produce
+  an actionable warning rather than a false-success report.
 
 ---
 
@@ -163,8 +165,7 @@ return (
 ```
 
 Update existing exact renderer fixtures and grammar-spy assertions to the new
-current-roster wording. Do not change `grades.py`, `handlers.py`, or
-`sheets.py`.
+current-roster wording. Do not change `sheets.py`.
 
 - [ ] **Step 4: Run focused tests and verify GREEN**
 
@@ -192,3 +193,80 @@ Expected: PASS with no new warnings.
 git add -- tests/test_sync_diagnostics.py src/jbcub_bot/features/directory/sync_diagnostics.py
 git commit -m "fix: condition Gradebook mismatch diagnostics"
 ```
+
+---
+
+### Task 2: Prevent false success for unmatchable current roster rows
+
+**Files:**
+- Modify: `tests/test_gradebook_store.py`
+- Modify: `tests/test_directory_sync.py`
+- Modify: `src/jbcub_bot/features/directory/grades.py`
+- Modify: `src/jbcub_bot/features/directory/handlers.py`
+- Modify: `src/jbcub_bot/features/directory/sync_diagnostics.py`
+
+**Interfaces:**
+- `grades.sync_cohort(...)` gains
+  `current_roster_records: list[dict] | None = None`.
+- `GradesSyncReport` gains `current_roster_people`,
+  `current_roster_found`, and `unmatchable_roster_rows`.
+
+- [ ] **Step 1: Add failing unit and integration regressions**
+
+Add a unit case passing a current row with full names but no matriculation and
+assert:
+
+```python
+assert report.current_roster_people == 1
+assert report.current_roster_found == 1
+assert report.unmatchable_roster_rows == [
+    "Awaiting Number — missing matriculation number"
+]
+```
+
+Add the corresponding `/sync` integration case and assert that the cohort is a
+warning, contains `Current roster rows cannot receive grades`, and does not
+show `Gradebook rows without a roster match`. Add a second unit case for an
+incomplete name.
+
+- [ ] **Step 2: Verify the regressions fail**
+
+Run:
+
+```powershell
+uv run pytest tests/test_gradebook_store.py tests/test_directory_sync.py -q
+```
+
+Expected: FAIL because `sync_cohort` does not accept current roster records and
+the sync report is falsely healthy.
+
+- [ ] **Step 3: Track current-row coverage and unmatchable identities**
+
+Pass `records` from `cmd_sync` to `grades.sync_cohort`. In `sync_cohort`, inspect
+only those normalized records, count full-name matches against Gradebook source
+keys, and describe missing identity fields without reading raw roster rows.
+Expose unmatchable rows as:
+
+```python
+IssueGroup(
+    title="Current roster rows cannot receive grades",
+    effect="Grades could not be assigned for these current roster rows.",
+    action="Add the missing roster identity fields and re-run /sync",
+    items=tuple(grades_report.unmatchable_roster_rows),
+)
+```
+
+Use `current_roster_found` for rendered coverage when
+`current_roster_people > 0`; preserve the existing fallback for synthetic
+renderer fixtures.
+
+- [ ] **Step 4: Verify targeted and full suites**
+
+Run:
+
+```powershell
+uv run pytest tests/test_gradebook_store.py tests/test_sync_diagnostics.py tests/test_directory_sync.py -q
+uv run pytest
+```
+
+Expected: all tests pass.

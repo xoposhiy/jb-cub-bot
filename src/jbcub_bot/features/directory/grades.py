@@ -35,10 +35,13 @@ class CountedName:
 class GradesSyncReport:
     source_people: int = 0
     matched_people: int = 0
+    current_roster_people: int = 0
+    current_roster_found: int = 0
     cells: int = 0
     no_roster_match: list[str] = field(default_factory=list)
     ambiguous_roster_match: list[CountedName] = field(default_factory=list)
     missing_gradebook_rows: list[str] = field(default_factory=list)
+    unmatchable_roster_rows: list[str] = field(default_factory=list)
     duplicate_rows: list[CountedName] = field(default_factory=list)
     ignored_columns: list[gradebook.IgnoredColumn] = field(default_factory=list)
 
@@ -49,6 +52,7 @@ def sync_cohort(
     rows: list[list[str]],
     mapping: dict,
     fold,
+    current_roster_records: list[dict] | None = None,
 ) -> GradesSyncReport:
     """Replace one cohort's grades after resolving exact folded names."""
     parsed = gradebook.parse_gradebook(
@@ -79,14 +83,39 @@ def sync_cohort(
         by_name.setdefault((fold(user.last_name), fold(user.first_name)), []).append(user)
 
     source_keys = set(names)
-    report.missing_gradebook_rows = sorted(
-        f"{user.last_name} {user.first_name}".strip()
-        for user in candidates
-        if user.departed_at is None
-        and user.last_name
-        and user.first_name
-        and (fold(user.last_name), fold(user.first_name)) not in source_keys
-    )
+    if current_roster_records is None:
+        current_roster_records = [
+            {
+                "matriculation": user.matriculation,
+                "last_name": user.last_name,
+                "first_name": user.first_name,
+            }
+            for user in candidates
+            if user.departed_at is None
+        ]
+    report.current_roster_people = len(current_roster_records)
+    for record in current_roster_records:
+        matriculation = str(record.get("matriculation") or "").strip()
+        last_name = str(record.get("last_name") or "").strip()
+        first_name = str(record.get("first_name") or "").strip()
+        display_name = f"{last_name} {first_name}".strip() or matriculation
+        missing_fields = []
+        if not matriculation:
+            missing_fields.append("matriculation number")
+        if not last_name:
+            missing_fields.append("last name")
+        if not first_name:
+            missing_fields.append("first name")
+        if missing_fields:
+            report.unmatchable_roster_rows.append(
+                f"{display_name} — missing {', '.join(missing_fields)}"
+            )
+        if last_name and first_name:
+            key = (fold(last_name), fold(first_name))
+            if key in source_keys:
+                report.current_roster_found += 1
+            else:
+                report.missing_gradebook_rows.append(display_name)
 
     session.execute(delete(Grade).where(Grade.cohort == cohort))
 
@@ -121,6 +150,7 @@ def sync_cohort(
     report.no_roster_match.sort()
     report.ambiguous_roster_match.sort(key=lambda item: item.name)
     report.missing_gradebook_rows.sort()
+    report.unmatchable_roster_rows.sort()
     report.duplicate_rows.sort(key=lambda item: item.name)
     return report
 
