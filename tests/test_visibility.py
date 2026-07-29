@@ -335,10 +335,35 @@ def test_owner_never_sees_their_own_admin_only_fields_are_not_promoted():
 
 def test_teacher_never_sees_admin_only():
     viewer = _u(role=Role.TEACHER, primary_cohort="9999")
-    target = _u(role=Role.STUDENT, primary_cohort="2021", matriculation="30000001")
-    assert "matriculation" not in visible_fields(viewer, target)
+    target = _u(role=Role.STUDENT, primary_cohort="2021", comment="left early")
+    assert "comment" not in visible_fields(viewer, target)
 
 
 def test_unknown_field_name_is_a_programming_error():
     with pytest.raises(KeyError):
         level_of(_u(), "no_such_field")
+
+
+def test_teacher_sees_the_staff_fields_and_a_student_does_not():
+    target = _u(role=Role.STUDENT, primary_cohort="2021",
+                matriculation="30000001", telegram_id=42)
+    teacher = visible_fields(_u(role=Role.TEACHER, primary_cohort="9999"), target)
+    assert teacher["matriculation"] == "30000001"
+    assert teacher["telegram_id"] == 42
+    mate = visible_fields(_u(role=Role.STUDENT, primary_cohort="2021"), target)
+    assert "matriculation" not in mate and "telegram_id" not in mate
+
+
+def test_owner_is_not_shown_the_staff_fields():
+    # A student may not learn their own telegram_id from the bot: STAFF is not
+    # "everyone above me plus me".
+    target = _u(role=Role.STUDENT, matriculation="30000001", telegram_id=42)
+    assert "matriculation" not in visible_fields(target, target)
+
+
+def test_unmerged_value_drops_the_roster_note():
+    target = _u(role=Role.STUDENT, github_self="mine", github_sheet="theirs")
+    assert visibility.field_value(target, "github") == "mine (roster: theirs)"
+    assert visibility.field_value(target, "github", merged=False) == "mine"
+    admin = _u(role=Role.ADMIN)
+    assert visible_fields(admin, target, merged=False)["github"] == "mine"

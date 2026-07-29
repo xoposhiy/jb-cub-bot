@@ -16,6 +16,7 @@ from jbcub_bot.core.models import Role, User
 class Category(enum.Enum):
     ALWAYS = "always"              # unhideable: every linked user sees it
     CONFIGURABLE = "configurable"  # the owner chooses who sees it
+    STAFF = "staff"                # admins and teachers -- not the owner
     ADMIN_ONLY = "admin_only"      # admins only -- the owner is not told it exists
 
 
@@ -57,7 +58,7 @@ FIELDS = (
     # Rendered as a link on the cohort line (or a Rights-only fallback).
     FieldSpec("source_link", "Source", Category.ADMIN_ONLY),
     FieldSpec("telegram", "Telegram", Category.CONFIGURABLE, EVERYONE),
-    FieldSpec("telegram_id", "Telegram ID", Category.ADMIN_ONLY),
+    FieldSpec("telegram_id", "Telegram ID", Category.STAFF),
     FieldSpec("status_line", "Status", Category.CONFIGURABLE, EVERYONE,
               editable=True,
               edit_hint="Send your new status — one line, up to 120 characters."),
@@ -69,7 +70,7 @@ FIELDS = (
     FieldSpec("codeforces", "Codeforces", Category.CONFIGURABLE, COHORT,
               sources=("codeforces_self", "codeforces_sheet"), editable=True,
               edit_hint="Send your Codeforces handle, or a link to your profile."),
-    FieldSpec("matriculation", "Matriculation", Category.ADMIN_ONLY),
+    FieldSpec("matriculation", "Matriculation", Category.STAFF),
     FieldSpec("birthday", "Birthday", Category.ADMIN_ONLY),
     FieldSpec("citizenship", "Citizenship", Category.ADMIN_ONLY),
     FieldSpec("comment", "Comment", Category.ADMIN_ONLY),
@@ -104,7 +105,7 @@ def are_cohort_mates(a: User, b: User) -> bool:
     return bool(_cohorts(a) & _cohorts(b))
 
 
-def field_value(user: User, name: str):
+def field_value(user: User, name: str, *, merged: bool = True):
     """The displayable value of a field.
 
     `telegram` is the one field that isn't a column: it picks the observed
@@ -116,6 +117,10 @@ def field_value(user: User, name: str):
     conflicting claims keeps the disagreement invisible until it matters.
     Telegram is deliberately not rendered this way: there, an observed handle
     is the truth and the sheet's is merely stale.
+
+    `merged=False` drops the "(roster: …)" note and returns the winning value
+    alone: an export cell is read by a machine, and /sync is what reports a
+    disagreement.
     """
     if name == "telegram":
         handle = user.handle_observed or user.handle_sheet
@@ -123,7 +128,7 @@ def field_value(user: User, name: str):
     spec = BY_NAME[name]
     if spec.sources:
         own, roster = (getattr(user, column) or None for column in spec.sources)
-        if own and roster and own != roster:
+        if merged and own and roster and own != roster:
             return f"{own} ({ROSTER_NOTE}: {roster})"
         return own or roster
     return getattr(user, name)
@@ -172,7 +177,7 @@ def is_staff(user: User) -> bool:
     return user.role is Role.ADMIN or user.role is Role.TEACHER
 
 
-def visible_fields(viewer: User, target: User) -> dict:
+def visible_fields(viewer: User, target: User, *, merged: bool = True) -> dict:
     """Every field of `target` that `viewer` may see, keyed by field name.
 
     A key may map to None -- callers decide whether to render an empty value.
@@ -187,6 +192,11 @@ def visible_fields(viewer: User, target: User) -> dict:
         if spec.category is Category.ADMIN_ONLY:
             if not is_admin:
                 continue
+        elif spec.category is Category.STAFF:
+            # Not `or own`: these are the keys another system matches people
+            # on, and their owner is deliberately not shown them.
+            if not staff:
+                continue
         elif spec.category is Category.CONFIGURABLE and not (own or staff):
             # Levels govern student-to-student visibility only; staff and the
             # owner are past this gate already.
@@ -195,5 +205,5 @@ def visible_fields(viewer: User, target: User) -> dict:
                 continue
             if level == COHORT and not mates:
                 continue
-        fields[spec.name] = field_value(target, spec.name)
+        fields[spec.name] = field_value(target, spec.name, merged=merged)
     return fields
