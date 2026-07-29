@@ -1,6 +1,13 @@
 import pytest
 
-from jbcub_bot.core.gradebook import GradebookRow, MappingError, parse_gradebook
+from jbcub_bot.core.gradebook import (
+    Column,
+    GradebookRow,
+    IgnoredColumn,
+    MappingError,
+    parse_gradebook,
+    sheet_column_name,
+)
 
 
 TERM_ROW = ["", "", "", "Fall 2025", "", "", "Spring 2026", ""]
@@ -43,11 +50,47 @@ def test_missing_header_names_expected_columns():
     assert "Last name" in str(error.value) and "First name" in str(error.value)
 
 
-def test_columns_resolve_bands_categories_labels_and_ignored_count():
+def test_columns_report_only_named_non_metadata_columns_without_a_term():
+    rows = [
+        ["", "", "", "", "Fall 2025"],
+        ["", "", "", "", "Mandatory"],
+        [
+            "Status",
+            "Last name",
+            "First name",
+            "Credits Failed after make-up",
+            "Math",
+        ],
+        ["Active", "Ivanov", "Ivan", "3", "91%"],
+    ]
+
+    parsed = parse_gradebook(rows, "Last name", "First name")
+
+    assert parsed.ignored_columns == [
+        IgnoredColumn(index=3, label="Credits Failed after make-up")
+    ]
+    assert parsed.columns == [
+        Column(
+            index=4,
+            term="Fall 2025",
+            category="Mandatory",
+            label="Math",
+        )
+    ]
+
+
+def test_sheet_column_name_uses_spreadsheet_letters():
+    assert sheet_column_name(0) == "A"
+    assert sheet_column_name(25) == "Z"
+    assert sheet_column_name(26) == "AA"
+    assert sheet_column_name(51) == "AZ"
+
+
+def test_fixture_columns_resolve_bands_categories_and_labels():
     parsed = parse_gradebook(ROWS, "Last name", "First name")
     columns = {column.index: column for column in parsed.columns}
     assert set(columns) == {3, 4, 5, 6, 7}
-    assert parsed.ignored_columns == 3
+    assert parsed.ignored_columns == []
     assert columns[4].term == "Fall 2025"
     assert columns[4].category == "Mandatory"
     assert columns[4].label == "CS 101 Tutorial"

@@ -8,6 +8,7 @@ class MappingError(Exception):
 
 
 _HEADER_SEARCH_ROWS = 5
+_EXPECTED_METADATA_LABELS = frozenset({"Status", "Location /Arr.Date"})
 
 
 def _cell(row: list[str], index: int) -> str:
@@ -54,16 +55,31 @@ class Column:
     label: str
 
 
+@dataclass(frozen=True)
+class IgnoredColumn:
+    index: int
+    label: str
+
+
+def sheet_column_name(index: int) -> str:
+    value = index + 1
+    letters = ""
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        letters = chr(ord("A") + remainder) + letters
+    return letters
+
+
 def _parse_columns(
-    rows: list[list[str]], header_row: int
-) -> tuple[list[Column], int]:
+    rows: list[list[str]], header_row: int, metadata_labels: frozenset[str]
+) -> tuple[list[Column], list[IgnoredColumn]]:
     term_row = rows[header_row - 2] if header_row >= 2 else []
     category_row = rows[header_row - 1] if header_row >= 1 else []
     label_row = rows[header_row]
     width = max(len(term_row), len(category_row), len(label_row))
 
     columns = []
-    ignored = 0
+    ignored = []
     term_carry = ""
     category_carry = ""
     for index in range(width):
@@ -83,7 +99,8 @@ def _parse_columns(
             category = ""
 
         if not term:
-            ignored += 1
+            if label_cell and label_cell not in metadata_labels:
+                ignored.append(IgnoredColumn(index=index, label=label_cell))
             continue
         label = label_cell or category
         if not label:
@@ -103,7 +120,7 @@ class GradebookRow:
 class ParsedGradebook:
     columns: list[Column]
     rows: list[GradebookRow]
-    ignored_columns: int
+    ignored_columns: list[IgnoredColumn]
 
 
 def parse_gradebook(
@@ -111,7 +128,12 @@ def parse_gradebook(
 ) -> ParsedGradebook:
     """Turn raw Gradebook rows into columns and per-student cells."""
     header_row = _find_header_row(rows, last_name_column, first_name_column)
-    columns, ignored = _parse_columns(rows, header_row)
+    metadata_labels = frozenset({
+        *_EXPECTED_METADATA_LABELS,
+        last_name_column,
+        first_name_column,
+    })
+    columns, ignored = _parse_columns(rows, header_row, metadata_labels)
     last_index, first_index = _find_identity_columns(
         rows[header_row], last_name_column, first_name_column
     )

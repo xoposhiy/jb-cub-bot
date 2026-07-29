@@ -5,6 +5,7 @@ from datetime import date
 
 from aiogram import F, Router
 from aiogram.types import (
+    BufferedInputFile,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -17,7 +18,7 @@ from jbcub_bot.core.config import get_settings
 from jbcub_bot.core.intents import Intent
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.core.tokens import issue_link_token
-from jbcub_bot.features.directory import grades, matching
+from jbcub_bot.features.directory import grades, matching, sync_diagnostics
 from jbcub_bot.features.directory.render import (
     ADMIN_BACK_CALLBACK,
     ADMIN_CALLBACK,
@@ -66,6 +67,140 @@ async def read_rows(sheet_id: str, credentials, range_: str = "A:Z") -> list[lis
     """
     async with asyncio.timeout(SHEET_READ_TIMEOUT):
         return await asyncio.to_thread(fetch_rows, sheet_id, credentials, range_)
+
+
+def _source_keyboard(label: str, url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=label, url=url),
+    ]])
+
+
+async def _abort_sync(
+    target,
+    *,
+    source: str,
+    error: str,
+    action: str,
+    url: str | None,
+) -> None:
+    text = (
+        f"❌ Sync aborted while reading {source}.\n\n"
+        "No roster changes were made.\n\n"
+        f"{error}\n\n"
+        f"Fix: {action}"
+    )
+    if url is None:
+        await target.answer(text)
+        return
+    await target.edit_text(
+        text,
+        reply_markup=_source_keyboard(f"Open {source}", url),
+    )
+
+
+async def _show_no_commit_failure(progress) -> None:
+    if progress is None:
+        return
+    try:
+        await progress.edit_text(
+            "❌ Sync failed before any roster changes were committed."
+        )
+    except Exception:
+        _log.exception("Failed to update the /sync failure status")
+
+
+async def _send_rendered_report(
+    message: Message,
+    rendered: sync_diagnostics.RenderedReport,
+    keyboard: InlineKeyboardMarkup | None,
+) -> None:
+    if rendered.document_bytes is not None:
+        assert rendered.document_name is not None
+        await message.answer_document(
+            BufferedInputFile(
+                rendered.document_bytes,
+                filename=rendered.document_name,
+            ),
+            caption=rendered.caption,
+            reply_markup=keyboard,
+        )
+        return
+    assert rendered.text is not None
+    await message.answer(rendered.text, reply_markup=keyboard)
+
+
+async def _send_final_report(
+    message: Message,
+    outcomes: list[sync_diagnostics.CohortOutcome],
+    rights_outcome: sync_diagnostics.RightsOutcome,
+    completion_note: str | None = None,
+) -> None:
+    keyboard = (
+        _source_keyboard("Open Rights spreadsheet", rights_outcome.source_url)
+        if rights_outcome.issues
+        else None
+    )
+    await _send_rendered_report(
+        message,
+        sync_diagnostics.render_final_report(
+            outcomes,
+            rights_outcome,
+            completion_note,
+        ),
+        keyboard,
+    )
+
+
+async def _show_partial_failure(
+    message: Message,
+    outcomes: list[sync_diagnostics.CohortOutcome],
+    rights_records: list[dict],
+    rights_sheet_id: str,
+) -> None:
+    try:
+        rights_outcome = sync_diagnostics.RightsOutcome(
+            staff_records=len(rights_records),
+            issues=(),
+            source_url=sheets.sheet_url(rights_sheet_id),
+            updated=False,
+        )
+        await _send_final_report(
+            message,
+            outcomes,
+            rights_outcome,
+            completion_note=(
+                "The processed cohorts above remain updated; "
+                "the remaining sources were not completed."
+            ),
+        )
+    except Exception:
+        _log.exception("Failed to send the /sync partial-failure summary")
+
+
+async def _show_completed_report_failure(message: Message) -> None:
+    try:
+        await message.answer(
+            "⚠️ Sync changes were committed, but the completed sync report "
+            "could not be sent."
+        )
+    except Exception:
+        _log.exception("Failed to send the /sync committed-state notice")
+
+
+async def _send_cohort_report(
+    message: Message,
+    outcome: sync_diagnostics.CohortOutcome,
+) -> None:
+    rendered = sync_diagnostics.render_cohort(outcome)
+    keyboard = (
+        _source_keyboard(
+            f"Open {outcome.cohort} spreadsheet",
+            outcome.source_url,
+        )
+        if outcome.issues or outcome.gradebook_error is not None
+        else None
+    )
+    await _send_rendered_report(message, rendered, keyboard)
 
 
 @cmd.command("me", "Show your own profile.")
@@ -296,32 +431,54 @@ async def cmd_sync(message: Message, principal: User, session):
                                settings.google_service_account_json)
     except (ValueError, FileNotFoundError, IsADirectoryError,
              json.JSONDecodeError) as exc:
-        await message.answer(f"Sync aborted (credentials): {exc}")
+        await _abort_sync(
+            message,
+            source="Google service-account credentials",
+            error=str(exc),
+            action="Configure valid Google service-account credentials.",
+            url=None,
+        )
         return
 
     # --- Parse phase: fetch + normalize everything; write nothing yet. ---
-    await message.answer("Sync started. Reading sheets…")
+    progress = await message.answer("🔄 Sync started. Reading cohort index…")
     try:
         index_rows = await read_rows(settings.rights_sheet_id, sa,
                                      f"{settings.cohorts_tab}!A:Z")
         cohorts = sheets.parse_cohort_index(index_rows)
     except sheets.MappingError as exc:
-        await message.answer(f"Sync aborted (Cohorts tab): {exc}")
+        await _abort_sync(
+            progress,
+            source="Cohorts tab",
+            error=str(exc),
+            action="Correct the Cohorts tab headers or field mapping.",
+            url=sheets.sheet_url(settings.rights_sheet_id),
+        )
         return
     except Exception as exc:  # network / API / anything unforeseen
+        await _show_no_commit_failure(progress)
         raise RuntimeError("/sync failed reading the Cohorts tab") from exc
 
-    parsed_cohorts = []  # (cohort_name, records, link, mapping)
+    await progress.edit_text(
+        f"🔄 Sync started. Processing {len(cohorts)} cohorts…"
+    )
+    parsed_cohorts = []
     for entry in cohorts:
-        await message.answer(f"Reading cohort {entry['cohort']}…")
         sheet_id = sheets.extract_sheet_id(entry["link"])
         try:
             rows = await read_rows(sheet_id, sa)
             records = sheets.normalize_rows(rows, entry["mapping"])
         except sheets.MappingError as exc:
-            await message.answer(f"Sync aborted (cohort {entry['cohort']}): {exc}")
+            await _abort_sync(
+                progress,
+                source=f"cohort {entry['cohort']}",
+                error=str(exc),
+                action="Correct the cohort Link, headers, or first roster row.",
+                url=sheets.sheet_url(entry["link"]),
+            )
             return
         except Exception as exc:
+            await _show_no_commit_failure(progress)
             raise RuntimeError(
                 f"/sync failed reading cohort {entry['cohort']} (sheet {sheet_id})"
             ) from exc
@@ -329,26 +486,33 @@ async def cmd_sync(message: Message, principal: User, session):
         # first data row or a link pointing at the wrong sheet. Writing it would
         # mark every one of its students departed and hide the cohort from itself.
         if not records:
-            await message.answer(
-                f"Sync aborted (cohort {entry['cohort']}): the sheet yielded no "
-                "roster rows, which would mark the whole cohort departed. Check "
-                "the Link and that the first data row names someone."
+            await _abort_sync(
+                progress,
+                source=f"cohort {entry['cohort']}",
+                error=(
+                    "The sheet yielded no roster rows, which would mark the "
+                    "whole cohort departed."
+                ),
+                action="Correct the cohort Link, headers, or first roster row.",
+                url=sheets.sheet_url(entry["link"]),
             )
             return
         for record in records:
             record["primary_cohort"] = entry["cohort"]
             record["source_link"] = entry["link"]
+        # The first non-person row is the separator itself; only rows after it
+        # are historical rows that the report should count as ignored.
+        ignored_roster_rows = max(0, len(rows) - len(records) - 2)
         parsed_cohorts.append(
-            (entry["cohort"], records, entry["link"], entry["mapping"])
+            (
+                entry["cohort"],
+                records,
+                entry["link"],
+                entry["mapping"],
+                ignored_roster_rows,
+            )
         )
-        # The roster ends at the first row naming nobody; below it sit students
-        # who left. Ignoring them is intended, ignoring them quietly is not.
-        ignored = max(0, len(rows) - 1 - len(records))
-        tail = f" {ignored} rows below the roster ignored." if ignored else ""
-        await message.answer(
-            f"Cohort {entry['cohort']}: {len(records)} rows read.{tail}")
 
-    await message.answer("Reading Rights…")
     try:
         rights_rows = await read_rows(settings.rights_sheet_id, sa,
                                       f"{settings.rights_tab}!A:Z")
@@ -359,9 +523,16 @@ async def cmd_sync(message: Message, principal: User, session):
         )
         rights_records = sheets.normalize_rows(rights_rows, rights_mapping)
     except sheets.MappingError as exc:
-        await message.answer(f"Sync aborted (Rights tab): {exc}")
+        await _abort_sync(
+            progress,
+            source="Rights tab",
+            error=str(exc),
+            action="Correct the Rights tab headers and role values.",
+            url=sheets.sheet_url(settings.rights_sheet_id),
+        )
         return
     except Exception as exc:
+        await _show_no_commit_failure(progress)
         raise RuntimeError("/sync failed reading the Rights tab") from exc
 
     for record in rights_records:
@@ -370,16 +541,25 @@ async def cmd_sync(message: Message, principal: User, session):
             try:
                 Role(role_value)
             except ValueError:
-                await message.answer(
-                    f"Sync aborted (Rights tab): invalid role {role_value!r}"
+                await _abort_sync(
+                    progress,
+                    source="Rights tab",
+                    error=f"Invalid role {role_value!r}.",
+                    action="Correct the Rights tab headers and role values.",
+                    url=sheets.sheet_url(settings.rights_sheet_id),
                 )
                 return
-    await message.answer(f"Rights: {len(rights_records)} rows read.")
 
     # --- Write phase: everything parsed OK, now upsert + reconcile. ---
-    await message.answer("All sheets read. Writing to database…")
     today = date.today().isoformat()
-    for cohort_name, records, link, mapping in parsed_cohorts:
+    outcomes = []
+    for (
+        cohort_name,
+        records,
+        link,
+        mapping,
+        ignored_roster_rows,
+    ) in parsed_cohorts:
         try:
             sheets.upsert_users(session, records)
             # After the upsert, so anyone the roster names again is already back
@@ -389,34 +569,67 @@ async def cmd_sync(message: Message, principal: User, session):
             session.commit()
         except Exception as exc:
             session.rollback()
+            if outcomes:
+                await _show_partial_failure(
+                    message,
+                    outcomes,
+                    rights_records,
+                    settings.rights_sheet_id,
+                )
+            else:
+                await _show_no_commit_failure(progress)
             raise RuntimeError(f"/sync failed writing cohort {cohort_name}") from exc
-        await message.answer(
-            f"{cohort_name}: {len(records)} rows, "
-            f"{departed} marked departed, drift={rep.drift or '-'}, "
-            f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}")
 
         # This broad catch is deliberate: roster changes govern access and
         # have already committed, so a broken grades header must not roll them
         # back or prevent later cohorts from syncing.
+        report = None
+        gradebook_error = None
         try:
             sheet_id = sheets.extract_sheet_id(link)
             gradebook_rows = await read_rows(
                 sheet_id, sa, f"{settings.gradebook_tab}!A:ZZ"
             )
             report = grades.sync_cohort(
-                session, cohort_name, gradebook_rows, mapping, matching.fold
+                session,
+                cohort_name,
+                gradebook_rows,
+                mapping,
+                matching.fold,
+                current_roster_records=records,
             )
             session.commit()
-            await message.answer(
-                f"{report.matched} rows matched, {report.cells} cells, "
-                f"unmatched={report.unmatched or '-'}, "
-                f"dup={report.duplicates or '-'}, "
-                f"{report.ignored_columns} columns outside a semester band ignored"
-            )
         except Exception as exc:
             session.rollback()
             _log.exception("Grades sync failed for cohort %s", cohort_name)
-            await message.answer(f"Grades for {cohort_name} skipped: {exc}")
+            gradebook_error = str(exc) or type(exc).__name__
+
+        outcome = sync_diagnostics.CohortOutcome(
+            cohort=cohort_name,
+            roster_students=len(records),
+            ignored_roster_rows=ignored_roster_rows,
+            gradebook=report,
+            gradebook_error=gradebook_error,
+            issues=sync_diagnostics.build_issue_groups(
+                rep,
+                report,
+                departed,
+            ),
+            source_url=sheets.sheet_url(link),
+        )
+        outcomes.append(outcome)
+        try:
+            await _send_cohort_report(message, outcome)
+        except Exception as exc:
+            await _show_partial_failure(
+                message,
+                outcomes,
+                rights_records,
+                settings.rights_sheet_id,
+            )
+            raise RuntimeError(
+                f"/sync failed reporting cohort {cohort_name}"
+            ) from exc
 
     # Rights rows have no matriculation — key on the Telegram handle so
     # admins/teachers get matched (or created) as searchable rows.
@@ -428,8 +641,25 @@ async def cmd_sync(message: Message, principal: User, session):
         session.commit()
     except Exception as exc:
         session.rollback()
+        if outcomes:
+            await _show_partial_failure(
+                message,
+                outcomes,
+                rights_records,
+                settings.rights_sheet_id,
+            )
+        else:
+            await _show_no_commit_failure(progress)
         raise RuntimeError("/sync failed in the write phase") from exc
-    await message.answer(
-        f"rights: {len(rights_records)} rows, drift={rep.drift or '-'}, "
-        f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}")
-    await message.answer("Sync done.")
+    rights_outcome = sync_diagnostics.RightsOutcome(
+        staff_records=len(rights_records),
+        issues=sync_diagnostics.build_rights_issue_groups(rep),
+        source_url=sheets.sheet_url(settings.rights_sheet_id),
+    )
+    try:
+        await _send_final_report(message, outcomes, rights_outcome)
+    except Exception as exc:
+        await _show_completed_report_failure(message)
+        raise RuntimeError(
+            "/sync failed reporting the completed sync"
+        ) from exc

@@ -101,4 +101,6 @@ skips a cohort whose last member left.
 
 ## UX Rules
 
-The user must confirm destructive actions (e.g., delete, reset).
+- All user-facing bot text is in English, including messages, buttons, command
+  descriptions, validation errors, and admin diagnostics.
+- The user must confirm destructive actions (e.g., delete, reset).
