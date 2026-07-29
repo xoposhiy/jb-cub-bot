@@ -11,6 +11,8 @@ DEPARTED_NOTICE = (
     "If that's a mistake, ask a program admin to check the roster."
 )
 
+GROUP_NOTICE = "I only work in a private chat — message me directly."
+
 
 def role_rank(role: Role) -> int:
     return _RANK[role]
@@ -42,6 +44,36 @@ async def refuse_departed(event) -> None:
         await answer(DEPARTED_NOTICE)
 
 
+def _chat_of(event):
+    """The chat an update belongs to, or None if it carries none at all.
+
+    A callback's chat lives on the message the button was attached to, not
+    on the callback itself; an update with neither isn't this guard's
+    business, so callers let it through rather than guess.
+    """
+    if isinstance(event, CallbackQuery):
+        message = event.message
+        return message.chat if message is not None else None
+    return getattr(event, "chat", None)
+
+
+async def refuse_group_chat(event) -> None:
+    """Tell the caller why nothing happened, mirroring refuse_departed.
+
+    A CallbackQuery always gets an alert -- the way refuse_departed answers
+    a button tap -- since a toast under it would scroll away unread in a
+    busy group. A command gets a plain reply. An ordinary group message
+    never reaches this function: see the guard in __call__.
+    """
+    answer = getattr(event, "answer", None)
+    if answer is None:
+        return  # an event type with nothing to reply to
+    if isinstance(event, CallbackQuery):
+        await answer(GROUP_NOTICE, show_alert=True)
+    else:
+        await answer(GROUP_NOTICE)
+
+
 class PrincipalMiddleware(BaseMiddleware):
     def __init__(self, session_factory, bootstrap_ids: set | None = None):
         self.session_factory = session_factory
@@ -51,6 +83,21 @@ class PrincipalMiddleware(BaseMiddleware):
         session = self.session_factory()
         data["session"] = session
         try:
+            # The bot answers wherever it was addressed, and a command typed
+            # in a group would post one person's private data -- a profile,
+            # a cohort CSV row -- into that group. Closing group chats here,
+            # before any lookup, keeps the decision in the one place every
+            # entry point authenticates, same as the departed_at refusal
+            # below. A plain group message gets silence, not a refusal:
+            # nobody addressed the bot, and replying to every line in a busy
+            # group is spam that Telegram will rate-limit.
+            chat = _chat_of(event)
+            if chat is not None and chat.type != "private":
+                text = getattr(event, "text", None)
+                if isinstance(event, CallbackQuery) or \
+                        (text is not None and text.startswith("/")):
+                    await refuse_group_chat(event)
+                return None
             user = getattr(event, "from_user", None)
             principal = None
             if user is not None:

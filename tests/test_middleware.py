@@ -1,9 +1,13 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from aiogram.types import CallbackQuery, User as TgUser
+from aiogram.methods import AnswerCallbackQuery, SendMessage
+from aiogram.types import CallbackQuery, Chat, Message, User as TgUser
 
 from jbcub_bot.core import impersonation
-from jbcub_bot.core.middleware import HasRole, PrincipalMiddleware, role_rank
+from jbcub_bot.core.middleware import (
+    GROUP_NOTICE, HasRole, PrincipalMiddleware, role_rank,
+)
 from jbcub_bot.core.models import Role, User
 
 
@@ -131,3 +135,128 @@ async def test_non_admin_cannot_forge_an_impersonated_callback(session):
     )
     await mw(handler, event, {})
     assert captured == {"principal_tid": 777, "ref": None}
+
+
+# --- the bot serves private chats only ----------------------------------
+
+
+class FakeBot:
+    """Minimal stand-in for aiogram.Bot: records outgoing methods, so a test
+    can see whether a refusal actually reached .answer() rather than just
+    trusting that it would have.
+    """
+
+    def __init__(self):
+        self.id = 1
+        self.sent: list = []
+
+    async def __call__(self, method, request_timeout=None):
+        self.sent.append(method)
+        return None
+
+
+def _message(fake_bot, telegram_id: int, text: str, chat_type: str) -> Message:
+    return Message(
+        message_id=1,
+        date=datetime.now(timezone.utc),
+        chat=Chat(id=telegram_id, type=chat_type),
+        from_user=TgUser(id=telegram_id, is_bot=False, first_name="tg"),
+        text=text,
+    ).as_(fake_bot)
+
+
+def _callback(fake_bot, telegram_id: int, chat_type: str) -> CallbackQuery:
+    shown = Message(
+        message_id=7,
+        date=datetime.now(timezone.utc),
+        chat=Chat(id=telegram_id, type=chat_type),
+        from_user=TgUser(id=1, is_bot=True, first_name="bot"),
+        text="whatever was on screen",
+    ).as_(fake_bot)
+    return CallbackQuery(
+        id="cb-1",
+        from_user=TgUser(id=telegram_id, is_bot=False, first_name="tg"),
+        chat_instance="chat-instance",
+        data="dir:privacy",
+        message=shown,
+    ).as_(fake_bot)
+
+
+async def test_group_command_is_refused_and_the_handler_never_runs(session):
+    mw = PrincipalMiddleware(session_factory=lambda: session)
+    fake_bot = FakeBot()
+    called = False
+
+    async def handler(event, data):
+        nonlocal called
+        called = True
+
+    await mw(handler, _message(fake_bot, 777, "/me", "group"), {})
+
+    assert called is False
+    texts = [m.text for m in fake_bot.sent if isinstance(m, SendMessage)]
+    assert texts == [GROUP_NOTICE]
+
+
+async def test_group_plain_text_is_silently_dropped(session):
+    mw = PrincipalMiddleware(session_factory=lambda: session)
+    fake_bot = FakeBot()
+    called = False
+
+    async def handler(event, data):
+        nonlocal called
+        called = True
+
+    await mw(handler, _message(fake_bot, 777, "hello there", "group"), {})
+
+    assert called is False
+    assert fake_bot.sent == []  # a busy group must not get a reply per line
+
+
+async def test_group_callback_is_refused_as_an_alert(session):
+    mw = PrincipalMiddleware(session_factory=lambda: session)
+    fake_bot = FakeBot()
+    called = False
+
+    async def handler(event, data):
+        nonlocal called
+        called = True
+
+    await mw(handler, _callback(fake_bot, 777, "supergroup"), {})
+
+    assert called is False
+    alerts = [m for m in fake_bot.sent if isinstance(m, AnswerCallbackQuery)]
+    assert len(alerts) == 1
+    assert alerts[0].show_alert is True
+    assert alerts[0].text == GROUP_NOTICE
+
+
+async def test_private_command_still_runs_the_handler(session):
+    # The regression that matters: every entry point goes through here.
+    mw = PrincipalMiddleware(session_factory=lambda: session)
+    fake_bot = FakeBot()
+    ran = False
+
+    async def handler(event, data):
+        nonlocal ran
+        ran = True
+
+    await mw(handler, _message(fake_bot, 777, "/me", "private"), {})
+
+    assert ran is True
+
+
+async def test_group_guard_runs_before_the_identity_lookup(session, monkeypatch):
+    def boom(*args, **kwargs):
+        raise AssertionError("identity lookup ran despite the group guard")
+
+    monkeypatch.setattr("jbcub_bot.core.identity.resolve", boom)
+    mw = PrincipalMiddleware(session_factory=lambda: session)
+    fake_bot = FakeBot()
+
+    async def handler(event, data):
+        raise AssertionError("handler ran despite the group guard")
+
+    # telegram_id 999999 has no row at all -- if the guard needed a lookup
+    # to refuse, this would blow up before reaching the assertion above.
+    await mw(handler, _message(fake_bot, 999999, "/me", "group"), {})
