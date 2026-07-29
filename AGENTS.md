@@ -82,4 +82,6 @@ reader. Explain those in conversation instead, where they can be skipped.
 
 ## UX Rules
 
-The user must confirm destructive actions (e.g., delete, reset).
+- All user-facing bot text is in English, including messages, buttons, command
+  descriptions, validation errors, and admin diagnostics.
+- The user must confirm destructive actions (e.g., delete, reset).
