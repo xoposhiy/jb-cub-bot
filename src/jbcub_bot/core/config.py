@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     cohorts_tab: str = "Cohorts"
     rights_tab: str = "Rights"
     gradebook_tab: str = "Gradebook"
+    # Chat that receives crash reports and unanswered requests. A channel id
+    # looks like -100…, so this is a str; empty means report to the bootstrap
+    # admins' DMs instead.
+    log_chat_id: str = ""
 
     @property
     def bootstrap_admin_id_set(self) -> set[int]:

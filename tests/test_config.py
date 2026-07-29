@@ -45,6 +45,14 @@ def test_settings_missing_required_raises(monkeypatch):
         Settings(_env_file=None)  # ignore the developer's real .env
 
 
+def test_log_chat_id_is_empty_by_default(monkeypatch):
+    monkeypatch.setenv("BOT_TOKEN", "123:abc")
+    monkeypatch.setenv("LINK_SECRET", "s3cret")
+    monkeypatch.setenv("RIGHTS_SHEET_ID", "sheet-xyz")
+    monkeypatch.delenv("LOG_CHAT_ID", raising=False)
+    assert Settings(_env_file=None).log_chat_id == ""
+
+
 def test_service_account_fields_default_to_empty(monkeypatch):
     monkeypatch.setenv("BOT_TOKEN", "123:abc")
     monkeypatch.setenv("LINK_SECRET", "s3cret")
