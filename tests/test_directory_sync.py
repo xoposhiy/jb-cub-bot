@@ -165,9 +165,18 @@ async def test_healthy_three_cohort_sync_sends_start_cohorts_and_final_only(
         "✅ 2025 processed",
     ]
     assert texts[4].startswith("✅ Sync completed")
-    assert "2023 — 1 roster student; 1 Gradebook row matched" in texts[4]
-    assert "2024 — 1 roster student; 1 Gradebook row matched" in texts[4]
-    assert "2025 — 1 roster student; 1 Gradebook row matched" in texts[4]
+    assert (
+        "2023 — 1 roster student; "
+        "1 of 1 current roster student found in Gradebook"
+    ) in texts[4]
+    assert (
+        "2024 — 1 roster student; "
+        "1 of 1 current roster student found in Gradebook"
+    ) in texts[4]
+    assert (
+        "2025 — 1 roster student; "
+        "1 of 1 current roster student found in Gradebook"
+    ) in texts[4]
     assert "Rights: 1 staff record" in texts[4]
     progress.edit_text.assert_awaited_with(
         "🔄 Sync started. Processing 3 cohorts…"
@@ -452,7 +461,10 @@ async def test_sync_happy_path(session, monkeypatch):
     assert u.primary_cohort == "2024"
     assert u.first_name == "Ivan"
     assert u.last_name == "Ivanov"
-    assert "2024 — 1 roster student; 1 Gradebook row matched" in (
+    assert (
+        "2024 — 1 roster student; "
+        "1 of 1 current roster student found in Gradebook"
+    ) in (
         msg.answer.await_args.args[0]
     )
 
@@ -703,7 +715,10 @@ async def test_committed_cohort_send_failure_reports_partial_state_then_reraises
     assert message.answer.await_count == 3
     partial_text = message.answer.await_args_list[-1].args[0]
     assert partial_text.splitlines()[0] == "⚠️ Sync partially completed"
-    assert "2024 — 1 roster student; 1 Gradebook row matched" in partial_text
+    assert (
+        "2024 — 1 roster student; "
+        "1 of 1 current roster student found in Gradebook"
+    ) in partial_text
     assert "Rights: not updated; previous data kept" in partial_text
     assert partial_text.endswith(PARTIAL_COMPLETION_NOTE)
 
@@ -872,7 +887,10 @@ async def test_later_cohort_write_failure_sends_partial_warning_then_reraises(
     assert message.answer.await_args_list[1].args[0].startswith("✅ 2024 processed")
     final_text = message.answer.await_args_list[2].args[0]
     assert final_text.splitlines()[0] == "⚠️ Sync partially completed"
-    assert "2024 — 1 roster student; 1 Gradebook row matched" in final_text
+    assert (
+        "2024 — 1 roster student; "
+        "1 of 1 current roster student found in Gradebook"
+    ) in final_text
     assert final_text.endswith(PARTIAL_COMPLETION_NOTE)
     assert "Traceback" not in final_text
     assert all(
@@ -1503,7 +1521,10 @@ async def test_gradebook_failure_does_not_stop_next_cohort(session, monkeypatch)
     assert "Gradebook: not updated; previous data kept" in first_report
     assert "Gradebook header row not found" in first_report
     assert any(text.startswith("✅ 2025 processed") for text in said)
-    assert "2025 — 1 roster student; 1 Gradebook row matched" in said[-1]
+    assert (
+        "2025 — 1 roster student; "
+        "1 of 1 current roster student found in Gradebook"
+    ) in said[-1]
     retained = session.get(Grade, previous_grade_id)
     assert retained is not None
     assert retained.value == "previous parse-failure grade"

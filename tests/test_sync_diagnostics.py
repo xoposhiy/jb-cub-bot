@@ -89,6 +89,70 @@ def test_problem_copy_is_grouped_and_directional():
     assert "drift=" not in rendered.text
 
 
+def test_extra_gradebook_rows_are_silent_when_all_current_students_have_rows():
+    report = grades.GradesSyncReport(
+        source_people=5,
+        matched_people=2,
+        cells=10,
+        no_roster_match=["Former Student", "Unrelated Person"],
+    )
+    groups = build_issue_groups(sheets.ReconcileReport(), report, [])
+    outcome = CohortOutcome(
+        cohort="2024",
+        roster_students=2,
+        ignored_roster_rows=17,
+        gradebook=report,
+        gradebook_error=None,
+        issues=groups,
+        source_url="https://docs.google.com/spreadsheets/d/AAA",
+    )
+
+    rendered = render_cohort(outcome)
+
+    assert groups == ()
+    assert rendered.text is not None
+    assert rendered.text.startswith("✅")
+    assert "Former Student" not in rendered.text
+    assert "Unrelated Person" not in rendered.text
+    assert "Gradebook: 2 of 2 current roster students found" in rendered.text
+
+
+def test_missing_current_student_reveals_both_directional_name_lists():
+    report = grades.GradesSyncReport(
+        source_people=4,
+        matched_people=2,
+        missing_gradebook_rows=["Ivan Petrov"],
+        no_roster_match=["Petrov Ivan", "Former Student"],
+    )
+
+    groups = build_issue_groups(sheets.ReconcileReport(), report, [])
+
+    assert [group.title for group in groups] == [
+        "Roster students without a Gradebook row",
+        "Gradebook rows without a roster match",
+    ]
+    assert groups[0].items == ("Ivan Petrov",)
+    assert groups[1].items == ("Petrov Ivan", "Former Student")
+    assert groups[1].action == (
+        "Compare these names with the missing current roster students and "
+        "correct any misspellings"
+    )
+
+
+def test_missing_current_student_without_extra_names_has_only_missing_group():
+    report = grades.GradesSyncReport(
+        source_people=2,
+        matched_people=1,
+        missing_gradebook_rows=["Ivan Petrov"],
+    )
+
+    groups = build_issue_groups(sheets.ReconcileReport(), report, [])
+
+    assert [group.title for group in groups] == [
+        "Roster students without a Gradebook row"
+    ]
+
+
 def test_rights_duplicates_name_the_handle_source():
     groups = build_rights_issue_groups(sheets.ReconcileReport(
         duplicates=[sheets.DuplicateKey(value="boss", rows=2)]
@@ -132,6 +196,7 @@ def test_long_report_becomes_one_complete_text_document():
     report = grades.GradesSyncReport(
         source_people=80,
         matched_people=0,
+        missing_gradebook_rows=["Missing Current"],
         no_roster_match=[
             f"Student {index:03d} " + ("X" * 80)
             for index in range(80)
@@ -196,7 +261,10 @@ def test_final_summary_names_every_cohort_and_the_rights_count():
     text = render_final([healthy, kept], rights)
 
     assert text.startswith("⚠️ Sync completed with warnings")
-    assert "sdt-2025-2028 — 33 roster students; 33 Gradebook rows matched" in text
+    assert (
+        "sdt-2025-2028 — 33 roster students; "
+        "33 of 33 current roster students found in Gradebook"
+    ) in text
     assert (
         "sdt-2024-2027 — 36 roster students; "
         "grades not updated, previous data kept"
@@ -291,7 +359,7 @@ def test_report_at_the_character_boundary_stays_a_text_message():
     facts = (
         "⚠️ boundary processed\n\n"
         "Roster: 1 student\n"
-        "Gradebook: 1 of 1 row matched · 0 cells imported"
+        "Gradebook: 1 of 1 current roster student found · 0 cells imported"
     )
     group_prefix = "\n\nx (1)\ny z:\n• "
     outcome = CohortOutcome(
@@ -315,7 +383,7 @@ def test_report_one_character_over_the_boundary_becomes_a_document():
     facts = (
         "⚠️ boundary processed\n\n"
         "Roster: 1 student\n"
-        "Gradebook: 1 of 1 row matched · 0 cells imported"
+        "Gradebook: 1 of 1 current roster student found · 0 cells imported"
     )
     group_prefix = "\n\nx (1)\ny z:\n• "
     outcome = CohortOutcome(
@@ -338,6 +406,7 @@ def test_report_one_character_over_the_boundary_becomes_a_document():
 
 def test_document_filename_is_safe_for_an_empty_or_punctuated_cohort_name():
     report = grades.GradesSyncReport(
+        missing_gradebook_rows=["Missing Current"],
         no_roster_match=["A" * (MAX_REPORT_TEXT + 1)],
     )
     outcome = CohortOutcome(
@@ -453,7 +522,7 @@ def test_missing_gradebook_without_error_warns_the_cohort_and_final_summary():
     assert final_report.startswith("⚠️ Sync completed with warnings")
 
 
-def test_group_and_matched_counts_are_routed_through_counted(monkeypatch):
+def test_group_and_current_roster_counts_are_routed_through_counted(monkeypatch):
     calls = []
     original = sync_diagnostics.counted
 
@@ -475,9 +544,9 @@ def test_group_and_matched_counts_are_routed_through_counted(monkeypatch):
     rendered = render_cohort(outcome)
 
     assert rendered.text is not None
-    assert "Gradebook: 2 of 7 rows matched" in rendered.text
+    assert "Gradebook: 4 of 4 current roster students found" in rendered.text
     assert "Problem (1)" in rendered.text
-    assert (2, "matched Gradebook row", None) in calls
+    assert (4, "current roster student", None) in calls
     assert (1, "item", None) in calls
 
 

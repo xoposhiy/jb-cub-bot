@@ -93,13 +93,6 @@ def build_issue_groups(
     groups: list[IssueGroup] = []
 
     if grades_report is not None:
-        if grades_report.no_roster_match:
-            groups.append(IssueGroup(
-                title="Gradebook rows without a roster match",
-                effect="These Gradebook rows were not imported.",
-                action="Make each name match the roster exactly",
-                items=tuple(grades_report.no_roster_match),
-            ))
         if grades_report.missing_gradebook_rows:
             groups.append(IssueGroup(
                 title="Roster students without a Gradebook row",
@@ -107,6 +100,16 @@ def build_issue_groups(
                 action="Add or correct their row on the Gradebook tab",
                 items=tuple(grades_report.missing_gradebook_rows),
             ))
+            if grades_report.no_roster_match:
+                groups.append(IssueGroup(
+                    title="Gradebook rows without a roster match",
+                    effect="These Gradebook rows were not imported.",
+                    action=(
+                        "Compare these names with the missing current roster "
+                        "students and correct any misspellings"
+                    ),
+                    items=tuple(grades_report.no_roster_match),
+                ))
         if grades_report.duplicate_rows:
             groups.append(IssueGroup(
                 title="Duplicate Gradebook rows",
@@ -197,9 +200,19 @@ def _gradebook_fact(outcome: CohortOutcome) -> str:
         return "Gradebook: not available"
     report = outcome.gradebook
     return (
-        f"Gradebook: {_bare_count(report.matched_people, 'matched Gradebook row')} of "
-        f"{counted(report.source_people, 'row')} matched · "
+        f"Gradebook: {_bare_count(_current_roster_found(outcome), 'student')} of "
+        f"{counted(outcome.roster_students, 'current roster student')} found · "
         f"{counted(report.cells, 'cell')} imported"
+    )
+
+
+def _current_roster_found(outcome: CohortOutcome) -> int:
+    if outcome.gradebook is None:
+        return 0
+    return max(
+        0,
+        outcome.roster_students
+        - len(outcome.gradebook.missing_gradebook_rows),
     )
 
 
@@ -281,7 +294,11 @@ def _final_gradebook_status(outcome: CohortOutcome) -> str:
         return "grades not updated, previous data kept"
     if outcome.gradebook is None:
         return "Gradebook not available"
-    return f"{counted(outcome.gradebook.matched_people, 'Gradebook row')} matched"
+    return (
+        f"{_bare_count(_current_roster_found(outcome), 'student')} of "
+        f"{counted(outcome.roster_students, 'current roster student')} "
+        "found in Gradebook"
+    )
 
 
 def _final_heading(
