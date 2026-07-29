@@ -1,5 +1,5 @@
 from jbcub_bot.core import gradebook, sheets
-from jbcub_bot.features.directory import grades
+from jbcub_bot.features.directory import grades, sync_diagnostics
 from jbcub_bot.features.directory.sync_diagnostics import (
     MAX_REPORT_TEXT,
     CohortOutcome,
@@ -312,3 +312,101 @@ def test_final_warning_predicates_include_rights_issues_and_completion_note():
     assert render_final([cohort], RightsOutcome(1, (), "url"), "Note").startswith(
         "⚠️ Sync completed with warnings"
     )
+
+
+def test_document_caption_and_filename_bound_a_very_long_cohort_name():
+    cohort = "sdt-" + ("2025-2028-" * 500)
+    outcome = CohortOutcome(
+        cohort=cohort,
+        roster_students=1,
+        ignored_roster_rows=0,
+        gradebook=grades.GradesSyncReport(source_people=1, matched_people=1),
+        gradebook_error=None,
+        issues=(),
+        source_url="https://docs.google.com/spreadsheets/d/AAA",
+    )
+
+    rendered = render_cohort(outcome)
+
+    assert rendered.text is None
+    assert rendered.document_bytes is not None
+    assert cohort in rendered.document_bytes.decode("utf-8")
+    assert rendered.caption is not None
+    assert len(rendered.caption) < 1024
+    assert rendered.document_name is not None
+    assert rendered.document_name.endswith(".txt")
+    assert len(rendered.document_name) <= 255
+    assert rendered.document_name != "sync-.txt"
+    assert all(char.isascii() and (char.isalnum() or char in "._-")
+               for char in rendered.document_name)
+
+
+def test_missing_gradebook_without_error_warns_the_cohort_and_final_summary():
+    outcome = CohortOutcome(
+        cohort="sdt-2025-2028",
+        roster_students=1,
+        ignored_roster_rows=0,
+        gradebook=None,
+        gradebook_error=None,
+        issues=(),
+        source_url="https://docs.google.com/spreadsheets/d/AAA",
+    )
+
+    cohort_report = render_cohort(outcome)
+    final_report = render_final([outcome], RightsOutcome(1, (), "url"))
+
+    assert cohort_report.text is not None
+    assert cohort_report.text.startswith("⚠️")
+    assert final_report.startswith("⚠️ Sync completed with warnings")
+
+
+def test_group_and_matched_counts_are_routed_through_counted(monkeypatch):
+    calls = []
+    original = sync_diagnostics.counted
+
+    def observe(count, singular, plural=None):
+        calls.append((count, singular, plural))
+        return original(count, singular, plural)
+
+    monkeypatch.setattr(sync_diagnostics, "counted", observe)
+    outcome = CohortOutcome(
+        cohort="sdt-2025-2028",
+        roster_students=4,
+        ignored_roster_rows=0,
+        gradebook=grades.GradesSyncReport(source_people=7, matched_people=2),
+        gradebook_error=None,
+        issues=(IssueGroup("Problem", "Effect.", "Fix", ("item",)),),
+        source_url="https://docs.google.com/spreadsheets/d/AAA",
+    )
+
+    rendered = render_cohort(outcome)
+
+    assert rendered.text is not None
+    assert "Gradebook: 2 of 7 rows matched" in rendered.text
+    assert "Problem (1)" in rendered.text
+    assert (2, "matched Gradebook row", None) in calls
+    assert (1, "item", None) in calls
+
+
+def test_final_rights_groups_are_separated_by_two_newlines():
+    cohort = CohortOutcome(
+        cohort="sdt-2025-2028",
+        roster_students=1,
+        ignored_roster_rows=0,
+        gradebook=grades.GradesSyncReport(source_people=1, matched_people=1),
+        gradebook_error=None,
+        issues=(),
+        source_url="https://docs.google.com/spreadsheets/d/AAA",
+    )
+    rights = RightsOutcome(
+        staff_records=1,
+        issues=(
+            IssueGroup("First", "Effect.", "Fix", ("one",)),
+            IssueGroup("Second", "Effect.", "Fix", ("two",)),
+        ),
+        source_url="https://docs.google.com/spreadsheets/d/RIGHTS",
+    )
+
+    text = render_final([cohort], rights)
+
+    assert "• one\n\nSecond (1)" in text

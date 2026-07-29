@@ -8,6 +8,8 @@ from jbcub_bot.features.directory import grades
 
 
 MAX_REPORT_TEXT = 3900
+MAX_CAPTION_TEXT = 1023
+MAX_DOCUMENT_NAME = 255
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,11 @@ class RenderedReport:
 def counted(count: int, singular: str, plural: str | None = None) -> str:
     word = singular if count == 1 else (plural or singular + "s")
     return f"{count} {word}"
+
+
+def _bare_count(count: int, singular: str) -> str:
+    """Use the shared grammar helper where the template needs a bare number."""
+    return counted(count, singular).split(" ", 1)[0]
 
 
 def _differences_group(
@@ -176,7 +183,7 @@ def build_rights_issue_groups(
 
 def _format_group(group: IssueGroup) -> str:
     return "\n".join((
-        f"{group.title} ({len(group.items)})",
+        f"{group.title} ({_bare_count(len(group.items), 'item')})",
         f"{group.effect} {group.action}:",
         *(f"• {item}" for item in group.items),
     ))
@@ -189,7 +196,7 @@ def _gradebook_fact(outcome: CohortOutcome) -> str:
         return "Gradebook: not available"
     report = outcome.gradebook
     return (
-        f"Gradebook: {report.matched_people} of "
+        f"Gradebook: {_bare_count(report.matched_people, 'matched Gradebook row')} of "
         f"{counted(report.source_people, 'row')} matched · "
         f"{counted(report.cells, 'cell')} imported"
     )
@@ -205,7 +212,26 @@ def _gradebook_error_group(error: str) -> IssueGroup:
 
 
 def _cohort_status(outcome: CohortOutcome) -> str:
-    return "⚠️" if outcome.issues or outcome.gradebook_error is not None else "✅"
+    return "⚠️" if (
+        outcome.issues
+        or outcome.gradebook_error is not None
+        or outcome.gradebook is None
+    ) else "✅"
+
+
+def _shorten(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    if limit <= 1:
+        return text[:limit]
+    return text[:limit - 1] + "…"
+
+
+def _document_filename(cohort: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", cohort).strip("-")
+    slug_limit = MAX_DOCUMENT_NAME - len("sync-") - len(".txt")
+    slug = slug[:slug_limit].rstrip("-") or "cohort"
+    return f"sync-{slug}.txt"
 
 
 def render_cohort(outcome: CohortOutcome) -> RenderedReport:
@@ -231,18 +257,20 @@ def render_cohort(outcome: CohortOutcome) -> RenderedReport:
     if len(body) <= MAX_REPORT_TEXT:
         return RenderedReport(body, None, None, None)
 
-    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", outcome.cohort).strip("-")
     gradebook_fact = _gradebook_fact(outcome)
-    caption = "\n".join((
-        f"{_cohort_status(outcome)} {outcome.cohort} processed",
+    status = _cohort_status(outcome)
+    caption_tail = "\n".join((
+        " processed",
         f"Roster: {counted(outcome.roster_students, 'student')}",
         gradebook_fact,
         f"{counted(len(groups), 'issue group')}; full diagnostics attached.",
     ))
+    cohort_limit = MAX_CAPTION_TEXT - len(status) - 1 - len(caption_tail)
+    caption = f"{status} {_shorten(outcome.cohort, max(cohort_limit, 0))}{caption_tail}"
     return RenderedReport(
         text=None,
         caption=caption,
-        document_name=f"sync-{slug or 'cohort'}.txt",
+        document_name=_document_filename(outcome.cohort),
         document_bytes=body.encode("utf-8"),
     )
 
@@ -261,7 +289,12 @@ def render_final(
     completion_note: str | None = None,
 ) -> str:
     has_warnings = (
-        any(outcome.issues or outcome.gradebook_error is not None for outcome in cohorts)
+        any(
+            outcome.issues
+            or outcome.gradebook_error is not None
+            or outcome.gradebook is None
+            for outcome in cohorts
+        )
         or bool(rights.issues)
         or completion_note is not None
     )
@@ -273,8 +306,8 @@ def render_final(
         for outcome in cohorts
     )
     lines.append(f"Rights: {counted(rights.staff_records, 'staff record')}")
-    if rights.issues:
-        lines.extend(["", *(_format_group(group) for group in rights.issues)])
+    sections = ["\n".join(lines)]
+    sections.extend(_format_group(group) for group in rights.issues)
     if completion_note is not None:
-        lines.extend(["", completion_note])
-    return "\n".join(lines)
+        sections.append(completion_note)
+    return "\n\n".join(sections)
