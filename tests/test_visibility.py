@@ -280,7 +280,9 @@ def test_admin_overrides_staff_only_configurable():
     assert visible_fields(viewer, target)["gmail"] == "t@gmail.com"
 
 
-def test_admin_sees_admin_only_fields():
+def test_admin_sees_staff_fields():
+    # matriculation is Category.STAFF, not ADMIN_ONLY -- an admin sees it
+    # because they're staff, same as a teacher would.
     viewer = _u(role=Role.ADMIN)
     target = _u(role=Role.STUDENT, matriculation="30000001")
     assert visible_fields(viewer, target)["matriculation"] == "30000001"
@@ -318,7 +320,9 @@ def test_only_an_admin_sees_the_departed_mark():
         assert "departed_at" not in visible_fields(viewer, target)
 
 
-def test_student_never_sees_admin_only():
+def test_student_never_sees_staff_fields():
+    # matriculation is Category.STAFF, not ADMIN_ONLY -- a cohort mate is
+    # exactly the case a category check (not a level) must still refuse.
     viewer = _u(role=Role.STUDENT, primary_cohort="2024")
     target = _u(role=Role.STUDENT, primary_cohort="2024", matriculation="30000001")
     assert "matriculation" not in visible_fields(viewer, target)
@@ -326,11 +330,11 @@ def test_student_never_sees_admin_only():
 
 def test_owner_never_sees_their_own_admin_only_fields_are_not_promoted():
     # A student is not told hidden fields exist -- but they are their own row,
-    # so the ADMIN_ONLY rule must beat the self rule.
-    me = _u(role=Role.STUDENT, birthday="2000-01-02", matriculation="30000001")
+    # so the ADMIN_ONLY rule must beat the self rule. (The STAFF equivalent of
+    # this, matriculation, is covered by test_owner_is_not_shown_the_staff_fields.)
+    me = _u(role=Role.STUDENT, birthday="2000-01-02")
     fields = visible_fields(me, me)
     assert "birthday" not in fields
-    assert "matriculation" not in fields
 
 
 def test_teacher_never_sees_admin_only():
