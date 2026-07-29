@@ -17,14 +17,18 @@ class FakeBot:
     def __init__(self):
         self.id = 1
         self.sent: list = []
+        self.logged: list = []
 
     async def __call__(self, method, request_timeout=None):
         self.sent.append(method)
         return None
 
     async def send_message(self, chat_id, text, **kwargs):
-        self.sent.append(SimpleNamespace(text=text))
+        self.logged.append(SimpleNamespace(chat_id=chat_id, text=text))
         return None
+
+
+LOG_CHAT = "-1009999"
 
 
 def _factory():
@@ -87,3 +91,43 @@ async def test_a_known_command_is_not_second_guessed():
     await dp.feed_update(bot, _update(bot, text="/me"), dispatcher=dp)
     replies = _replies(bot)
     assert "I don't know" not in replies
+
+
+# --- what reaches the log chat ------------------------------------------------
+
+async def test_an_unmatched_query_is_logged_with_the_answer_it_got():
+    dp = build_dispatcher(_factory(), bootstrap_ids=set(), log_chat_id=LOG_CHAT)
+    bot = FakeBot()
+    await dp.feed_update(bot, _update(bot, text="Иванов Пётр"), dispatcher=dp)
+    assert len(bot.logged) == 1
+    entry = bot.logged[0]
+    assert entry.chat_id == LOG_CHAT
+    assert "Иванов Пётр" in entry.text
+    assert "No one found." in entry.text
+    assert "777" in entry.text  # who asked
+
+
+async def test_a_photo_is_logged_by_its_content_type():
+    dp = build_dispatcher(_factory(), bootstrap_ids=set(), log_chat_id=LOG_CHAT)
+    bot = FakeBot()
+    photo = [PhotoSize(file_id="f", file_unique_id="u", width=1, height=1)]
+    await dp.feed_update(bot, _update(bot, photo=photo), dispatcher=dp)
+    assert len(bot.logged) == 1
+    # Lowercase: `content_type` is a ContentType enum, and interpolating it
+    # directly would read "ContentType.PHOTO".
+    assert "«photo»" in bot.logged[0].text
+
+
+async def test_an_unknown_command_is_not_logged():
+    # The bot answered correctly -- that is not a gap in what it can do.
+    dp = build_dispatcher(_factory(), bootstrap_ids=set(), log_chat_id=LOG_CHAT)
+    bot = FakeBot()
+    await dp.feed_update(bot, _update(bot, text="/nosuchthing"), dispatcher=dp)
+    assert bot.logged == []
+
+
+async def test_a_query_that_found_someone_is_not_logged():
+    dp = build_dispatcher(_factory(), bootstrap_ids=set(), log_chat_id=LOG_CHAT)
+    bot = FakeBot()
+    await dp.feed_update(bot, _update(bot, text="Ivan"), dispatcher=dp)
+    assert bot.logged == []

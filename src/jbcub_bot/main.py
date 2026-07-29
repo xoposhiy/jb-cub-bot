@@ -81,11 +81,17 @@ def build_dispatcher(session_factory, bootstrap_ids: set | None = None,
     # but it still runs before any sub-router, so StateFilter(None) stays
     # load-bearing.
     @dp.message(StateFilter(None), F.text & ~F.text.startswith("/"))
-    async def nl_fallback(message: Message, principal, session):
+    async def nl_fallback(message: Message, principal, session, bot: Bot,
+                          impersonator=None):
         handled = await _intent_router.dispatch(message.text, message,
                                                 principal, session)
         if not handled:
             await message.answer(NOTHING_MATCHED)
+            await ops_log(bot).send(oplog_mod.format_miss(
+                query=message.text, answer=NOTHING_MATCHED,
+                principal=principal, tg_user=message.from_user,
+                impersonator=impersonator,
+            ))
 
     # Last word: a message no handler took must still get an answer. Sub-routers
     # run after the Dispatcher's own handlers, so this router is included last
@@ -94,16 +100,24 @@ def build_dispatcher(session_factory, bootstrap_ids: set | None = None,
     fallback = Router(name="fallback")
 
     @fallback.message()
-    async def nothing_understood(message: Message):
+    async def nothing_understood(message: Message, bot: Bot, principal=None,
+                                 impersonator=None):
         command = (message.text or "").split()[0] if message.text else ""
         if command.startswith("/"):
+            # The bot answered correctly, so this is not a gap worth logging.
             await message.answer(
                 f"I don't know {command}. /help lists what I can do."
             )
-        else:
-            await message.answer(
-                "I only read text. /help lists what I can do."
-            )
+            return
+        answer = "I only read text. /help lists what I can do."
+        await message.answer(answer)
+        # `.value`, not the enum: aiogram's ContentType is a (str, Enum), so
+        # interpolating it would write "ContentType.PHOTO" into the entry.
+        await ops_log(bot).send(oplog_mod.format_miss(
+            query=message.content_type.value, answer=answer,
+            principal=principal, tg_user=message.from_user,
+            impersonator=impersonator,
+        ))
 
     dp.include_router(fallback)
 

@@ -67,7 +67,17 @@ reader. Explain those in conversation instead, where they can be skipped.
   after each cohort's roster commit and deliberately catches all grade-pass
   failures: a bad grades header must not roll back access-changing roster data
   or stop later cohorts from syncing.
-- **Don't swallow unexpected exceptions in a handler.** Answer only the failures a user can act on (a bad mapping, a missing column); let the rest propagate — `build_dispatcher`'s `dp.errors` handler replies, logs, and DMs the full traceback to `BOOTSTRAP_ADMIN_IDS`. Add context by re-raising: `raise RuntimeError("/sync failed reading the Rights tab") from exc`. A bare `except Exception` that answers and returns is how a crash turns into a silent hang.
+- **Don't swallow unexpected exceptions in a handler.** Answer only the failures a user can act on (a bad mapping, a missing column); let the rest propagate — `build_dispatcher`'s `dp.errors` handler replies, logs, and sends the full traceback to the ops log chat. Add context by re-raising: `raise RuntimeError("/sync failed reading the Rights tab") from exc`. A bare `except Exception` that answers and returns is how a crash turns into a silent hang.
+- **Operational reports go through `core/oplog.py`.** `OpsLog` sends to
+  `LOG_CHAT_ID` and falls back to `BOOTSTRAP_ADMIN_IDS` in DM when that chat is
+  unset or refuses the message, so a report never depends on one destination
+  working. `core/errors.py` only formats; `build_dispatcher.ops_log(bot)` builds
+  the destination per update, since a `Bot` exists only then. Three call sites
+  use it: the `dp.errors` handler, and the two dead ends in `main.py` — a text
+  query no intent took, and a non-text message. An unknown command and an
+  access refusal are deliberately *not* logged: the bot answered correctly.
+  Entries are plain text with no `parse_mode`, because a query containing `_`
+  would otherwise break the message.
 - **Blocking I/O in an async handler freezes the whole bot** (one event loop, no threads). Google Sheets reads go through `read_rows()`, which adds a thread hop and a deadline.
 
 ## UX Rules
