@@ -44,3 +44,16 @@ def list_cohort(session, primary_cohort: str, *,
                 include_departed: bool = False) -> list[User]:
     stmt = select(User).where(User.primary_cohort == primary_cohort)
     return list(session.scalars(_visible(stmt, include_departed)).all())
+
+
+def list_cohort_names(session) -> list[str]:
+    """Every cohort that still has a current member, newest first.
+
+    No `include_departed`: a cohort whose last member left is not a cohort to
+    offer. The names are years, so reverse-alphabetical is chronological
+    without parsing one.
+    """
+    stmt = select(User.primary_cohort).where(
+        User.primary_cohort.is_not(None), User.departed_at.is_(None)
+    ).distinct()
+    return sorted(session.scalars(stmt).all(), reverse=True)

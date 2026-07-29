@@ -1,5 +1,5 @@
-from jbcub_bot.core.models import User
-from jbcub_bot.features.directory.search import list_cohort, rank_users
+from jbcub_bot.core.models import Role, User
+from jbcub_bot.features.directory.search import list_cohort, list_cohort_names, rank_users
 
 
 def _seed(session):
@@ -97,3 +97,16 @@ def test_list_cohort_includes_a_departed_member_when_asked(session):
     names = {u.full_name
              for u in list_cohort(session, "2024", include_departed=True)}
     assert names == {"Iaroslav Belozerov", "Igor Chsheglov"}
+
+
+def test_list_cohort_names_newest_first_and_only_where_someone_is_current(session):
+    session.add_all([
+        User(first_name="A", last_name="One", primary_cohort="2023"),
+        User(first_name="B", last_name="Two", primary_cohort="2024"),
+        User(first_name="C", last_name="Three", primary_cohort="2024"),
+        User(first_name="D", last_name="Gone", primary_cohort="2019",
+             departed_at="2026-07-28"),
+        User(first_name="E", last_name="Staff", role=Role.ADMIN),
+    ])
+    session.commit()
+    assert list_cohort_names(session) == ["2024", "2023"]
