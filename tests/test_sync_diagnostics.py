@@ -71,6 +71,7 @@ def test_problem_copy_is_grouped_and_directional():
     rendered = render_cohort(outcome)
     assert rendered.document_bytes is None
     assert rendered.text is not None
+    assert rendered.text.startswith("⚠️")
     assert "Gradebook rows without a roster match (2)" in rendered.text
     assert "Aliev Rufat" in rendered.text
     assert "Roster students without a Gradebook row (1)" in rendered.text
@@ -87,6 +88,62 @@ def test_problem_copy_is_grouped_and_directional():
     assert "unmatched=" not in rendered.text
     assert "dup=" not in rendered.text
     assert "drift=" not in rendered.text
+
+
+def test_columns_outside_semesters_are_visible_without_cohort_warning():
+    report = grades.GradesSyncReport(
+        current_roster_people=1,
+        current_roster_found=1,
+        ignored_columns=[
+            gradebook.IgnoredColumn(index=51, label="Credits Failed")
+        ],
+    )
+    outcome = CohortOutcome(
+        cohort="2024",
+        roster_students=1,
+        ignored_roster_rows=0,
+        gradebook=report,
+        gradebook_error=None,
+        issues=build_issue_groups(sheets.ReconcileReport(), report, []),
+        source_url="https://docs.google.com/spreadsheets/d/AAA",
+    )
+
+    rendered = render_cohort(outcome)
+
+    assert rendered.text is not None
+    assert rendered.text.startswith("✅ 2024 processed")
+    assert "Columns outside a semester (1)" in rendered.text
+    assert "AZ — Credits Failed" in rendered.text
+
+
+def test_columns_outside_semesters_do_not_warn_the_final_summary():
+    report = grades.GradesSyncReport(
+        current_roster_people=1,
+        current_roster_found=1,
+        ignored_columns=[
+            gradebook.IgnoredColumn(index=51, label="Credits Failed")
+        ],
+    )
+    outcome = CohortOutcome(
+        cohort="2024",
+        roster_students=1,
+        ignored_roster_rows=0,
+        gradebook=report,
+        gradebook_error=None,
+        issues=build_issue_groups(sheets.ReconcileReport(), report, []),
+        source_url="https://docs.google.com/spreadsheets/d/AAA",
+    )
+
+    text = render_final(
+        [outcome],
+        RightsOutcome(
+            staff_records=1,
+            issues=(),
+            source_url="https://docs.google.com/spreadsheets/d/RIGHTS",
+        ),
+    )
+
+    assert text.startswith("✅ Sync completed")
 
 
 def test_extra_gradebook_rows_are_silent_when_all_current_students_have_rows():
