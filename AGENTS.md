@@ -42,7 +42,8 @@ skips a cohort whose last member left.
   `editable=True` plus an `edit_hint` puts the field on the `/edit` screen, and
   `accounts.NORMALIZERS` must gain an entry for it — a test in `test_edit.py`
   enforces the pairing.
-  `STAFF` is for a field admins *and teachers* read but its owner never sees --
+  `STAFF` is for a field admins *and teachers* read; a student owner never sees
+  their own, but a staff owner does (`staff` already covers them) --
   `matriculation` and `telegram_id`, the keys another system matches people on.
   `features/directory/export.py` derives a cohort CSV's columns from whatever
   `visible_fields` returned for the people in hand (headers are field names, not

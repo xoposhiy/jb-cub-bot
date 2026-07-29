@@ -52,7 +52,7 @@ def set_status(session, user: User, text: str) -> None:
 
 
 def is_admin(principal: User | None) -> bool:
-    """Whether a departed profile is theirs to see. Named because two readers ask."""
+    """Whether a departed profile is theirs to see. Named because name_search asks."""
     return principal is not None and principal.role is Role.ADMIN
 
 

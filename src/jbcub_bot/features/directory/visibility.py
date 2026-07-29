@@ -193,8 +193,10 @@ def visible_fields(viewer: User, target: User, *, merged: bool = True) -> dict:
             if not is_admin:
                 continue
         elif spec.category is Category.STAFF:
-            # Not `or own`: these are the keys another system matches people
-            # on, and their owner is deliberately not shown them.
+            # A student never sees their own -- these are the keys another
+            # system matches people on. A staff owner does see theirs: `staff`
+            # already covers them, and denying it would need an explicit
+            # `and not own` the feature does not want.
             if not staff:
                 continue
         elif spec.category is Category.CONFIGURABLE and not (own or staff):
