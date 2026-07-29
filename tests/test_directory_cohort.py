@@ -1,4 +1,16 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+from aiogram.types import Message
+
 from jbcub_bot.core.models import Role, User
+from jbcub_bot.features.directory.cohort import (
+    PICK_PREFIX,
+    _match,
+    cb_pick,
+    cmd_cohort,
+    render_list,
+)
 from jbcub_bot.features.directory.render import render_cohort_list
 from jbcub_bot.features.directory.visibility import STAFF_ONLY
 
@@ -54,10 +66,16 @@ def test_cohort_list_keeps_one_line_per_mate():
     assert render_cohort_list(viewer, mates) == "- A One (@a)\n- B Two"
 
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+def test_render_list_pins_the_singular_for_one_person():
+    viewer = _student("V", "Viewer")
+    people = [_student("Ivan", "Ivanov")]
+    assert render_list(viewer, "2024", people).startswith("2024 — 1 person:")
 
-from jbcub_bot.features.directory.cohort import PICK_PREFIX, cb_pick, cmd_cohort
+
+def test_match_is_case_insensitive():
+    # Design decision: cohort names are hand-typed, and something like "2024b"
+    # should still be found regardless of how staff capitalized it.
+    assert _match(["2024B"], "2024b") == "2024B"
 
 
 def _seed(session):
@@ -138,20 +156,7 @@ async def test_staff_are_told_when_there_are_no_cohorts_at_all(session):
     assert msg.answer.await_args.kwargs.get("reply_markup") is None
 
 
-async def test_a_bootstrap_admin_with_no_row_is_served(session):
-    # id is None: identity.apply_bootstrap hands out a transient principal, and
-    # nothing here writes, so it must not be refused.
-    _seed(session)
-    msg = _msg()
-    await cmd_cohort(msg, principal=User(last_name="Boot", role=Role.ADMIN),
-                     session=session, command=_args("2024"))
-    msg.answer_document.assert_awaited_once()
-
-
 def _cb(data, text="Which cohort?"):
-    from unittest.mock import Mock
-
-    from aiogram.types import Message
     # Mock, not AsyncMock: aiogram's Message methods aren't real coroutine
     # functions (inspect.iscoroutinefunction is False on them), so a spec'd
     # AsyncMock wouldn't autodetect edit_text/answer_document as awaitable.
@@ -160,6 +165,17 @@ def _cb(data, text="Which cohort?"):
     message.edit_text = AsyncMock()
     message.answer_document = AsyncMock()
     return SimpleNamespace(data=data, message=message, answer=AsyncMock())
+
+
+async def test_a_bootstrap_admin_with_no_row_is_served(session):
+    # id is None: identity.apply_bootstrap hands out a transient principal.
+    # The guard that would refuse it is require_linked's absence, and the only
+    # place that matters is cb_pick -- cmd_cohort never looks at id at all.
+    _seed(session)
+    cb = _cb(f"{PICK_PREFIX}2024")
+    await cb_pick(cb, principal=User(last_name="Boot", role=Role.ADMIN),
+                  session=session)
+    cb.message.answer_document.assert_awaited_once()
 
 
 async def test_tapping_a_cohort_replaces_the_text_and_sends_the_file(session):
@@ -195,3 +211,28 @@ async def test_a_student_tapping_a_stale_button_is_refused(session):
                   session=session)
     cb.message.answer_document.assert_not_awaited()
     assert cb.answer.await_args.kwargs.get("show_alert") is True
+
+
+async def test_a_cohort_name_too_long_for_a_button_is_named_in_the_text_instead(session):
+    # dir:cohort: eats 11 of Telegram's 64-byte callback_data cap, leaving 53
+    # -- a hand-typed sheet cell can easily exceed that.
+    long_name = "A" * 60
+    session.add(User(first_name="Ivan", last_name="Ivanov", role=Role.STUDENT,
+                     primary_cohort=long_name, matriculation="30000005"))
+    session.commit()
+
+    msg = _msg()
+    await cmd_cohort(msg, principal=User(last_name="A", role=Role.ADMIN),
+                     session=session, command=_args(None))
+    text = msg.answer.await_args.args[0]
+    assert long_name in text
+    keyboard = msg.answer.await_args.kwargs["reply_markup"]
+    labels = [b.text for row in keyboard.inline_keyboard for b in row]
+    assert long_name not in labels
+
+    # It still works when typed, since _match checks the unfiltered names.
+    msg2 = _msg()
+    await cmd_cohort(msg2, principal=User(last_name="A", role=Role.ADMIN),
+                     session=session, command=_args(long_name))
+    assert "Ivan Ivanov" in msg2.answer.await_args.args[0]
+    msg2.answer_document.assert_awaited_once()

@@ -38,17 +38,37 @@ _NO_COHORTS = "No cohorts on file yet — run /sync."
 _STAFF_ONLY = "Staff only."
 _BUTTONS_PER_ROW = 2
 
+# Telegram caps callback_data at 64 bytes and aiogram never checks client-side,
+# so a button built from an over-long name would make the whole send fail --
+# taking the picker, the unknown-name redraw and every cb_pick edit down with it.
+_MAX_CALLBACK_BYTES = 64
+
+
+def _fits_callback(name: str) -> bool:
+    """Whether `name` can ride a `dir:cohort:` button without hitting the cap."""
+    return len(f"{PICK_PREFIX}{name}".encode()) <= _MAX_CALLBACK_BYTES
+
+
+def _overflow_note(names: list[str]) -> str:
+    """Told in the picker's text, since these names get no button at all."""
+    long_names = [name for name in names if not _fits_callback(name)]
+    if not long_names:
+        return ""
+    return ("\nToo long for a button — type /cohort <name> instead: "
+            + ", ".join(long_names))
+
 
 def picker_keyboard(names: list[str]) -> InlineKeyboardMarkup:
     buttons = [InlineKeyboardButton(text=name, callback_data=f"{PICK_PREFIX}{name}")
-               for name in names]
+               for name in names if _fits_callback(name)]
     rows = [buttons[i:i + _BUTTONS_PER_ROW]
             for i in range(0, len(buttons), _BUTTONS_PER_ROW)]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def render_list(viewer: User, cohort: str, people: list[User]) -> str:
-    return f"{cohort} — {len(people)} people:\n{render_cohort_list(viewer, people)}"
+    noun = "person" if len(people) == 1 else "people"
+    return f"{cohort} — {len(people)} {noun}:\n{render_cohort_list(viewer, people)}"
 
 
 def _match(names: list[str], wanted: str) -> str | None:
@@ -80,12 +100,14 @@ async def cmd_cohort(message: Message, principal: User, session,
         return
     wanted = (command.args if command else None) or ""
     if not wanted.strip():
-        await message.answer(_PICK, reply_markup=picker_keyboard(names))
+        await message.answer(_PICK + _overflow_note(names),
+                             reply_markup=picker_keyboard(names))
         return
     cohort = _match(names, wanted)
     if cohort is None:
-        await message.answer(f"No cohort named {wanted.strip()!r}. {_PICK}",
-                             reply_markup=picker_keyboard(names))
+        await message.answer(
+            f"No cohort named {wanted.strip()!r}. {_PICK}{_overflow_note(names)}",
+            reply_markup=picker_keyboard(names))
         return
     people = list_cohort(session, cohort)
     await message.answer(render_list(principal, cohort, people))
