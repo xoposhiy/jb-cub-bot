@@ -10,6 +10,7 @@ __pycache__/
 
 # Superpowers SDD scratch (briefs, reports, diffs, progress ledger)
 .superpowers/
+.worktrees/
 
 # Secrets — never commit service-account credentials
 google-service-account.json
