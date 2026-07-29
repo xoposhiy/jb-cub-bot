@@ -26,18 +26,28 @@ reader. Explain those in conversation instead, where they can be skipped.
 - **Field ownership:** Google Sheets are read-only source of truth for roster fields; the bot **never writes to a sheet**. Bot-owned fields (`telegram_id`, `handle_observed`, `status_line`, `github_self`, `codeforces_self`, `visibility`) must survive re-import. `matriculation` is the only stable student key. An account field a user can set has **two columns** — `*_sheet` (the roster's, listed in `sheets.SHEET_OWNED`) and `*_self` (theirs). `visibility.field_value` prefers the user's and shows the roster's beside it when the two disagree; `sheets.DRIFT_PAIRS` makes `/sync` report the disagreement. Nothing resolves it automatically — an admin edits the sheet.
 - **Column mapping lives in the sheets, not in the repo.** On the `Cohorts` tab, `Cohort` and `Link` describe the cohort and **every other column is a `User` field name**; the cell under it is what that field is called in that cohort's own sheet (so a roster GitHub column is a `github_sheet` column holding `GitHub`). A blank cell means that cohort lacks the field. The `Rights` tab is ours to shape, so its columns *are* our field names and it maps to itself via `sheets.identity_mapping`. Both headers are checked against `sheets.KNOWN_FIELDS` and an unrecognized name aborts `/sync` — a typo in a hand-edited header would otherwise silently drop a whole field. Adding a syncable field means adding it to `SHEET_OWNED`, not editing a config file.
 - **A roster ends at the first row naming nobody** (`sheets._ends_the_roster`): both cohort sheets keep departed students below a blank separator row, so `normalize_rows` stops there and `/sync` reports how many rows it ignored. A row still counts as a person if it has *either* a name or a `matriculation`, so a student awaiting a number doesn't truncate the roster. `sheets.mark_departed` then stamps `departed_at` on that cohort's members the roster no longer names — scoped to `primary_cohort` so Rights-only staff and other cohorts are never touched, and a cohort yielding zero rows aborts the sync instead of marking everyone. `upsert_users` clears `departed_at`, so putting a row back restores the person.
-- **`departed_at` revokes access, not just visibility.** The refusal lives in `PrincipalMiddleware` because that is where every entry point authenticates — one check closes commands, intents and callbacks together. `identity.try_claim_by_handle` and `tokens.verify_link_token` also refuse a marked row, so neither the handle nor an invite is a way back in; `BOOTSTRAP_ADMIN_IDS` is the deliberate exemption. `/as` checks its **target** separately from the caller, so an admin impersonating a departed student sees that student's refusal instead of their profile — the exemption covers an admin's own access, never their view of someone else. Row-level hiding is separate and opt-in: `search.rank_users`/`list_cohort` take `include_departed`, which callers pass from `handlers.is_admin`.
+- **`departed_at` revokes access, not just visibility.** The refusal lives in `PrincipalMiddleware` because that is where every entry point authenticates — one check closes commands, intents and callbacks together. `identity.try_claim_by_handle` and `tokens.verify_link_token` also refuse a marked row, so neither the handle nor an invite is a way back in; `BOOTSTRAP_ADMIN_IDS` is the deliberate exemption. `/as` checks its **target** separately from the caller, so an admin impersonating a departed student sees that student's refusal instead of their profile — the exemption covers an admin's own access, never their view of someone else. Row-level hiding is separate and opt-in: `search.rank_users`/`list_cohort` take
+`include_departed`, and the name search is the only caller that passes it (from
+`handlers.is_admin`). `/cohort` and its CSV list current people only, for every
+role — a roster listing states who is here now, and `search.list_cohort_names`
+skips a cohort whose last member left.
 - **Profile reads go through `features/directory/visibility.py`** — never bypass it.
   A handler that reads a profile column off the model leaks whatever its owner
   hid (`/cohort` did exactly this until telegram became hideable).
 - **Adding a profile field = one line in `FIELDS`** (`features/directory/visibility.py`):
-  name, label, category (`ALWAYS` / `CONFIGURABLE` / `ADMIN_ONLY`), and a default
+  name, label, category (`ALWAYS` / `CONFIGURABLE` / `STAFF` / `ADMIN_ONLY`), and a default
   level for configurable ones. The visibility service, the profile renderer, and
   the `/privacy` screen all read that table; nothing else lists profile fields.
   `ADMIN_ONLY` fields are never shown or hinted at to their owner.
   `editable=True` plus an `edit_hint` puts the field on the `/edit` screen, and
   `accounts.NORMALIZERS` must gain an entry for it — a test in `test_edit.py`
   enforces the pairing.
+  `STAFF` is for a field admins *and teachers* read but its owner never sees --
+  `matriculation` and `telegram_id`, the keys another system matches people on.
+  `features/directory/export.py` derives a cohort CSV's columns from whatever
+  `visible_fields` returned for the people in hand (headers are field names, not
+  labels, and values come back with `merged=False`), so a field hidden on the
+  profile screen cannot appear in the file.
 - **`user.visibility` must be reassigned, not mutated** — it is a plain `JSON`
   column, so `user.visibility[k] = v` leaves the instance clean and the commit
   writes nothing. Use `visibility.set_level`.
