@@ -18,6 +18,7 @@ from jbcub_bot.core.errors import (
     report_exception,
     summarize,
 )
+from jbcub_bot.core.oplog import OpsLog
 from jbcub_bot.main import build_dispatcher
 
 
@@ -85,7 +86,7 @@ async def test_report_never_clips_away_the_cause_of_a_deep_chain():
     # The summary is what survives no matter how deep the frames go — clipping
     # the traceback must not cost us the name of the actual failure.
     bot = FakeBot()
-    await report_exception(bot, {1}, _chained(), context="x" * 500)
+    await report_exception(OpsLog(bot, "", {1}), _chained(), context="x" * 500)
     text = bot.dms[0].text
     assert len(text) <= 4096  # Telegram's hard cap
     assert "ConnectionResetError: connection reset by peer" in text
@@ -96,7 +97,7 @@ async def test_report_never_clips_away_the_cause_of_a_deep_chain():
 
 async def test_report_dms_the_full_traceback_to_every_bootstrap_admin():
     bot = FakeBot()
-    await report_exception(bot, {111, 222}, _caught(lambda: 1 / 0),
+    await report_exception(OpsLog(bot, "", {111, 222}), _caught(lambda: 1 / 0),
                            context="/sync while reading cohort sdt")
     assert {dm.chat_id for dm in bot.dms} == {111, 222}
     assert "/sync while reading cohort sdt" in bot.dms[0].text
@@ -114,13 +115,15 @@ async def test_report_keeps_going_when_one_admin_never_opened_a_chat():
         failures.append(chat_id)
 
     bot.send_message = send_message
-    await report_exception(bot, [111, 222], _caught(lambda: 1 / 0), context="ctx")
+    await report_exception(OpsLog(bot, "", [111, 222]), _caught(lambda: 1 / 0),
+                           context="ctx")
     assert failures == [222]  # the reachable admin still got it
 
 
 async def test_report_logs_even_with_no_admins_configured(caplog):
     with caplog.at_level(logging.ERROR):
-        await report_exception(FakeBot(), set(), _caught(lambda: 1 / 0), context="ctx")
+        await report_exception(OpsLog(FakeBot(), "", set()), _caught(lambda: 1 / 0),
+                               context="ctx")
     assert "ZeroDivisionError" in caplog.text
     assert "Traceback (most recent call last)" in caplog.text
 
@@ -209,3 +212,25 @@ async def test_crashing_callback_handler_stops_the_spinner_and_reports(monkeypat
     assert "RuntimeError: settings blew up" in bot.dms[0].text
     assert any(type(m).__name__ == "AnswerCallbackQuery" for m in bot.sent), \
         "the callback was never answered — the button keeps spinning"
+
+
+async def test_a_crash_goes_to_the_log_chat_instead_of_the_admins(monkeypatch):
+    def boom():
+        raise RuntimeError("settings blew up")
+
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", boom)
+    factory = _factory()
+    admin = factory()
+    admin.add(User(last_name="A", first_name="Ann", telegram_id=777, role=Role.ADMIN))
+    admin.add(User(last_name="Ivan", matriculation="30000001", role=Role.STUDENT))
+    admin.commit()
+    admin.close()
+
+    dp = build_dispatcher(factory, bootstrap_ids={555}, log_chat_id="-1001234")
+    bot = FakeBot()
+    await dp.feed_update(bot, _callback_update(bot, 777, "dir:link:30000001"),
+                         dispatcher=dp)
+
+    assert [dm.chat_id for dm in bot.dms] == ["-1001234"], \
+        "the report should go to the log chat, not to the admin's DM"
+    assert "RuntimeError: settings blew up" in bot.dms[0].text

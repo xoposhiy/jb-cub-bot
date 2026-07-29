@@ -11,6 +11,7 @@ import jbcub_bot.features as features_pkg
 from jbcub_bot.core import registry
 from jbcub_bot.core.config import get_settings
 from jbcub_bot.core.db import get_session, init_db
+from jbcub_bot.core import oplog as oplog_mod
 from jbcub_bot.core.errors import report_exception, summarize
 from jbcub_bot.core.intents import IntentRouter
 from jbcub_bot.core.loader import discover_features
@@ -55,10 +56,15 @@ def describe_update(update: Update) -> str:
 NOTHING_MATCHED = "No one found."
 
 
-def build_dispatcher(session_factory, bootstrap_ids: set | None = None) -> Dispatcher:
+def build_dispatcher(session_factory, bootstrap_ids: set | None = None,
+                     log_chat_id: str = "") -> Dispatcher:
     dp = Dispatcher()
     dp.message.middleware(PrincipalMiddleware(session_factory, bootstrap_ids))
     dp.callback_query.middleware(PrincipalMiddleware(session_factory, bootstrap_ids))
+
+    def ops_log(bot):
+        """One per update: the Bot instance only exists per-update."""
+        return oplog_mod.OpsLog(bot, log_chat_id, bootstrap_ids or ())
 
     registry.reset()
     for feature in discover_features(features_pkg):
@@ -109,7 +115,7 @@ def build_dispatcher(session_factory, bootstrap_ids: set | None = None) -> Dispa
         logging the same traceback a second time without any of our context.
         """
         exc = event.exception
-        await report_exception(bot, bootstrap_ids, exc,
+        await report_exception(ops_log(bot), exc,
                               context=describe_update(event.update))
         try:
             if event.update.message is not None:
@@ -170,5 +176,6 @@ def run() -> None:
     settings = get_settings()
     init_db()  # run pending migrations, creating the schema on a fresh database
     bot = Bot(settings.bot_token)
-    dp = build_dispatcher(get_session, settings.bootstrap_admin_id_set)
+    dp = build_dispatcher(get_session, settings.bootstrap_admin_id_set,
+                          settings.log_chat_id)
     asyncio.run(_serve(bot, dp))
