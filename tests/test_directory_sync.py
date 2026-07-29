@@ -511,6 +511,44 @@ async def test_broken_gradebook_does_not_rollback_roster(session, monkeypatch):
     assert "2024 — 1 roster student; grades not updated, previous data kept" in said[-1]
 
 
+async def test_empty_gradebook_error_keeps_warning_and_source_button(
+    session,
+    monkeypatch,
+):
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [COHORT_HEADER, _cohort_row("30000001", "Ivanov", "Ivan", "ivan")]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            raise TimeoutError()
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER, ["30000001", "Ivanov", "Ivan", "Admin", "ivan"]]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message, _ = _sync_message()
+
+    await cmd_sync(
+        message, principal=User(last_name="A", role=Role.ADMIN), session=session
+    )
+
+    assert message.answer.await_count == 3
+    assert message.answer_document.await_count == 0
+    cohort_call = message.answer.await_args_list[1]
+    assert cohort_call.args[0].startswith("⚠️ 2024 processed")
+    assert "Gradebook was not updated (1)" in cohort_call.args[0]
+    assert "TimeoutError" in cohort_call.args[0]
+    button = cohort_call.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "Open 2024 spreadsheet"
+    assert button.url == "https://docs.google.com/spreadsheets/d/AAA"
+    final = message.answer.await_args_list[2].args[0]
+    assert final.startswith("⚠️ Sync completed with warnings")
+    assert "2024 — 1 roster student; grades not updated, previous data kept" in final
+
+
 async def test_gradebook_failure_does_not_stop_next_cohort(session, monkeypatch):
     def fake_fetch(sheet_id, sa, range_="A:Z"):
         if range_ == "Cohorts!A:Z":

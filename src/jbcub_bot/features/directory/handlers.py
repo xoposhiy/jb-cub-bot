@@ -86,7 +86,7 @@ async def _send_cohort_report(
             f"Open {outcome.cohort} spreadsheet",
             outcome.source_url,
         )
-        if outcome.issues or outcome.gradebook_error
+        if outcome.issues or outcome.gradebook_error is not None
         else None
     )
     if rendered.document_bytes is not None:
@@ -459,7 +459,7 @@ async def cmd_sync(message: Message, principal: User, session):
         except Exception as exc:
             session.rollback()
             _log.exception("Grades sync failed for cohort %s", cohort_name)
-            gradebook_error = str(exc)
+            gradebook_error = str(exc) or type(exc).__name__
 
         outcome = sync_diagnostics.CohortOutcome(
             cohort=cohort_name,
