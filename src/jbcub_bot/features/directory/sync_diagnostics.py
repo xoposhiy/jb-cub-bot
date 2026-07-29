@@ -284,11 +284,13 @@ def _final_gradebook_status(outcome: CohortOutcome) -> str:
     return f"{counted(outcome.gradebook.matched_people, 'Gradebook row')} matched"
 
 
-def render_final(
+def _final_heading(
     cohorts: list[CohortOutcome],
     rights: RightsOutcome,
-    completion_note: str | None = None,
+    completion_note: str | None,
 ) -> str:
+    if completion_note is not None:
+        return "⚠️ Sync partially completed"
     has_warnings = (
         any(
             outcome.issues
@@ -298,10 +300,16 @@ def render_final(
         )
         or bool(rights.issues)
         or not rights.updated
-        or completion_note is not None
     )
-    status = "⚠️ Sync completed with warnings" if has_warnings else "✅ Sync completed"
-    lines = [status]
+    return "⚠️ Sync completed with warnings" if has_warnings else "✅ Sync completed"
+
+
+def render_final(
+    cohorts: list[CohortOutcome],
+    rights: RightsOutcome,
+    completion_note: str | None = None,
+) -> str:
+    lines = [_final_heading(cohorts, rights, completion_note)]
     lines.extend(
         f"{outcome.cohort} — {counted(outcome.roster_students, 'roster student')}; "
         f"{_final_gradebook_status(outcome)}"
@@ -316,3 +324,31 @@ def render_final(
     if completion_note is not None:
         sections.append(completion_note)
     return "\n\n".join(sections)
+
+
+def render_final_report(
+    cohorts: list[CohortOutcome],
+    rights: RightsOutcome,
+    completion_note: str | None = None,
+) -> RenderedReport:
+    body = render_final(cohorts, rights, completion_note)
+    if len(body) <= MAX_REPORT_TEXT:
+        return RenderedReport(body, None, None, None)
+
+    rights_fact = (
+        f"Rights: {counted(rights.staff_records, 'staff record')}"
+        if rights.updated
+        else "Rights: not updated"
+    )
+    caption = "\n".join((
+        _final_heading(cohorts, rights, completion_note),
+        f"Cohorts: {counted(len(cohorts), 'cohort')}",
+        rights_fact,
+        "Full diagnostics attached.",
+    ))
+    return RenderedReport(
+        text=None,
+        caption=caption,
+        document_name="sync-final.txt",
+        document_bytes=body.encode("utf-8"),
+    )

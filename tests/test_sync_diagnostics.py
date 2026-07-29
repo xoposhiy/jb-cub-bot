@@ -205,6 +205,45 @@ def test_final_summary_names_every_cohort_and_the_rights_count():
     assert "1 of 2" not in text
 
 
+def test_oversized_final_report_becomes_one_complete_text_document():
+    cohort = CohortOutcome(
+        cohort="2024",
+        roster_students=1,
+        ignored_roster_rows=0,
+        gradebook=grades.GradesSyncReport(source_people=1, matched_people=1),
+        gradebook_error=None,
+        issues=(),
+        source_url="https://docs.google.com/spreadsheets/d/AAA",
+    )
+    items = tuple(
+        f"staff-{index:03d} — 2 rows"
+        for index in range(400)
+    )
+    rights = RightsOutcome(
+        staff_records=400,
+        issues=(
+            IssueGroup(
+                title="Duplicate Rights handles",
+                effect="These Rights rows resolve to the same profile.",
+                action="Correct the duplicate Telegram handles on the Rights tab",
+                items=items,
+            ),
+        ),
+        source_url="https://docs.google.com/spreadsheets/d/RIGHTS",
+    )
+    complete_text = render_final([cohort], rights)
+
+    rendered = sync_diagnostics.render_final_report([cohort], rights)
+
+    assert len(complete_text) > MAX_REPORT_TEXT
+    assert rendered.text is None
+    assert rendered.document_name == "sync-final.txt"
+    assert rendered.document_bytes == complete_text.encode("utf-8")
+    assert rendered.caption is not None
+    assert rendered.caption.startswith("⚠️ Sync completed with warnings")
+    assert len(rendered.caption) < 1024
+
+
 def test_final_summary_says_when_rights_were_not_updated():
     cohort = CohortOutcome(
         cohort="2024",
@@ -333,8 +372,9 @@ def test_final_warning_predicates_include_rights_issues_and_completion_note():
     )
 
     assert render_final([cohort], rights).startswith("⚠️ Sync completed with warnings")
-    assert render_final([cohort], RightsOutcome(1, (), "url"), "Note").startswith(
-        "⚠️ Sync completed with warnings"
+    assert (
+        render_final([cohort], RightsOutcome(1, (), "url"), "Note").splitlines()[0]
+        == "⚠️ Sync partially completed"
     )
 
 
@@ -363,7 +403,7 @@ def test_partial_completion_note_is_appended_exactly():
         completion_note=note,
     )
 
-    assert text.startswith("⚠️ Sync completed with warnings")
+    assert text.splitlines()[0] == "⚠️ Sync partially completed"
     assert text.endswith(note)
 
 

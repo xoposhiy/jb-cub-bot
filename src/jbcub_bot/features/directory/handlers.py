@@ -110,6 +110,48 @@ async def _show_no_commit_failure(progress) -> None:
         _log.exception("Failed to update the /sync failure status")
 
 
+async def _send_rendered_report(
+    message: Message,
+    rendered: sync_diagnostics.RenderedReport,
+    keyboard: InlineKeyboardMarkup | None,
+) -> None:
+    if rendered.document_bytes is not None:
+        assert rendered.document_name is not None
+        await message.answer_document(
+            BufferedInputFile(
+                rendered.document_bytes,
+                filename=rendered.document_name,
+            ),
+            caption=rendered.caption,
+            reply_markup=keyboard,
+        )
+        return
+    assert rendered.text is not None
+    await message.answer(rendered.text, reply_markup=keyboard)
+
+
+async def _send_final_report(
+    message: Message,
+    outcomes: list[sync_diagnostics.CohortOutcome],
+    rights_outcome: sync_diagnostics.RightsOutcome,
+    completion_note: str | None = None,
+) -> None:
+    keyboard = (
+        _source_keyboard("Open Rights spreadsheet", rights_outcome.source_url)
+        if rights_outcome.issues
+        else None
+    )
+    await _send_rendered_report(
+        message,
+        sync_diagnostics.render_final_report(
+            outcomes,
+            rights_outcome,
+            completion_note,
+        ),
+        keyboard,
+    )
+
+
 async def _show_partial_failure(
     message: Message,
     outcomes: list[sync_diagnostics.CohortOutcome],
@@ -123,16 +165,27 @@ async def _show_partial_failure(
             source_url=sheets.sheet_url(rights_sheet_id),
             updated=False,
         )
-        await message.answer(sync_diagnostics.render_final(
+        await _send_final_report(
+            message,
             outcomes,
             rights_outcome,
             completion_note=(
                 "The processed cohorts above remain updated; "
                 "the remaining sources were not completed."
             ),
-        ))
+        )
     except Exception:
         _log.exception("Failed to send the /sync partial-failure summary")
+
+
+async def _show_completed_report_failure(message: Message) -> None:
+    try:
+        await message.answer(
+            "⚠️ Sync changes were committed, but the completed sync report "
+            "could not be sent."
+        )
+    except Exception:
+        _log.exception("Failed to send the /sync committed-state notice")
 
 
 async def _send_cohort_report(
@@ -148,17 +201,7 @@ async def _send_cohort_report(
         if outcome.issues or outcome.gradebook_error is not None
         else None
     )
-    if rendered.document_bytes is not None:
-        await message.answer_document(
-            BufferedInputFile(
-                rendered.document_bytes,
-                filename=rendered.document_name,
-            ),
-            caption=rendered.caption,
-            reply_markup=keyboard,
-        )
-        return
-    await message.answer(rendered.text, reply_markup=keyboard)
+    await _send_rendered_report(message, rendered, keyboard)
 
 
 @cmd.command("me", "Show your own profile.")
@@ -468,7 +511,9 @@ async def cmd_sync(message: Message, principal: User, session):
         for record in records:
             record["primary_cohort"] = entry["cohort"]
             record["source_link"] = entry["link"]
-        ignored_roster_rows = max(0, len(rows) - 1 - len(records))
+        # The first non-person row is the separator itself; only rows after it
+        # are historical rows that the report should count as ignored.
+        ignored_roster_rows = max(0, len(rows) - len(records) - 2)
         parsed_cohorts.append(
             (
                 entry["cohort"],
@@ -617,12 +662,10 @@ async def cmd_sync(message: Message, principal: User, session):
         issues=sync_diagnostics.build_rights_issue_groups(rep),
         source_url=sheets.sheet_url(settings.rights_sheet_id),
     )
-    keyboard = (
-        _source_keyboard("Open Rights spreadsheet", rights_outcome.source_url)
-        if rights_outcome.issues
-        else None
-    )
-    await message.answer(
-        sync_diagnostics.render_final(outcomes, rights_outcome),
-        reply_markup=keyboard,
-    )
+    try:
+        await _send_final_report(message, outcomes, rights_outcome)
+    except Exception as exc:
+        await _show_completed_report_failure(message)
+        raise RuntimeError(
+            "/sync failed reporting the completed sync"
+        ) from exc

@@ -99,6 +99,10 @@ PARTIAL_COMPLETION_NOTE = (
     "The processed cohorts above remain updated; "
     "the remaining sources were not completed."
 )
+COMMITTED_REPORT_FAILURE_NOTICE = (
+    "⚠️ Sync changes were committed, but the completed sync report "
+    "could not be sent."
+)
 
 
 async def test_healthy_three_cohort_sync_sends_start_cohorts_and_final_only(
@@ -250,6 +254,62 @@ async def test_rights_problems_share_the_final_message_and_source_button(
 
     final_call = message.answer.await_args_list[-1]
     assert final_call.args[0].count("Duplicate Rights handles (1)") == 1
+    button = final_call.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "Open Rights spreadsheet"
+    assert button.url == "https://docs.google.com/spreadsheets/d/RIGHTS"
+
+
+async def test_oversized_final_report_is_one_complete_document_with_rights_button(
+    session,
+    monkeypatch,
+):
+    monkeypatch.setattr(sync_diagnostics, "MAX_REPORT_TEXT", 300)
+    handles = [f"staff{index:02d}" for index in range(12)]
+
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000001", "Known", "Student", "known"),
+            ]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(["Known", "Student", "91%"])
+        if range_ == "Rights!A:Z":
+            return [
+                RIGHTS_HEADER,
+                *[
+                    ["", f"Staff{index}", "Alex", "Admin", handle]
+                    for index, handle in enumerate(handles)
+                    for _ in range(2)
+                ],
+            ]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message, _ = _sync_message()
+
+    await cmd_sync(
+        message,
+        principal=User(last_name="Admin", role=Role.ADMIN),
+        session=session,
+    )
+
+    assert message.answer.await_count == 2
+    assert message.answer_document.await_count == 1
+    final_call = message.answer_document.await_args
+    document = final_call.args[0]
+    complete_text = document.data.decode("utf-8")
+    assert document.filename == "sync-final.txt"
+    assert complete_text.startswith("⚠️ Sync completed with warnings")
+    assert all(f"• {handle} — 2 rows" in complete_text for handle in handles)
+    assert final_call.kwargs["caption"].startswith(
+        "⚠️ Sync completed with warnings"
+    )
+    assert len(final_call.kwargs["caption"]) < 1024
     button = final_call.kwargs["reply_markup"].inline_keyboard[0][0]
     assert button.text == "Open Rights spreadsheet"
     assert button.url == "https://docs.google.com/spreadsheets/d/RIGHTS"
@@ -642,10 +702,119 @@ async def test_committed_cohort_send_failure_reports_partial_state_then_reraises
     assert session.query(Grade).filter_by(user_id=user.id, cohort="2024").count() == 1
     assert message.answer.await_count == 3
     partial_text = message.answer.await_args_list[-1].args[0]
-    assert partial_text.startswith("⚠️ Sync completed with warnings")
+    assert partial_text.splitlines()[0] == "⚠️ Sync partially completed"
     assert "2024 — 1 roster student; 1 Gradebook row matched" in partial_text
     assert "Rights: not updated; previous data kept" in partial_text
     assert partial_text.endswith(PARTIAL_COMPLETION_NOTE)
+
+
+async def test_completed_sync_text_report_failure_sends_notice_then_reraises(
+    session,
+    monkeypatch,
+):
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000001", "Ivanov", "Ivan", "ivan"),
+            ]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(["Ivanov", "Ivan", "91%"])
+        if range_ == "Rights!A:Z":
+            return [
+                RIGHTS_HEADER,
+                ["", "Boss", "Alice", "Admin", "boss"],
+            ]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message, progress = _sync_message()
+    send_error = ConnectionResetError("completed report send failed")
+    message.answer.side_effect = [progress, None, send_error, None]
+
+    with pytest.raises(RuntimeError) as err:
+        await cmd_sync(
+            message,
+            principal=User(last_name="A", role=Role.ADMIN),
+            session=session,
+        )
+
+    assert str(err.value) == "/sync failed reporting the completed sync"
+    assert err.value.__cause__ is send_error
+    assert message.answer.await_count == 4
+    assert message.answer.await_args_list[-1].args == (
+        COMMITTED_REPORT_FAILURE_NOTICE,
+    )
+    assert message.answer_document.await_count == 0
+    student = session.query(User).filter_by(matriculation="30000001").one()
+    assert student.primary_cohort == "2024"
+    assert session.query(Grade).filter_by(user_id=student.id).count() == 1
+    boss = session.query(User).filter_by(handle_sheet="boss").one()
+    assert boss.role is Role.ADMIN
+
+
+async def test_completed_sync_document_and_notice_failures_keep_primary_error(
+    session,
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setattr(sync_diagnostics, "MAX_REPORT_TEXT", 300)
+    handles = [f"staff{index:02d}" for index in range(12)]
+
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000001", "Ivanov", "Ivan", "ivan"),
+            ]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(["Ivanov", "Ivan", "91%"])
+        if range_ == "Rights!A:Z":
+            return [
+                RIGHTS_HEADER,
+                *[
+                    ["", f"Staff{index}", "Alex", "Admin", handle]
+                    for index, handle in enumerate(handles)
+                    for _ in range(2)
+                ],
+            ]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message, progress = _sync_message()
+    send_error = ConnectionResetError("completed document send failed")
+    notice_error = OSError("committed-state notice failed")
+    message.answer.side_effect = [progress, None, notice_error]
+    message.answer_document.side_effect = send_error
+
+    with caplog.at_level(logging.ERROR, logger=handlers.__name__):
+        with pytest.raises(RuntimeError) as err:
+            await cmd_sync(
+                message,
+                principal=User(last_name="A", role=Role.ADMIN),
+                session=session,
+            )
+
+    assert str(err.value) == "/sync failed reporting the completed sync"
+    assert err.value.__cause__ is send_error
+    assert message.answer_document.await_count == 1
+    assert message.answer.await_count == 3
+    assert message.answer.await_args_list[-1].args == (
+        COMMITTED_REPORT_FAILURE_NOTICE,
+    )
+    assert "committed-state notice failed" in caplog.text
+    student = session.query(User).filter_by(matriculation="30000001").one()
+    assert student.primary_cohort == "2024"
+    assert session.query(Grade).filter_by(user_id=student.id).count() == 1
+    assert session.query(User).filter_by(handle_sheet=handles[-1]).count() == 1
 
 
 async def test_later_cohort_write_failure_sends_partial_warning_then_reraises(
@@ -702,7 +871,7 @@ async def test_later_cohort_write_failure_sends_partial_warning_then_reraises(
     assert message.answer_document.await_count == 0
     assert message.answer.await_args_list[1].args[0].startswith("✅ 2024 processed")
     final_text = message.answer.await_args_list[2].args[0]
-    assert final_text.startswith("⚠️ Sync completed with warnings")
+    assert final_text.splitlines()[0] == "⚠️ Sync partially completed"
     assert "2024 — 1 roster student; 1 Gradebook row matched" in final_text
     assert final_text.endswith(PARTIAL_COMPLETION_NOTE)
     assert "Traceback" not in final_text
@@ -825,7 +994,7 @@ async def test_rights_write_failure_sends_partial_warning_then_reraises(
     assert message.answer.await_count == 3
     assert message.answer_document.await_count == 0
     final_text = message.answer.await_args_list[-1].args[0]
-    assert final_text.startswith("⚠️ Sync completed with warnings")
+    assert final_text.splitlines()[0] == "⚠️ Sync partially completed"
     assert "Rights: not updated; previous data kept" in final_text
     assert "Rights: 1 staff record" not in final_text
     assert final_text.endswith(PARTIAL_COMPLETION_NOTE)
@@ -897,8 +1066,41 @@ async def test_sync_reports_the_rows_it_ignored_below_the_roster(session, monkey
     said = [c.args[0] for c in msg.answer.await_args_list]
     report = next(m for m in said if m.startswith("⚠️ 2024 processed"))
     assert "Roster: 1 student" in report
-    assert "3 historical rows below the roster separator were ignored" in report
+    assert "2 historical rows below the roster separator were ignored" in report
     assert session.query(User).filter_by(matriculation="30000009").count() == 0
+
+
+async def test_sync_without_a_roster_separator_reports_no_ignored_rows(
+    session,
+    monkeypatch,
+):
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000001", "Ivanov", "Ivan", "ivan"),
+            ]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(["Ivanov", "Ivan", "91%"])
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message, _ = _sync_message()
+
+    await cmd_sync(
+        message,
+        principal=User(last_name="A", role=Role.ADMIN),
+        session=session,
+    )
+
+    cohort_report = message.answer.await_args_list[1].args[0]
+    assert "historical row" not in cohort_report
 
 
 async def test_sync_marks_and_reports_the_students_the_roster_dropped(session, monkeypatch):
@@ -1149,6 +1351,73 @@ async def test_broken_gradebook_does_not_rollback_roster(session, monkeypatch):
     retained = session.get(Grade, previous_grade_id)
     assert retained is not None
     assert retained.value == "previous read-failure grade"
+
+
+async def test_gradebook_mutation_failure_rolls_back_grades_but_keeps_roster_commit(
+    session,
+    monkeypatch,
+):
+    previous_grade_id = _seed_previous_grade(
+        session,
+        User(
+            matriculation="30000001",
+            last_name="Legacy",
+            first_name="Name",
+            primary_cohort="2024",
+        ),
+        "previous committed grade",
+    )
+
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000001", "Ivanov", "Ivan", "ivan"),
+            ]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(["Ivanov", "Ivan", "91%"])
+        if range_ == "Rights!A:Z":
+            return [
+                RIGHTS_HEADER,
+                ["30000001", "Ivanov", "Ivan", "Admin", "ivan"],
+            ]
+        return []
+
+    original_add = session.add
+    observed_new_grade_values = []
+
+    def fail_after_grade_delete(instance):
+        if isinstance(instance, Grade):
+            assert session.query(Grade).filter_by(cohort="2024").count() == 0
+            observed_new_grade_values.append(instance.value)
+            raise OSError("grade mutation failed after cohort delete")
+        return original_add(instance)
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    monkeypatch.setattr(session, "add", fail_after_grade_delete)
+    message, _ = _sync_message()
+
+    await cmd_sync(
+        message,
+        principal=User(last_name="A", role=Role.ADMIN),
+        session=session,
+    )
+
+    assert observed_new_grade_values == ["91%"]
+    retained = session.get(Grade, previous_grade_id)
+    assert retained is not None
+    assert retained.value == "previous committed grade"
+    assert session.query(Grade).filter_by(cohort="2024").count() == 1
+    user = session.query(User).filter_by(matriculation="30000001").one()
+    assert user.last_name == "Ivanov"
+    assert user.first_name == "Ivan"
+    assert user.handle_sheet == "ivan"
+    cohort_text = message.answer.await_args_list[1].args[0]
+    assert "grade mutation failed after cohort delete" in cohort_text
 
 
 async def test_empty_gradebook_error_keeps_warning_and_source_button(
