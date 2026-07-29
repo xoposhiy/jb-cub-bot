@@ -403,8 +403,8 @@ async def cmd_sync(message: Message, principal: User, session):
             raise RuntimeError(f"/sync failed writing cohort {cohort_name}") from exc
         await message.answer(
             f"{cohort_name}: {len(records)} rows, "
-            f"{departed} marked departed, drift={rep.drift or '-'}, "
-            f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}")
+            f"{len(departed)} marked departed, differences={rep.differences or '-'}, "
+            f"dup={rep.duplicates or '-'}")
 
         # This broad catch is deliberate: roster changes govern access and
         # have already committed, so a broken grades header must not roll them
@@ -441,6 +441,6 @@ async def cmd_sync(message: Message, principal: User, session):
         session.rollback()
         raise RuntimeError("/sync failed in the write phase") from exc
     await message.answer(
-        f"rights: {len(rights_records)} rows, drift={rep.drift or '-'}, "
-        f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}")
+        f"rights: {len(rights_records)} rows, differences={rep.differences or '-'}, "
+        f"dup={rep.duplicates or '-'}")
     await message.answer("Sync done.")

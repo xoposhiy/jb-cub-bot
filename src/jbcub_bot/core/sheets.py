@@ -189,6 +189,32 @@ from sqlalchemy import select
 from jbcub_bot.core.models import Role, User
 
 
+@dataclass(frozen=True)
+class DuplicateKey:
+    value: str
+    rows: int
+
+
+@dataclass(frozen=True)
+class FieldDifference:
+    key: str
+    field: str
+    sheet_value: str
+    profile_value: str
+
+
+@dataclass(frozen=True)
+class DepartedUser:
+    matriculation: str
+    full_name: str
+
+
+@dataclass
+class ReconcileReport:
+    differences: list[FieldDifference] = field(default_factory=list)
+    duplicates: list[DuplicateKey] = field(default_factory=list)
+
+
 def upsert_users(session, records: list[dict], key: str = "matriculation") -> None:
     for record in records:
         key_value = record.get(key)
@@ -216,8 +242,8 @@ def upsert_users(session, records: list[dict], key: str = "matriculation") -> No
 
 
 def mark_departed(session, cohort: str, records: list[dict], today: str,
-                  key: str = "matriculation") -> int:
-    """Mark this cohort's members that `records` no longer names. Returns how many.
+                  key: str = "matriculation") -> list[DepartedUser]:
+    """Mark this cohort's members that `records` no longer names and return them.
 
     Scoped to `primary_cohort == cohort` deliberately: every other cohort's
     students and every Rights-only row (admins and teachers, keyed on their
@@ -240,20 +266,16 @@ def mark_departed(session, cohort: str, records: list[dict], today: str,
     stmt = select(User).where(
         User.primary_cohort == cohort, User.departed_at.is_(None)
     )
-    marked = 0
+    marked: list[DepartedUser] = []
     for user in session.scalars(stmt).all():
         key_value = getattr(user, key)
         if key_value and key_value not in present:
             user.departed_at = today
-            marked += 1
+            marked.append(DepartedUser(
+                matriculation=str(key_value),
+                full_name=user.full_name,
+            ))
     return marked
-
-
-@dataclass
-class ReconcileReport:
-    drift: list = field(default_factory=list)
-    unmatched: list = field(default_factory=list)
-    duplicates: list = field(default_factory=list)
 
 
 # Fields the roster and the bot can both hold a value for: (the record key the
@@ -268,21 +290,36 @@ DRIFT_PAIRS = (
 
 def reconcile(session, records: list[dict], key: str = "matriculation") -> ReconcileReport:
     report = ReconcileReport()
-    keys = [r.get(key) for r in records if r.get(key)]
-    report.duplicates = [k for k, n in Counter(keys).items() if n > 1]
+    keys = [str(record.get(key)) for record in records if record.get(key)]
+    counts = Counter(keys)
+    report.duplicates = [
+        DuplicateKey(value=value, rows=count)
+        for value, count in counts.items()
+        if count > 1
+    ]
+    duplicate_values = {item.value for item in report.duplicates}
+
     for record in records:
-        key_value = record.get(key)
-        if not key_value:
+        raw_key = record.get(key)
+        if not raw_key or str(raw_key) in duplicate_values:
             continue
         user = session.scalar(
-            select(User).where(getattr(User, key) == key_value)
+            select(User).where(getattr(User, key) == raw_key)
         )
         if user is None:
-            report.unmatched.append(key_value)
             continue
         for sheet_key, own_column, label in DRIFT_PAIRS:
             sheet_value = record.get(sheet_key)
-            own_value = getattr(user, own_column)
-            if sheet_value and own_value and sheet_value != own_value:
-                report.drift.append(f"{key_value}:{label}")
+            profile_value = getattr(user, own_column)
+            if (
+                sheet_value
+                and profile_value
+                and sheet_value != profile_value
+            ):
+                report.differences.append(FieldDifference(
+                    key=str(raw_key),
+                    field=label,
+                    sheet_value=str(sheet_value),
+                    profile_value=str(profile_value),
+                ))
     return report

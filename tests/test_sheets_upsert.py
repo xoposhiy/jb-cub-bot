@@ -63,14 +63,17 @@ def test_upsert_clears_the_departed_mark_when_the_roster_names_them_again(sessio
 def test_mark_departed_marks_the_member_this_roster_no_longer_names(session):
     session.add_all([
         User(matriculation="1", last_name="Stays", primary_cohort="2024"),
-        User(matriculation="2", last_name="Left", primary_cohort="2024"),
+        User(matriculation="2", first_name="Eve", last_name="Expelled",
+             primary_cohort="2024"),
     ])
     session.commit()
 
     marked = sheets.mark_departed(session, "2024", [{"matriculation": "1"}],
                                   "2026-07-28")
 
-    assert marked == 1
+    assert marked == [
+        sheets.DepartedUser(matriculation="2", full_name="Eve Expelled")
+    ]
     stays, left = (session.query(User).filter_by(matriculation=m).one()
                    for m in ("1", "2"))
     assert stays.departed_at is None
@@ -89,7 +92,7 @@ def test_mark_departed_leaves_a_rights_only_admin_alone(session):
     marked = sheets.mark_departed(session, "2024", [{"matriculation": "1"}],
                                   "2026-07-28")
 
-    assert marked == 0
+    assert marked == []
     assert session.query(User).filter_by(handle_sheet="boss").one().departed_at is None
 
 
@@ -101,7 +104,7 @@ def test_mark_departed_never_reaches_into_another_cohort(session):
     marked = sheets.mark_departed(session, "2024", [{"matriculation": "1"}],
                                   "2026-07-28")
 
-    assert marked == 0
+    assert marked == []
     assert session.query(User).filter_by(matriculation="9").one().departed_at is None
 
 
@@ -115,7 +118,7 @@ def test_mark_departed_spares_a_member_who_has_no_matriculation_yet(session):
     marked = sheets.mark_departed(session, "2024", [{"matriculation": "1"}],
                                   "2026-07-28")
 
-    assert marked == 0
+    assert marked == []
     assert session.query(User).filter_by(last_name="Pending").one().departed_at is None
 
 
@@ -129,36 +132,55 @@ def test_mark_departed_keeps_the_date_of_the_sync_that_first_missed_them(session
     marked = sheets.mark_departed(session, "2024", [{"matriculation": "1"}],
                                   "2026-07-28")
 
-    assert marked == 0  # nothing new to report on a repeat sync
+    assert marked == []  # nothing new to report on a repeat sync
     assert session.query(User).filter_by(matriculation="2").one().departed_at == \
         "2026-07-01"
 
 
-def test_reconcile_reports_drift_unmatched_duplicates(session):
-    session.add(User(matriculation="1", last_name="Ivan",
-                     handle_observed="ivan_new"))
+def test_reconcile_reports_duplicate_keys_once_with_row_count(session):
+    session.add(User(matriculation="2", last_name="Petrov"))
     session.commit()
     records = [
-        {"matriculation": "1", "handle_sheet": "ivan_old"},   # drift
-        {"matriculation": "2", "handle_sheet": "x"},          # unmatched
-        {"matriculation": "2", "handle_sheet": "x"},          # duplicate key
+        {"matriculation": "2", "handle_sheet": "petr_a"},
+        {"matriculation": "2", "handle_sheet": "petr_b"},
     ]
+
     report = sheets.reconcile(session, records)
-    assert "1:telegram" in report.drift
-    assert "2" in report.unmatched
-    assert "2" in report.duplicates
+
+    assert report.duplicates == [sheets.DuplicateKey(value="2", rows=2)]
+    assert report.differences == []
 
 
-def test_reconcile_names_the_account_field_that_drifted(session):
-    session.add(User(matriculation="1", last_name="Ivan",
-                     github_self="alice-dev", codeforces_self="alice"))
+def test_reconcile_reports_both_values_for_a_profile_difference(session):
+    session.add(User(
+        matriculation="1",
+        last_name="Ivan",
+        handle_observed="ivan_new",
+        github_self="alice-dev",
+    ))
     session.commit()
-    records = [{"matriculation": "1", "github_sheet": "alice",
-                "codeforces_sheet": "alice"}]
+    records = [{
+        "matriculation": "1",
+        "handle_sheet": "ivan_old",
+        "github_sheet": "alice",
+    }]
 
     report = sheets.reconcile(session, records)
 
-    assert report.drift == ["1:github"]  # codeforces agrees, so it is not listed
+    assert report.differences == [
+        sheets.FieldDifference(
+            key="1",
+            field="telegram",
+            sheet_value="ivan_old",
+            profile_value="ivan_new",
+        ),
+        sheets.FieldDifference(
+            key="1",
+            field="github",
+            sheet_value="alice",
+            profile_value="alice-dev",
+        ),
+    ]
 
 
 def test_reconcile_ignores_a_field_only_one_side_filled(session):
@@ -166,4 +188,7 @@ def test_reconcile_ignores_a_field_only_one_side_filled(session):
     session.commit()
     records = [{"matriculation": "1", "github_sheet": ""}]
 
-    assert sheets.reconcile(session, records).drift == []
+    report = sheets.reconcile(session, records)
+
+    assert report.differences == []
+    assert report.duplicates == []
