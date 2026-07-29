@@ -314,6 +314,35 @@ def test_final_warning_predicates_include_rights_issues_and_completion_note():
     )
 
 
+def test_partial_completion_note_is_appended_exactly():
+    cohort = CohortOutcome(
+        cohort="2024",
+        roster_students=1,
+        ignored_roster_rows=0,
+        gradebook=grades.GradesSyncReport(source_people=1, matched_people=1),
+        gradebook_error=None,
+        issues=(),
+        source_url="https://docs.google.com/spreadsheets/d/AAA",
+    )
+    note = (
+        "The processed cohorts above remain updated; "
+        "the remaining sources were not completed."
+    )
+
+    text = render_final(
+        [cohort],
+        RightsOutcome(
+            staff_records=0,
+            issues=(),
+            source_url="https://docs.google.com/spreadsheets/d/RIGHTS",
+        ),
+        completion_note=note,
+    )
+
+    assert text.startswith("⚠️ Sync completed with warnings")
+    assert text.endswith(note)
+
+
 def test_document_caption_and_filename_bound_a_very_long_cohort_name():
     cohort = "sdt-" + ("2025-2028-" * 500)
     outcome = CohortOutcome(

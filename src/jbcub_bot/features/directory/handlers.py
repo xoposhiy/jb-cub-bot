@@ -76,6 +76,57 @@ def _source_keyboard(label: str, url: str) -> InlineKeyboardMarkup:
     ]])
 
 
+async def _abort_sync(
+    target,
+    *,
+    source: str,
+    error: str,
+    action: str,
+    url: str | None,
+) -> None:
+    text = (
+        f"❌ Sync aborted while reading {source}.\n\n"
+        "No roster changes were made.\n\n"
+        f"{error}\n\n"
+        f"Fix: {action}"
+    )
+    if url is None:
+        await target.answer(text)
+        return
+    await target.edit_text(
+        text,
+        reply_markup=_source_keyboard(f"Open {source}", url),
+    )
+
+
+async def _show_no_commit_failure(progress) -> None:
+    if progress is not None:
+        await progress.edit_text(
+            "❌ Sync failed before any roster changes were committed."
+        )
+
+
+async def _show_partial_failure(
+    message: Message,
+    outcomes: list[sync_diagnostics.CohortOutcome],
+    rights_records: list[dict],
+    rights_sheet_id: str,
+) -> None:
+    rights_outcome = sync_diagnostics.RightsOutcome(
+        staff_records=len(rights_records),
+        issues=(),
+        source_url=sheets.sheet_url(rights_sheet_id),
+    )
+    await message.answer(sync_diagnostics.render_final(
+        outcomes,
+        rights_outcome,
+        completion_note=(
+            "The processed cohorts above remain updated; "
+            "the remaining sources were not completed."
+        ),
+    ))
+
+
 async def _send_cohort_report(
     message: Message,
     outcome: sync_diagnostics.CohortOutcome,
@@ -340,7 +391,13 @@ async def cmd_sync(message: Message, principal: User, session):
                                settings.google_service_account_json)
     except (ValueError, FileNotFoundError, IsADirectoryError,
              json.JSONDecodeError) as exc:
-        await message.answer(f"Sync aborted (credentials): {exc}")
+        await _abort_sync(
+            message,
+            source="Google service-account credentials",
+            error=str(exc),
+            action="Configure valid Google service-account credentials.",
+            url=None,
+        )
         return
 
     # --- Parse phase: fetch + normalize everything; write nothing yet. ---
@@ -350,9 +407,16 @@ async def cmd_sync(message: Message, principal: User, session):
                                      f"{settings.cohorts_tab}!A:Z")
         cohorts = sheets.parse_cohort_index(index_rows)
     except sheets.MappingError as exc:
-        await message.answer(f"Sync aborted (Cohorts tab): {exc}")
+        await _abort_sync(
+            progress,
+            source="Cohorts tab",
+            error=str(exc),
+            action="Correct the Cohorts tab headers or field mapping.",
+            url=sheets.sheet_url(settings.rights_sheet_id),
+        )
         return
     except Exception as exc:  # network / API / anything unforeseen
+        await _show_no_commit_failure(progress)
         raise RuntimeError("/sync failed reading the Cohorts tab") from exc
 
     await progress.edit_text(
@@ -365,9 +429,16 @@ async def cmd_sync(message: Message, principal: User, session):
             rows = await read_rows(sheet_id, sa)
             records = sheets.normalize_rows(rows, entry["mapping"])
         except sheets.MappingError as exc:
-            await message.answer(f"Sync aborted (cohort {entry['cohort']}): {exc}")
+            await _abort_sync(
+                progress,
+                source=f"cohort {entry['cohort']}",
+                error=str(exc),
+                action="Correct the cohort Link, headers, or first roster row.",
+                url=sheets.sheet_url(entry["link"]),
+            )
             return
         except Exception as exc:
+            await _show_no_commit_failure(progress)
             raise RuntimeError(
                 f"/sync failed reading cohort {entry['cohort']} (sheet {sheet_id})"
             ) from exc
@@ -375,10 +446,15 @@ async def cmd_sync(message: Message, principal: User, session):
         # first data row or a link pointing at the wrong sheet. Writing it would
         # mark every one of its students departed and hide the cohort from itself.
         if not records:
-            await message.answer(
-                f"Sync aborted (cohort {entry['cohort']}): the sheet yielded no "
-                "roster rows, which would mark the whole cohort departed. Check "
-                "the Link and that the first data row names someone."
+            await _abort_sync(
+                progress,
+                source=f"cohort {entry['cohort']}",
+                error=(
+                    "The sheet yielded no roster rows, which would mark the "
+                    "whole cohort departed."
+                ),
+                action="Correct the cohort Link, headers, or first roster row.",
+                url=sheets.sheet_url(entry["link"]),
             )
             return
         for record in records:
@@ -405,9 +481,16 @@ async def cmd_sync(message: Message, principal: User, session):
         )
         rights_records = sheets.normalize_rows(rights_rows, rights_mapping)
     except sheets.MappingError as exc:
-        await message.answer(f"Sync aborted (Rights tab): {exc}")
+        await _abort_sync(
+            progress,
+            source="Rights tab",
+            error=str(exc),
+            action="Correct the Rights tab headers and role values.",
+            url=sheets.sheet_url(settings.rights_sheet_id),
+        )
         return
     except Exception as exc:
+        await _show_no_commit_failure(progress)
         raise RuntimeError("/sync failed reading the Rights tab") from exc
 
     for record in rights_records:
@@ -416,8 +499,12 @@ async def cmd_sync(message: Message, principal: User, session):
             try:
                 Role(role_value)
             except ValueError:
-                await message.answer(
-                    f"Sync aborted (Rights tab): invalid role {role_value!r}"
+                await _abort_sync(
+                    progress,
+                    source="Rights tab",
+                    error=f"Invalid role {role_value!r}.",
+                    action="Correct the Rights tab headers and role values.",
+                    url=sheets.sheet_url(settings.rights_sheet_id),
                 )
                 return
 
@@ -440,6 +527,15 @@ async def cmd_sync(message: Message, principal: User, session):
             session.commit()
         except Exception as exc:
             session.rollback()
+            if outcomes:
+                await _show_partial_failure(
+                    message,
+                    outcomes,
+                    rights_records,
+                    settings.rights_sheet_id,
+                )
+            else:
+                await _show_no_commit_failure(progress)
             raise RuntimeError(f"/sync failed writing cohort {cohort_name}") from exc
 
         # This broad catch is deliberate: roster changes govern access and
@@ -487,6 +583,15 @@ async def cmd_sync(message: Message, principal: User, session):
         session.commit()
     except Exception as exc:
         session.rollback()
+        if outcomes:
+            await _show_partial_failure(
+                message,
+                outcomes,
+                rights_records,
+                settings.rights_sheet_id,
+            )
+        else:
+            await _show_no_commit_failure(progress)
         raise RuntimeError("/sync failed in the write phase") from exc
     rights_outcome = sync_diagnostics.RightsOutcome(
         staff_records=len(rights_records),

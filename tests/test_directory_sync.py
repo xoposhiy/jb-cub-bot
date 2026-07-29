@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from jbcub_bot.features.directory import handlers
+from jbcub_bot.features.directory import handlers, sync_diagnostics
 from jbcub_bot.features.directory.handlers import cmd_sync
 from jbcub_bot.core.models import Grade, Role, User
 
@@ -74,6 +74,13 @@ def _sync_message():
         answer_document=AsyncMock(),
     )
     return message, progress
+
+
+NO_COMMIT_FAILURE = "❌ Sync failed before any roster changes were committed."
+PARTIAL_COMPLETION_NOTE = (
+    "The processed cohorts above remain updated; "
+    "the remaining sources were not completed."
+)
 
 
 async def test_healthy_three_cohort_sync_sends_start_cohorts_and_final_only(
@@ -145,6 +152,132 @@ async def test_healthy_three_cohort_sync_sends_start_cohorts_and_final_only(
     )
 
 
+async def test_cohort_problems_share_one_grouped_message_and_source_button(
+    session,
+    monkeypatch,
+):
+    unknown = [
+        [f"Unknown{index}", "Student", "50%"]
+        for index in range(10)
+    ]
+
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000001", "Known", "Student", "known"),
+            ]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(*unknown)
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message, _ = _sync_message()
+
+    await cmd_sync(
+        message,
+        principal=User(last_name="Admin", role=Role.ADMIN),
+        session=session,
+    )
+
+    cohort_call = message.answer.await_args_list[1]
+    text = cohort_call.args[0]
+    assert text.count("Gradebook rows without a roster match (10)") == 1
+    assert text.count("These Gradebook rows were not imported.") == 1
+    for index in range(10):
+        assert f"Unknown{index} Student" in text
+    button = cohort_call.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "Open 2024 spreadsheet"
+    assert button.url == "https://docs.google.com/spreadsheets/d/AAA"
+
+
+async def test_rights_problems_share_the_final_message_and_source_button(
+    session,
+    monkeypatch,
+):
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000001", "Known", "Student", "known"),
+            ]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(["Known", "Student", "91%"])
+        if range_ == "Rights!A:Z":
+            return [
+                RIGHTS_HEADER,
+                ["", "Boss", "Alice", "Admin", "boss"],
+                ["", "Boss", "Alice", "Admin", "boss"],
+            ]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message, _ = _sync_message()
+
+    await cmd_sync(
+        message,
+        principal=User(last_name="Admin", role=Role.ADMIN),
+        session=session,
+    )
+
+    final_call = message.answer.await_args_list[-1]
+    assert final_call.args[0].count("Duplicate Rights handles (1)") == 1
+    button = final_call.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "Open Rights spreadsheet"
+    assert button.url == "https://docs.google.com/spreadsheets/d/RIGHTS"
+
+
+async def test_oversized_cohort_report_is_one_document_message(
+    session,
+    monkeypatch,
+):
+    monkeypatch.setattr(sync_diagnostics, "MAX_REPORT_TEXT", 300)
+
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000001", "Known", "Student", "known"),
+            ]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(*[
+                [f"Unknown{index}", "Student", "50%"]
+                for index in range(20)
+            ])
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message, _ = _sync_message()
+
+    await cmd_sync(
+        message,
+        principal=User(last_name="Admin", role=Role.ADMIN),
+        session=session,
+    )
+
+    assert message.answer_document.await_count == 1
+    document_call = message.answer_document.await_args
+    assert document_call.kwargs["caption"].startswith("⚠️ 2024 processed")
+    assert document_call.kwargs["reply_markup"] is not None
+    assert message.answer.await_count == 2
+
+
 async def test_sync_denied_for_non_admin(session, monkeypatch):
     called = []
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows",
@@ -164,10 +297,22 @@ async def test_sync_aborts_on_credential_error_without_raising(session, monkeypa
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
                         raise_credential_error)
-    msg = SimpleNamespace(answer=AsyncMock())
-    await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
-    msg.answer.assert_awaited_once()
-    assert msg.answer.await_args.args[0].startswith("Sync aborted (credentials):")
+    message, progress = _sync_message()
+
+    await cmd_sync(
+        message,
+        principal=User(last_name="A", role=Role.ADMIN),
+        session=session,
+    )
+
+    message.answer.assert_awaited_once_with(
+        "❌ Sync aborted while reading Google service-account credentials.\n\n"
+        "No roster changes were made.\n\n"
+        "No Google service-account credentials configured: set either "
+        "GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SERVICE_ACCOUNT_FILE.\n\n"
+        "Fix: Configure valid Google service-account credentials."
+    )
+    progress.edit_text.assert_not_awaited()
 
 
 async def test_sync_aborts_and_writes_nothing_on_cohort_parse_error(session, monkeypatch):
@@ -184,9 +329,27 @@ async def test_sync_aborts_and_writes_nothing_on_cohort_parse_error(session, mon
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
                         lambda *a: None)
-    msg = SimpleNamespace(answer=AsyncMock())
-    await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
-    assert "aborted" in msg.answer.await_args.args[0].lower()
+    message, progress = _sync_message()
+
+    await cmd_sync(
+        message,
+        principal=User(last_name="A", role=Role.ADMIN),
+        session=session,
+    )
+
+    assert message.answer.await_count == 1
+    abort_call = progress.edit_text.await_args
+    assert abort_call.args[0].startswith(
+        "❌ Sync aborted while reading cohort 2099.\n\n"
+        "No roster changes were made.\n\n"
+    )
+    assert "column 'Matriculation Num.'" in abort_call.args[0]
+    assert abort_call.args[0].endswith(
+        "Fix: Correct the cohort Link, headers, or first roster row."
+    )
+    button = abort_call.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "Open cohort 2099"
+    assert button.url == "https://docs.google.com/spreadsheets/d/BBB"
     assert session.query(User).count() == 0  # write phase never reached
 
 
@@ -280,12 +443,15 @@ async def test_sync_labels_the_phase_and_reraises_an_unexpected_sheet_error(
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
                         lambda *a: None)
-    msg = SimpleNamespace(answer=AsyncMock())
+    message, progress = _sync_message()
     with pytest.raises(RuntimeError) as err:
-        await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN),
+        await cmd_sync(message, principal=User(last_name="A", role=Role.ADMIN),
                        session=session)
-    assert "cohort 2024" in str(err.value)
+    assert str(err.value) == "/sync failed reading cohort 2024 (sheet AAA)"
     assert isinstance(err.value.__cause__, ConnectionResetError)
+    progress.edit_text.assert_awaited_with(NO_COMMIT_FAILURE)
+    assert message.answer.await_count == 1
+    assert "Traceback" not in progress.edit_text.await_args.args[0]
     assert session.query(User).count() == 0  # write phase never reached
 
 
@@ -302,11 +468,248 @@ async def test_sync_times_out_instead_of_freezing_on_a_stalled_sheet_read(
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
                         lambda *a: None)
     monkeypatch.setattr(handlers, "SHEET_READ_TIMEOUT", 0.01)
-    msg = SimpleNamespace(answer=AsyncMock())
+    message, progress = _sync_message()
     with pytest.raises(RuntimeError) as err:
-        await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN),
+        await cmd_sync(message, principal=User(last_name="A", role=Role.ADMIN),
                        session=session)
+    assert str(err.value) == "/sync failed reading the Cohorts tab"
     assert isinstance(err.value.__cause__, TimeoutError)
+    progress.edit_text.assert_awaited_once_with(NO_COMMIT_FAILURE)
+    assert message.answer.await_count == 1
+
+
+async def test_sync_labels_and_reraises_an_unexpected_rights_read_error(
+    session,
+    monkeypatch,
+):
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000001", "Ivanov", "Ivan", "ivan"),
+            ]
+        if range_ == "Rights!A:Z":
+            raise ConnectionResetError("rights read failed")
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message, progress = _sync_message()
+
+    with pytest.raises(RuntimeError) as err:
+        await cmd_sync(
+            message,
+            principal=User(last_name="A", role=Role.ADMIN),
+            session=session,
+        )
+
+    assert str(err.value) == "/sync failed reading the Rights tab"
+    assert isinstance(err.value.__cause__, ConnectionResetError)
+    assert str(err.value.__cause__) == "rights read failed"
+    progress.edit_text.assert_awaited_with(NO_COMMIT_FAILURE)
+    assert message.answer.await_count == 1
+    assert session.query(User).count() == 0
+
+
+async def test_sync_labels_a_first_cohort_write_failure_without_claiming_changes(
+    session,
+    monkeypatch,
+):
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000001", "Ivanov", "Ivan", "ivan"),
+            ]
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER]
+        return []
+
+    def fail_roster_write(session_arg, records, key="matriculation"):
+        raise OSError("database unavailable")
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    monkeypatch.setattr(handlers.sheets, "upsert_users", fail_roster_write)
+    message, progress = _sync_message()
+
+    with pytest.raises(RuntimeError) as err:
+        await cmd_sync(
+            message,
+            principal=User(last_name="A", role=Role.ADMIN),
+            session=session,
+        )
+
+    assert str(err.value) == "/sync failed writing cohort 2024"
+    assert isinstance(err.value.__cause__, OSError)
+    assert str(err.value.__cause__) == "database unavailable"
+    progress.edit_text.assert_awaited_with(NO_COMMIT_FAILURE)
+    assert message.answer.await_count == 1
+    assert session.query(User).count() == 0
+
+
+async def test_later_cohort_write_failure_sends_partial_warning_then_reraises(
+    session,
+    monkeypatch,
+):
+    original_upsert = handlers.sheets.upsert_users
+
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [
+                COHORTS_HEADER,
+                _cohorts_row("2024", "AAA"),
+                _cohorts_row("2025", "BBB"),
+            ]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000001", "Ivanov", "Ivan", "ivan"),
+            ]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(["Ivanov", "Ivan", "91%"])
+        if sheet_id == "BBB" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000002", "Petrov", "Petr", "petr"),
+            ]
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER]
+        return []
+
+    def fail_second_cohort(session_arg, records, key="matriculation"):
+        if records and records[0].get("primary_cohort") == "2025":
+            raise OSError("second cohort write failed")
+        return original_upsert(session_arg, records, key=key)
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    monkeypatch.setattr(handlers.sheets, "upsert_users", fail_second_cohort)
+    message, progress = _sync_message()
+
+    with pytest.raises(RuntimeError) as err:
+        await cmd_sync(
+            message,
+            principal=User(last_name="A", role=Role.ADMIN),
+            session=session,
+        )
+
+    assert str(err.value) == "/sync failed writing cohort 2025"
+    assert isinstance(err.value.__cause__, OSError)
+    assert str(err.value.__cause__) == "second cohort write failed"
+    assert message.answer.await_count == 3
+    assert message.answer_document.await_count == 0
+    assert message.answer.await_args_list[1].args[0].startswith("✅ 2024 processed")
+    final_text = message.answer.await_args_list[2].args[0]
+    assert final_text.startswith("⚠️ Sync completed with warnings")
+    assert "2024 — 1 roster student; 1 Gradebook row matched" in final_text
+    assert final_text.endswith(PARTIAL_COMPLETION_NOTE)
+    assert "Traceback" not in final_text
+    assert all(
+        call.args[0] != NO_COMMIT_FAILURE
+        for call in progress.edit_text.await_args_list
+    )
+    assert session.query(User).filter_by(matriculation="30000001").count() == 1
+    assert session.query(User).filter_by(matriculation="30000002").count() == 0
+
+
+async def test_rights_write_failure_sends_partial_warning_then_reraises(
+    session,
+    monkeypatch,
+):
+    original_upsert = handlers.sheets.upsert_users
+
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000001", "Ivanov", "Ivan", "ivan"),
+            ]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(["Ivanov", "Ivan", "91%"])
+        if range_ == "Rights!A:Z":
+            return [
+                RIGHTS_HEADER,
+                ["", "Boss", "Alice", "Admin", "boss"],
+            ]
+        return []
+
+    def fail_rights_write(session_arg, records, key="matriculation"):
+        if key == "handle_sheet":
+            raise OSError("rights write failed")
+        return original_upsert(session_arg, records, key=key)
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    monkeypatch.setattr(handlers.sheets, "upsert_users", fail_rights_write)
+    message, _ = _sync_message()
+
+    with pytest.raises(RuntimeError) as err:
+        await cmd_sync(
+            message,
+            principal=User(last_name="A", role=Role.ADMIN),
+            session=session,
+        )
+
+    assert str(err.value) == "/sync failed in the write phase"
+    assert isinstance(err.value.__cause__, OSError)
+    assert str(err.value.__cause__) == "rights write failed"
+    assert message.answer.await_count == 3
+    assert message.answer_document.await_count == 0
+    final_text = message.answer.await_args_list[-1].args[0]
+    assert final_text.startswith("⚠️ Sync completed with warnings")
+    assert final_text.endswith(PARTIAL_COMPLETION_NOTE)
+    assert "Traceback" not in final_text
+    assert session.query(User).filter_by(matriculation="30000001").count() == 1
+    assert session.query(User).filter_by(handle_sheet="boss").count() == 0
+
+
+async def test_rights_write_failure_without_a_cohort_commit_edits_the_start(
+    session,
+    monkeypatch,
+):
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER]
+        if range_ == "Rights!A:Z":
+            return [
+                RIGHTS_HEADER,
+                ["", "Boss", "Alice", "Admin", "boss"],
+            ]
+        return []
+
+    def fail_rights_write(session_arg, records, key="matriculation"):
+        raise OSError("rights write failed before a cohort commit")
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    monkeypatch.setattr(handlers.sheets, "upsert_users", fail_rights_write)
+    message, progress = _sync_message()
+
+    with pytest.raises(RuntimeError) as err:
+        await cmd_sync(
+            message,
+            principal=User(last_name="A", role=Role.ADMIN),
+            session=session,
+        )
+
+    assert str(err.value) == "/sync failed in the write phase"
+    assert isinstance(err.value.__cause__, OSError)
+    assert str(err.value.__cause__) == "rights write failed before a cohort commit"
+    progress.edit_text.assert_awaited_with(NO_COMMIT_FAILURE)
+    assert message.answer.await_count == 1
+    assert session.query(User).count() == 0
 
 
 async def test_sync_reports_the_rows_it_ignored_below_the_roster(session, monkeypatch):
@@ -408,11 +811,26 @@ async def test_sync_aborts_rather_than_mark_a_whole_cohort_departed(session, mon
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
                         lambda *a: None)
-    msg = SimpleNamespace(answer=AsyncMock())
-    await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
+    message, progress = _sync_message()
 
-    last = msg.answer.await_args.args[0]
-    assert last.startswith("Sync aborted (cohort 2024):")
+    await cmd_sync(
+        message,
+        principal=User(last_name="A", role=Role.ADMIN),
+        session=session,
+    )
+
+    assert message.answer.await_count == 1
+    abort_call = progress.edit_text.await_args
+    assert abort_call.args[0] == (
+        "❌ Sync aborted while reading cohort 2024.\n\n"
+        "No roster changes were made.\n\n"
+        "The sheet yielded no roster rows, which would mark the whole cohort "
+        "departed.\n\n"
+        "Fix: Correct the cohort Link, headers, or first roster row."
+    )
+    button = abort_call.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "Open cohort 2024"
+    assert button.url == "https://docs.google.com/spreadsheets/d/AAA"
     assert session.query(User).filter_by(matriculation="30000001").one().departed_at \
         is None
 
@@ -430,11 +848,27 @@ async def test_sync_aborts_on_a_misspelled_field_column_in_the_cohorts_tab(
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
                         lambda *a: None)
-    msg = SimpleNamespace(answer=AsyncMock())
-    await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
-    last = msg.answer.await_args.args[0]
-    assert last.startswith("Sync aborted (Cohorts tab):")
-    assert "last_nmae" in last
+    message, progress = _sync_message()
+
+    await cmd_sync(
+        message,
+        principal=User(last_name="A", role=Role.ADMIN),
+        session=session,
+    )
+
+    assert message.answer.await_count == 1
+    abort_call = progress.edit_text.await_args
+    assert abort_call.args[0].startswith(
+        "❌ Sync aborted while reading Cohorts tab.\n\n"
+        "No roster changes were made.\n\n"
+    )
+    assert "last_nmae" in abort_call.args[0]
+    assert abort_call.args[0].endswith(
+        "Fix: Correct the Cohorts tab headers or field mapping."
+    )
+    button = abort_call.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "Open Cohorts tab"
+    assert button.url == "https://docs.google.com/spreadsheets/d/RIGHTS"
     assert session.query(User).count() == 0
 
 
@@ -453,11 +887,27 @@ async def test_sync_aborts_when_rights_has_no_handle_column(session, monkeypatch
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
                         lambda *a: None)
-    msg = SimpleNamespace(answer=AsyncMock())
-    await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
-    last = msg.answer.await_args.args[0]
-    assert last.startswith("Sync aborted (Rights tab):")
-    assert "handle_sheet" in last
+    message, progress = _sync_message()
+
+    await cmd_sync(
+        message,
+        principal=User(last_name="A", role=Role.ADMIN),
+        session=session,
+    )
+
+    assert message.answer.await_count == 1
+    abort_call = progress.edit_text.await_args
+    assert abort_call.args[0].startswith(
+        "❌ Sync aborted while reading Rights tab.\n\n"
+        "No roster changes were made.\n\n"
+    )
+    assert "handle_sheet" in abort_call.args[0]
+    assert abort_call.args[0].endswith(
+        "Fix: Correct the Rights tab headers and role values."
+    )
+    button = abort_call.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "Open Rights tab"
+    assert button.url == "https://docs.google.com/spreadsheets/d/RIGHTS"
     assert session.query(User).count() == 0
 
 
@@ -475,9 +925,25 @@ async def test_sync_aborts_and_writes_nothing_on_invalid_role(session, monkeypat
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
                         lambda *a: None)
-    msg = SimpleNamespace(answer=AsyncMock())
-    await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
-    assert "aborted" in msg.answer.await_args.args[0].lower()
+    message, progress = _sync_message()
+
+    await cmd_sync(
+        message,
+        principal=User(last_name="A", role=Role.ADMIN),
+        session=session,
+    )
+
+    assert message.answer.await_count == 1
+    abort_call = progress.edit_text.await_args
+    assert abort_call.args[0] == (
+        "❌ Sync aborted while reading Rights tab.\n\n"
+        "No roster changes were made.\n\n"
+        "Invalid role 'superuser'.\n\n"
+        "Fix: Correct the Rights tab headers and role values."
+    )
+    button = abort_call.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "Open Rights tab"
+    assert button.url == "https://docs.google.com/spreadsheets/d/RIGHTS"
     assert session.query(User).count() == 0
 
 
@@ -502,13 +968,13 @@ async def test_broken_gradebook_does_not_rollback_roster(session, monkeypatch):
     )
     user = session.query(User).filter_by(matriculation="30000001").one()
     assert user.primary_cohort == "2024"
-    said = [call.args[0] for call in message.answer.await_args_list]
-    report = next(text for text in said if text.startswith("⚠️ 2024 processed"))
-    assert "Gradebook: not updated; previous data kept" in report
-    assert "Gradebook was not updated (1)" in report
-    assert "boom" in report
-    assert said[-1].startswith("⚠️ Sync completed with warnings")
-    assert "2024 — 1 roster student; grades not updated, previous data kept" in said[-1]
+    cohort_text = message.answer.await_args_list[1].args[0]
+    final_text = message.answer.await_args_list[-1].args[0]
+    assert "Gradebook: not updated; previous data kept" in cohort_text
+    assert "Gradebook was not updated (1)" in cohort_text
+    assert "ConnectionResetError" in cohort_text or "boom" in cohort_text
+    assert final_text.startswith("⚠️ Sync completed with warnings")
+    assert "grades not updated, previous data kept" in final_text
 
 
 async def test_empty_gradebook_error_keeps_warning_and_source_button(
