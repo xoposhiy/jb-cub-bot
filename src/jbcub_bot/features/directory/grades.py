@@ -25,13 +25,43 @@ from jbcub_bot.features.directory.screens import EXPIRED
 from jbcub_bot.features.directory.visibility import is_staff
 
 
+@dataclass(frozen=True)
+class CountedName:
+    name: str
+    count: int
+
+
 @dataclass
 class GradesSyncReport:
-    matched: int = 0
+    source_people: int = 0
+    matched_people: int = 0
     cells: int = 0
-    unmatched: list = field(default_factory=list)
-    duplicates: list = field(default_factory=list)
-    ignored_columns: int = 0
+    no_roster_match: list[str] = field(default_factory=list)
+    ambiguous_roster_match: list[CountedName] = field(default_factory=list)
+    missing_gradebook_rows: list[str] = field(default_factory=list)
+    duplicate_rows: list[CountedName] = field(default_factory=list)
+    ignored_columns: list[gradebook.IgnoredColumn] = field(default_factory=list)
+
+    @property
+    def matched(self) -> int:
+        """Compatibility for the temporary legacy /sync progress text."""
+        return self.matched_people
+
+    @property
+    def unmatched(self) -> list[str]:
+        """Compatibility for the temporary legacy /sync progress text."""
+        return self.no_roster_match + [
+            item.name for item in self.ambiguous_roster_match
+        ]
+
+    @property
+    def duplicates(self) -> list[str]:
+        """Compatibility for the temporary legacy /sync progress text."""
+        return [
+            item.name
+            for item in self.duplicate_rows
+            for _ in range(item.count)
+        ]
 
 
 def sync_cohort(
@@ -45,10 +75,22 @@ def sync_cohort(
     parsed = gradebook.parse_gradebook(
         rows, mapping["last_name"], mapping["first_name"]
     )
-    report = GradesSyncReport(ignored_columns=parsed.ignored_columns)
+    report = GradesSyncReport(
+        source_people=len(parsed.rows),
+        ignored_columns=parsed.ignored_columns,
+    )
 
     names = [(fold(row.last_name), fold(row.first_name)) for row in parsed.rows]
-    duplicate_keys = {key for key, count in Counter(names).items() if count > 1}
+    counts = Counter(names)
+    display_names = {
+        key: f"{row.last_name} {row.first_name}".strip()
+        for row, key in zip(parsed.rows, names)
+    }
+    report.duplicate_rows = [
+        CountedName(name=display_names[key], count=count)
+        for key, count in counts.items()
+        if count > 1
+    ]
 
     candidates = session.scalars(
         select(User).where(User.primary_cohort == cohort)
@@ -57,20 +99,34 @@ def sync_cohort(
     for user in candidates:
         by_name.setdefault((fold(user.last_name), fold(user.first_name)), []).append(user)
 
+    source_keys = set(names)
+    report.missing_gradebook_rows = sorted(
+        f"{user.last_name} {user.first_name}".strip()
+        for user in candidates
+        if user.departed_at is None
+        and user.last_name
+        and user.first_name
+        and (fold(user.last_name), fold(user.first_name)) not in source_keys
+    )
+
     session.execute(delete(Grade).where(Grade.cohort == cohort))
 
     columns = {column.index: column for column in parsed.columns}
     for row, key in zip(parsed.rows, names):
-        name = f"{row.last_name} {row.first_name}"
-        if key in duplicate_keys:
-            report.duplicates.append(name)
+        if counts[key] > 1:
             continue
-        matches = by_name.get(key)
-        if not matches or len(matches) > 1:
-            report.unmatched.append(name)
+        matches = by_name.get(key, [])
+        name = display_names[key]
+        if not matches:
+            report.no_roster_match.append(name)
+            continue
+        if len(matches) > 1:
+            report.ambiguous_roster_match.append(
+                CountedName(name=name, count=len(matches))
+            )
             continue
         user = matches[0]
-        report.matched += 1
+        report.matched_people += 1
         for index, value in row.cells.items():
             column = columns[index]
             session.add(Grade(
@@ -83,6 +139,10 @@ def sync_cohort(
                 position=index,
             ))
             report.cells += 1
+    report.no_roster_match.sort()
+    report.ambiguous_roster_match.sort(key=lambda item: item.name)
+    report.missing_gradebook_rows.sort()
+    report.duplicate_rows.sort(key=lambda item: item.name)
     return report
 
 
