@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     bootstrap_admin_ids: str = ""
     cohorts_tab: str = "Cohorts"
     rights_tab: str = "Rights"
+    gradebook_tab: str = "Gradebook"
 
     @property
     def bootstrap_admin_id_set(self) -> set[int]:

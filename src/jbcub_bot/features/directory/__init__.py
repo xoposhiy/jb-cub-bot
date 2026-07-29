@@ -1,12 +1,13 @@
 from jbcub_bot.core.loader import Manifest
 from jbcub_bot.core.models import Role
-from jbcub_bot.features.directory import edit, privacy
+from jbcub_bot.features.directory import edit, grades, privacy
 from jbcub_bot.features.directory.handlers import cmd, name_search_intent, router
 
 # The privacy and edit screens keep their own routers so they can live in their
 # own modules; the loader only ever sees the feature's single top-level router.
 router.include_router(privacy.router)
 router.include_router(edit.router)
+router.include_router(grades.router)
 
 manifest = Manifest(
     name="directory",

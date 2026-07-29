@@ -16,6 +16,7 @@ from sqlalchemy.pool import StaticPool
 
 import jbcub_bot.features.directory as directory
 from jbcub_bot.core.db import Base
+from jbcub_bot.core import impersonation
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.directory.screens import EXPIRED, NO_ROW, NOT_LINKED
 from jbcub_bot.features.directory.visibility import COHORT, EVERYONE, STAFF_ONLY
@@ -265,23 +266,54 @@ def test_manifest_lists_the_privacy_command():
     assert "privacy" in names
 
 
-# --- Fix 1: /privacy under /as shows the target read-only -------------------
+# --- Interactive /as keeps every privacy action on the target ---------------
 
-async def test_privacy_under_impersonation_shows_the_target_with_no_keyboard():
+async def test_privacy_under_impersonation_updates_the_target():
     factory = _session_factory()
     _seed_admin_and_student(factory)
     dp = build_dispatcher(session_factory=factory)
     fake_bot = FakeBot()
 
     await dp.feed_update(fake_bot,
-                         _message_update(fake_bot, 777, "/as 30009999 /privacy"),
+                         _message_update(fake_bot, 777, "/as 30009999 /me"),
                          dispatcher=dp)
 
-    # sent[0] is cmd_as's "Showing as ..." notice; sent[1] is the propagated
-    # /privacy answer.
+    # Start where the reported bug starts: the target's own profile.
     shown = fake_bot.sent[1]
-    assert "student@gmail.com" in shown.text  # the target's row, not the admin's
-    assert shown.reply_markup is None  # nothing tappable while impersonating
+    privacy_button = impersonation.callback_data("dir:privacy", "30009999")
+    assert privacy_button in [
+        button.callback_data
+        for row in shown.reply_markup.inline_keyboard
+        for button in row
+    ]
+
+    await dp.feed_update(
+        fake_bot,
+        _callback_update(fake_bot, 777, privacy_button),
+        dispatcher=dp,
+    )
+    privacy_screen = _edits(fake_bot)[-1]
+    assert "student@gmail.com" in privacy_screen.text
+    gmail = impersonation.callback_data("dir:vis:gmail", "30009999")
+    assert gmail in [
+        button.callback_data
+        for row in privacy_screen.reply_markup.inline_keyboard
+        for button in row
+    ]
+
+    await dp.feed_update(
+        fake_bot, _callback_update(fake_bot, 777, gmail), dispatcher=dp
+    )
+
+    assert _stored_level(factory, "gmail") == EVERYONE
+    redraw = _edits(fake_bot)[-1]
+    assert impersonation.callback_data(
+        "dir:profile", "30009999"
+    ) in [
+        button.callback_data
+        for row in redraw.reply_markup.inline_keyboard
+        for button in row
+    ]
 
 
 # --- Fix 2: a bootstrap admin with no DB row can't silently "save" a tap ----

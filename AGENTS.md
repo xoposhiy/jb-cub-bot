@@ -60,6 +60,13 @@ reader. Explain those in conversation instead, where they can be skipped.
   the rule tuples `GLIDES` and `RULES` are order-dependent, and
   `tests/test_matching.py` is the table that keeps a new rule from fixing one
   name and breaking three.
+- **Gradebook grades live beside the roster, not inside it.**
+  `core/gradebook.py` parses the `Gradebook` tab without aiogram/sqlalchemy;
+  `features/directory/grades.py` resolves folded names within
+  `primary_cohort` and replaces only that cohort's rows. `/sync` runs this
+  after each cohort's roster commit and deliberately catches all grade-pass
+  failures: a bad grades header must not roll back access-changing roster data
+  or stop later cohorts from syncing.
 - **Don't swallow unexpected exceptions in a handler.** Answer only the failures a user can act on (a bad mapping, a missing column); let the rest propagate — `build_dispatcher`'s `dp.errors` handler replies, logs, and DMs the full traceback to `BOOTSTRAP_ADMIN_IDS`. Add context by re-raising: `raise RuntimeError("/sync failed reading the Rights tab") from exc`. A bare `except Exception` that answers and returns is how a crash turns into a silent hang.
 - **Blocking I/O in an async handler freezes the whole bot** (one event loop, no threads). Google Sheets reads go through `read_rows()`, which adds a thread hop and a deadline.
 

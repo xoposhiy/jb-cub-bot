@@ -1,5 +1,8 @@
 from types import SimpleNamespace
 
+from aiogram.types import CallbackQuery, User as TgUser
+
+from jbcub_bot.core import impersonation
 from jbcub_bot.core.middleware import HasRole, PrincipalMiddleware, role_rank
 from jbcub_bot.core.models import Role, User
 
@@ -82,3 +85,49 @@ async def test_middleware_impersonation_ignored_for_non_admin(session):
     event = SimpleNamespace(from_user=SimpleNamespace(id=777, username="s"))
     await mw(handler, event, {"impersonate_ref": "30000001"})
     assert captured["principal_tid"] == 777  # not swapped
+
+
+async def test_middleware_reads_impersonation_from_admin_callback(session):
+    session.add(User(last_name="Admin", telegram_id=777, role=Role.ADMIN))
+    session.add(User(last_name="Stud", matriculation="30000001",
+                     telegram_id=111, role=Role.STUDENT))
+    session.commit()
+
+    mw = PrincipalMiddleware(session_factory=lambda: session)
+    captured = {}
+
+    async def handler(event, data):
+        captured["principal_tid"] = data["principal"].telegram_id
+        captured["ref"] = data["impersonate_ref"]
+
+    event = CallbackQuery(
+        id="cb-1",
+        from_user=TgUser(id=777, is_bot=False, first_name="Admin", username="a"),
+        chat_instance="chat",
+        data=impersonation.callback_data("dir:privacy", "30000001"),
+    )
+    await mw(handler, event, {})
+    assert captured == {"principal_tid": 111, "ref": "30000001"}
+
+
+async def test_non_admin_cannot_forge_an_impersonated_callback(session):
+    session.add(User(last_name="Stud", telegram_id=777, role=Role.STUDENT))
+    session.add(User(last_name="Other", matriculation="30000001",
+                     telegram_id=111, role=Role.STUDENT))
+    session.commit()
+
+    mw = PrincipalMiddleware(session_factory=lambda: session)
+    captured = {}
+
+    async def handler(event, data):
+        captured["principal_tid"] = data["principal"].telegram_id
+        captured["ref"] = data.get("impersonate_ref")
+
+    event = CallbackQuery(
+        id="cb-1",
+        from_user=TgUser(id=777, is_bot=False, first_name="Student"),
+        chat_instance="chat",
+        data=impersonation.callback_data("dir:privacy", "30000001"),
+    )
+    await mw(handler, event, {})
+    assert captured == {"principal_tid": 777, "ref": None}

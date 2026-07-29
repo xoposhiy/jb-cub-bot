@@ -15,7 +15,7 @@ SHEET_OWNED = (
     "last_name", "first_name", "handle_sheet", "gmail", "cubemail",
     "github_sheet", "codeforces_sheet",
     "birthday", "citizenship", "comment",
-    "primary_cohort", "past_cohorts", "role",
+    "primary_cohort", "past_cohorts", "role", "source_link",
 )
 
 # Every field name a sheet header may use. `matriculation` is the student key,
@@ -44,6 +44,14 @@ def extract_sheet_id(link: str) -> str:
     if match:
         return match.group(1)
     return link.strip()
+
+
+def sheet_url(link: str) -> str:
+    """Normalize a spreadsheet Link/id into a clickable URL."""
+    link = (link or "").strip()
+    if link.startswith("http://") or link.startswith("https://"):
+        return link
+    return f"https://docs.google.com/spreadsheets/d/{extract_sheet_id(link)}"
 
 
 # The two Cohorts columns that describe the cohort itself. Every other column

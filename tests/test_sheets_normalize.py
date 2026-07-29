@@ -1,6 +1,23 @@
 import pytest
 
-from jbcub_bot.core.sheets import MappingError, normalize_rows
+from jbcub_bot.core.sheets import MappingError, SHEET_OWNED, normalize_rows, sheet_url
+
+
+def test_source_link_is_sheet_owned():
+    assert "source_link" in SHEET_OWNED
+
+
+def test_sheet_url_keeps_a_full_url_as_is():
+    url = "https://docs.google.com/spreadsheets/d/ABC123/edit#gid=42"
+    assert sheet_url(url) == url
+
+
+def test_sheet_url_builds_a_url_from_a_bare_id():
+    assert sheet_url("ABC123") == "https://docs.google.com/spreadsheets/d/ABC123"
+
+
+def test_sheet_url_strips_whitespace_around_a_bare_id():
+    assert sheet_url("  ABC123  ") == "https://docs.google.com/spreadsheets/d/ABC123"
 
 
 def test_normalize_rows_maps_by_header():

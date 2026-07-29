@@ -14,6 +14,7 @@ def test_settings_load_from_env(monkeypatch):
     assert s.link_ttl_seconds == 86400  # default
     assert s.cohorts_tab == "Cohorts"  # default
     assert s.rights_tab == "Rights"  # default
+    assert s.gradebook_tab == "Gradebook"  # default
 
 
 def test_bootstrap_admin_id_set_parsed(monkeypatch):

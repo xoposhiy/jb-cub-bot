@@ -5,7 +5,7 @@ and redraws this same message. Only the caller's own row is ever written, so
 there is nothing to authorize beyond being linked.
 """
 
-from aiogram import F, Router
+from aiogram import Router
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -14,11 +14,13 @@ from aiogram.types import (
 )
 
 from jbcub_bot.core.commands import CommandRegistrar
+from jbcub_bot.core import impersonation
 from jbcub_bot.core.models import User
 from jbcub_bot.features.directory.render import (
     PRIVACY_CALLBACK,
     PROFILE_CALLBACK,
     me_keyboard,
+    profile_entities,
     render_profile,
 )
 from jbcub_bot.features.directory.screens import (
@@ -57,18 +59,26 @@ def render_privacy(user: User) -> str:
     return "\n".join(lines)
 
 
-def privacy_keyboard(user: User) -> InlineKeyboardMarkup:
+def privacy_keyboard(
+    user: User, impersonate_ref: str | None = None
+) -> InlineKeyboardMarkup:
     buttons = [
         InlineKeyboardButton(
             text=f"{spec.label} {LEVEL_EMOJI[level_of(user, spec.name)]}",
-            callback_data=f"{FIELD_CALLBACK_PREFIX}{spec.name}",
+            callback_data=impersonation.callback_data(
+                f"{FIELD_CALLBACK_PREFIX}{spec.name}", impersonate_ref
+            ),
         )
         for spec in CONFIGURABLE_FIELDS
     ]
     rows = [buttons[i:i + _BUTTONS_PER_ROW]
             for i in range(0, len(buttons), _BUTTONS_PER_ROW)]
-    rows.append([InlineKeyboardButton(text="← Back to profile",
-                                      callback_data=PROFILE_CALLBACK)])
+    rows.append([InlineKeyboardButton(
+        text="← Back to profile",
+        callback_data=impersonation.callback_data(
+            PROFILE_CALLBACK, impersonate_ref
+        ),
+    )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -77,46 +87,66 @@ cmd = CommandRegistrar(router)
 
 
 @cmd.command("privacy", "Choose who sees each of your profile fields.")
-async def cmd_privacy(message: Message, principal: User, session, impersonator=None):
-    # Mirrors cmd_me: under /as the callback would arrive without the
-    # impersonation ref and land on the admin's own row, so show the
-    # target's screen with nothing tappable instead of a live keyboard.
+async def cmd_privacy(message: Message, principal: User, session,
+                      impersonate_ref: str | None = None):
     await message.answer(
         render_privacy(principal),
-        reply_markup=None if impersonator is not None else privacy_keyboard(principal),
+        reply_markup=privacy_keyboard(principal, impersonate_ref),
     )
 
 
-async def _show_privacy(cb: CallbackQuery, principal: User) -> None:
+async def _show_privacy(
+    cb: CallbackQuery, principal: User, impersonate_ref: str | None = None
+) -> None:
     if not isinstance(cb.message, Message):
         await cb.answer(EXPIRED, show_alert=True)
         return
     await cb.message.edit_text(render_privacy(principal),
-                               reply_markup=privacy_keyboard(principal))
+                               reply_markup=privacy_keyboard(
+                                   principal, impersonate_ref
+                               ))
     await cb.answer()
 
 
-@router.callback_query(F.data == PRIVACY_CALLBACK)
+@router.callback_query(
+    lambda cb: impersonation.split_callback(cb.data)[0] == PRIVACY_CALLBACK
+)
 @require_linked
-async def cb_open(cb: CallbackQuery, principal: User, session):
-    await _show_privacy(cb, principal)
+async def cb_open(cb: CallbackQuery, principal: User, session,
+                  impersonate_ref: str | None = None):
+    await _show_privacy(cb, principal, impersonate_ref)
 
 
-@router.callback_query(F.data == PROFILE_CALLBACK)
+@router.callback_query(
+    lambda cb: impersonation.split_callback(cb.data)[0] == PROFILE_CALLBACK
+)
 @require_linked
-async def cb_back(cb: CallbackQuery, principal: User, session):
+async def cb_back(cb: CallbackQuery, principal: User, session,
+                  impersonate_ref: str | None = None):
     if not isinstance(cb.message, Message):
         await cb.answer(EXPIRED, show_alert=True)
         return
-    await cb.message.edit_text(render_profile(principal, principal),
-                               reply_markup=me_keyboard(principal))
+    text = render_profile(principal, principal)
+    await cb.message.edit_text(
+        text,
+        reply_markup=me_keyboard(
+            principal, impersonate_ref=impersonate_ref
+        ),
+        entities=profile_entities(principal, principal, text),
+    )
     await cb.answer()
 
 
-@router.callback_query(F.data.startswith(FIELD_CALLBACK_PREFIX))
+@router.callback_query(
+    lambda cb: impersonation.split_callback(cb.data)[0].startswith(
+        FIELD_CALLBACK_PREFIX
+    )
+)
 @require_linked
-async def cb_cycle(cb: CallbackQuery, principal: User, session):
-    name = cb.data[len(FIELD_CALLBACK_PREFIX):]
+async def cb_cycle(cb: CallbackQuery, principal: User, session,
+                   impersonate_ref: str | None = None):
+    payload, _ = impersonation.split_callback(cb.data)
+    name = payload[len(FIELD_CALLBACK_PREFIX):]
     spec = BY_NAME.get(name)
     if spec is None or spec.category is not Category.CONFIGURABLE:
         # A keyboard left over from an older deploy, or a hand-crafted payload.
@@ -124,4 +154,4 @@ async def cb_cycle(cb: CallbackQuery, principal: User, session):
         return
     set_level(principal, name, next_level(level_of(principal, name)))
     session.commit()
-    await _show_privacy(cb, principal)
+    await _show_privacy(cb, principal, impersonate_ref)

@@ -7,7 +7,7 @@ import pytest
 
 from jbcub_bot.features.directory import handlers
 from jbcub_bot.features.directory.handlers import cmd_sync
-from jbcub_bot.core.models import Role, User
+from jbcub_bot.core.models import Grade, Role, User
 
 # The Cohorts tab: 'Cohort' and 'Link' describe the cohort, every other column
 # names one of our fields and holds that field's column name in the cohort sheet.
@@ -44,7 +44,22 @@ def _settings():
         rights_sheet_id="RIGHTS",
         cohorts_tab="Cohorts",
         rights_tab="Rights",
+        gradebook_tab="Gradebook",
     )
+
+
+GRADEBOOK_TERM_ROW = ["", "", "Fall 2024"]
+GRADEBOOK_CATEGORY_ROW = ["", "", "Mandatory"]
+GRADEBOOK_LABEL_ROW = ["Last name", "First name", "Math"]
+
+
+def _gradebook_rows(*data_rows):
+    return [
+        GRADEBOOK_TERM_ROW,
+        GRADEBOOK_CATEGORY_ROW,
+        GRADEBOOK_LABEL_ROW,
+        *data_rows,
+    ]
 
 
 async def test_sync_denied_for_non_admin(session, monkeypatch):
@@ -377,3 +392,86 @@ async def test_sync_aborts_and_writes_nothing_on_invalid_role(session, monkeypat
     await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
     assert "aborted" in msg.answer.await_args.args[0].lower()
     assert session.query(User).count() == 0
+
+
+async def test_broken_gradebook_does_not_rollback_roster(session, monkeypatch):
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [COHORT_HEADER, _cohort_row("30000001", "Ivanov", "Ivan", "ivan")]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            raise ConnectionResetError("boom")
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER, ["30000001", "Ivanov", "Ivan", "Admin", "ivan"]]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message = SimpleNamespace(answer=AsyncMock())
+    await cmd_sync(
+        message, principal=User(last_name="A", role=Role.ADMIN), session=session
+    )
+    user = session.query(User).filter_by(matriculation="30000001").one()
+    assert user.primary_cohort == "2024"
+    said = [call.args[0] for call in message.answer.await_args_list]
+    assert any(text.startswith("Grades for 2024 skipped:") for text in said)
+    assert said[-1] == "Sync done."
+
+
+async def test_gradebook_failure_does_not_stop_next_cohort(session, monkeypatch):
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [
+                COHORTS_HEADER,
+                _cohorts_row("2024", "AAA"),
+                _cohorts_row("2025", "BBB"),
+            ]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [COHORT_HEADER, _cohort_row("30000001", "Ivanov", "Ivan", "ivan")]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return [["no", "header", "here"]]
+        if sheet_id == "BBB" and range_ == "A:Z":
+            return [COHORT_HEADER, _cohort_row("30000002", "Petrov", "Petr", "petr")]
+        if sheet_id == "BBB" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(["Petrov", "Petr", "91%"])
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER, ["30000001", "Ivanov", "Ivan", "Admin", "ivan"]]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message = SimpleNamespace(answer=AsyncMock())
+    await cmd_sync(
+        message, principal=User(last_name="A", role=Role.ADMIN), session=session
+    )
+    petrov = session.query(User).filter_by(matriculation="30000002").one()
+    assert session.query(Grade).filter_by(user_id=petrov.id).count() == 1
+    said = [call.args[0] for call in message.answer.await_args_list]
+    assert any(text.startswith("Grades for 2024 skipped:") for text in said)
+    assert any("1 rows matched" in text for text in said)
+
+
+async def test_sync_stores_cohort_and_rights_source_links(session, monkeypatch):
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [COHORT_HEADER, _cohort_row("30000001", "Ivanov", "Ivan", "ivan")]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(["Ivanov", "Ivan", "91%"])
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER, ["", "Sidorov", "Sergey", "Admin", "sidorov"]]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message = SimpleNamespace(answer=AsyncMock())
+    await cmd_sync(
+        message, principal=User(last_name="A", role=Role.ADMIN), session=session
+    )
+    assert session.query(User).filter_by(last_name="Ivanov").one().source_link == "AAA"
+    assert session.query(User).filter_by(last_name="Sidorov").one().source_link == "RIGHTS"

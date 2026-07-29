@@ -17,6 +17,7 @@ from sqlalchemy.pool import StaticPool
 
 import jbcub_bot.features.directory as directory
 from jbcub_bot.core.db import Base
+from jbcub_bot.core import impersonation
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.directory import accounts, edit
 from jbcub_bot.features.directory.accounts import Verdict
@@ -404,20 +405,63 @@ async def test_cancel_under_impersonation_does_not_crash():
     assert "Nothing to cancel." in fake_bot.sent[1].text
 
 
-async def test_edit_under_impersonation_shows_the_target_read_only():
+async def test_edit_under_impersonation_updates_the_target():
     factory = _session_factory()
     _seed_admin_and_student(factory)
     dp = build_dispatcher(session_factory=factory)
     fake_bot = FakeBot()
 
     await dp.feed_update(fake_bot,
-                         _message_update(fake_bot, 777, "/as 30009999 /edit"),
+                         _message_update(fake_bot, 777, "/as 30009999 /me"),
                          dispatcher=dp)
 
-    # sent[0] is cmd_as's "Showing as ..." notice; sent[1] is /edit's answer.
+    # Start where the reported bug starts: the target's own profile.
     shown = fake_bot.sent[1]
     assert "target status" in shown.text   # the target's row, not the admin's
-    assert shown.reply_markup is None      # nothing tappable while impersonating
+    edit_button = impersonation.callback_data("dir:edit", "30009999")
+    assert edit_button in [
+        button.callback_data
+        for row in shown.reply_markup.inline_keyboard
+        for button in row
+    ]
+
+    await dp.feed_update(
+        fake_bot,
+        _callback_update(fake_bot, 777, edit_button, update_id=2),
+        dispatcher=dp,
+    )
+    edit_screen = _edits(fake_bot)[-1]
+    assert "target status" in edit_screen.text
+    status_button = impersonation.callback_data(
+        f"{edit.FIELD_CALLBACK_PREFIX}status_line", "30009999"
+    )
+    assert status_button in [
+        button.callback_data
+        for row in edit_screen.reply_markup.inline_keyboard
+        for button in row
+    ]
+
+    await dp.feed_update(
+        fake_bot,
+        _callback_update(fake_bot, 777, status_button, update_id=3),
+        dispatcher=dp,
+    )
+    await dp.feed_update(
+        fake_bot,
+        _message_update(fake_bot, 777, "admin changed this", update_id=4),
+        dispatcher=dp,
+    )
+
+    assert _stored(factory, "status_line") == "admin changed this"
+    assert _stored(factory, "status_line", telegram_id=777) is None
+    redraw = _edits(fake_bot)[-1]
+    assert impersonation.callback_data(
+        f"{edit.FIELD_CALLBACK_PREFIX}github", "30009999"
+    ) in [
+        button.callback_data
+        for row in redraw.reply_markup.inline_keyboard
+        for button in row
+    ]
 
 
 async def test_opening_the_screen_from_a_callback():

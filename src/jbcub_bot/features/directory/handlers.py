@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from datetime import date
 
 from aiogram import F, Router
@@ -16,18 +17,18 @@ from jbcub_bot.core.config import get_settings
 from jbcub_bot.core.intents import Intent
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.core.tokens import issue_link_token
+from jbcub_bot.features.directory import grades, matching
 from jbcub_bot.features.directory.render import (
     ADMIN_BACK_CALLBACK,
     ADMIN_CALLBACK,
     admin_actions_keyboard,
-    admin_keyboard,
-    admin_row,
     invite_row,
     me_keyboard,
+    profile_entities,
+    profile_keyboard,
     render_cohort_list,
     render_profile,
 )
-from jbcub_bot.features.directory import matching
 from jbcub_bot.features.directory.search import list_cohort, rank_users
 
 from aiogram.filters import CommandObject
@@ -43,6 +44,7 @@ cmd = CommandRegistrar(router)
 # A Sheets read that never answers must not take the bot with it. googleapiclient
 # already applies a 60s socket timeout, so this only has to be the outer bound.
 SHEET_READ_TIMEOUT = 90.0
+_log = logging.getLogger(__name__)
 
 
 def set_status(session, user: User, text: str) -> None:
@@ -68,12 +70,13 @@ async def read_rows(sheet_id: str, credentials, range_: str = "A:Z") -> list[lis
 
 
 @cmd.command("me", "Show your own profile.")
-async def cmd_me(message: Message, principal: User, session, impersonator=None):
-    # `impersonator` is only in the handler context while /as is in flight; a
-    # button press afterwards would arrive as the admin, so hide the screen.
+async def cmd_me(message: Message, principal: User, session,
+                 impersonate_ref: str | None = None):
+    text = render_profile(principal, principal)
     await message.answer(
-        render_profile(principal, principal),
-        reply_markup=me_keyboard(principal, interactive=impersonator is None),
+        text,
+        reply_markup=me_keyboard(principal, impersonate_ref=impersonate_ref),
+        entities=profile_entities(principal, principal, text),
     )
 
 
@@ -105,8 +108,13 @@ async def name_search(message: Message, principal: User, session) -> bool:
     best, target = ranked[0]
     runner_up = ranked[1][0] if len(ranked) > 1 else 0.0
     if best - runner_up >= matching.LEAD:
-        kb = admin_keyboard(target) if principal.role is Role.ADMIN else None
-        await message.answer(render_profile(principal, target), reply_markup=kb)
+        show = grades.has_grades(session, target.id) if target.id is not None else False
+        text = render_profile(principal, target)
+        await message.answer(
+            text,
+            reply_markup=profile_keyboard(principal, target, show_grades=show),
+            entities=profile_entities(principal, target, text),
+        )
         return True
     close = [user for score, user in ranked if best - score <= matching.SPREAD]
     lines = [f"- {user.full_name}" for user in close[:20]]
@@ -150,7 +158,13 @@ async def cb_admin_back(cb: CallbackQuery, principal: User, session):
     if principal.matriculation and principal.matriculation == matriculation:
         markup = me_keyboard(principal)
     else:
-        markup = InlineKeyboardMarkup(inline_keyboard=[admin_row(matriculation)])
+        target = identity.find_by_matriculation(session, matriculation)
+        show = target is not None and grades.has_grades(session, target.id)
+        markup = profile_keyboard(
+            principal,
+            target or User(matriculation=matriculation),
+            show_grades=show,
+        )
     await cb.message.edit_reply_markup(reply_markup=markup)
     await cb.answer()
 
@@ -308,7 +322,7 @@ async def cmd_sync(message: Message, principal: User, session):
     except Exception as exc:  # network / API / anything unforeseen
         raise RuntimeError("/sync failed reading the Cohorts tab") from exc
 
-    parsed_cohorts = []  # (cohort_name, records)
+    parsed_cohorts = []  # (cohort_name, records, link, mapping)
     for entry in cohorts:
         await message.answer(f"Reading cohort {entry['cohort']}…")
         sheet_id = sheets.extract_sheet_id(entry["link"])
@@ -334,7 +348,10 @@ async def cmd_sync(message: Message, principal: User, session):
             return
         for record in records:
             record["primary_cohort"] = entry["cohort"]
-        parsed_cohorts.append((entry["cohort"], records))
+            record["source_link"] = entry["link"]
+        parsed_cohorts.append(
+            (entry["cohort"], records, entry["link"], entry["mapping"])
+        )
         # The roster ends at the first row naming nobody; below it sit students
         # who left. Ignoring them is intended, ignoring them quietly is not.
         ignored = max(0, len(rows) - 1 - len(records))
@@ -372,27 +389,58 @@ async def cmd_sync(message: Message, principal: User, session):
 
     # --- Write phase: everything parsed OK, now upsert + reconcile. ---
     await message.answer("All sheets read. Writing to database…")
-    try:
-        today = date.today().isoformat()
-        for cohort_name, records in parsed_cohorts:
+    today = date.today().isoformat()
+    for cohort_name, records, link, mapping in parsed_cohorts:
+        try:
             sheets.upsert_users(session, records)
             # After the upsert, so anyone the roster names again is already back
             # before the ones it dropped get marked.
             departed = sheets.mark_departed(session, cohort_name, records, today)
             rep = sheets.reconcile(session, records)
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            raise RuntimeError(f"/sync failed writing cohort {cohort_name}") from exc
+        await message.answer(
+            f"{cohort_name}: {len(records)} rows, "
+            f"{departed} marked departed, drift={rep.drift or '-'}, "
+            f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}")
+
+        # This broad catch is deliberate: roster changes govern access and
+        # have already committed, so a broken grades header must not roll them
+        # back or prevent later cohorts from syncing.
+        try:
+            sheet_id = sheets.extract_sheet_id(link)
+            gradebook_rows = await read_rows(
+                sheet_id, sa, f"{settings.gradebook_tab}!A:ZZ"
+            )
+            report = grades.sync_cohort(
+                session, cohort_name, gradebook_rows, mapping, matching.fold
+            )
+            session.commit()
             await message.answer(
-                f"{cohort_name}: {len(records)} rows, "
-                f"{departed} marked departed, drift={rep.drift or '-'}, "
-                f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}")
-        # Rights rows have no matriculation — key on the Telegram handle so
-        # admins/teachers get matched (or created) as searchable rows.
+                f"{report.matched} rows matched, {report.cells} cells, "
+                f"unmatched={report.unmatched or '-'}, "
+                f"dup={report.duplicates or '-'}, "
+                f"{report.ignored_columns} columns outside a semester band ignored"
+            )
+        except Exception as exc:
+            session.rollback()
+            _log.exception("Grades sync failed for cohort %s", cohort_name)
+            await message.answer(f"Grades for {cohort_name} skipped: {exc}")
+
+    # Rights rows have no matriculation — key on the Telegram handle so
+    # admins/teachers get matched (or created) as searchable rows.
+    try:
+        for record in rights_records:
+            record["source_link"] = settings.rights_sheet_id
         sheets.upsert_users(session, rights_records, key="handle_sheet")
         rep = sheets.reconcile(session, rights_records, key="handle_sheet")
-        await message.answer(
-            f"rights: {len(rights_records)} rows, drift={rep.drift or '-'}, "
-            f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}")
         session.commit()
     except Exception as exc:
-        session.rollback()  # the roster keeps its last good state
+        session.rollback()
         raise RuntimeError("/sync failed in the write phase") from exc
+    await message.answer(
+        f"rights: {len(rights_records)} rows, drift={rep.drift or '-'}, "
+        f"unmatched={rep.unmatched or '-'}, dup={rep.duplicates or '-'}")
     await message.answer("Sync done.")

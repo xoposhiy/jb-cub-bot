@@ -1,9 +1,4 @@
-"""/me offers the privacy screen -- except when an admin is impersonating.
-
-Under /as the profile belongs to the target but a later button press arrives
-without the impersonation ref, so the callback would edit the *admin's* own
-settings while the screen shows a student. The button must not be there.
-"""
+"""/me keeps its self-service buttons under interactive impersonation."""
 
 from datetime import datetime, timezone
 
@@ -14,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from jbcub_bot.core.db import Base
+from jbcub_bot.core import impersonation
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.directory.render import EDIT_CALLBACK, PRIVACY_CALLBACK
 from jbcub_bot.main import build_dispatcher
@@ -79,7 +75,7 @@ async def test_me_offers_the_privacy_screen():
     assert PRIVACY_CALLBACK in _callbacks(fake_bot.sent[0])
 
 
-async def test_me_under_impersonation_has_no_privacy_button():
+async def test_me_under_impersonation_has_targeted_privacy_button():
     factory = _session_factory()
     _seed(factory)
     dp = build_dispatcher(session_factory=factory)
@@ -90,7 +86,9 @@ async def test_me_under_impersonation_has_no_privacy_button():
                          dispatcher=dp)
 
     assert "Zakhar Zhukovsky" in fake_bot.sent[1].text  # the target's profile
-    assert PRIVACY_CALLBACK not in _callbacks(fake_bot.sent[1])
+    assert impersonation.callback_data(
+        PRIVACY_CALLBACK, "30009999"
+    ) in _callbacks(fake_bot.sent[1])
 
 
 async def test_me_offers_the_edit_screen():
@@ -105,7 +103,7 @@ async def test_me_offers_the_edit_screen():
     assert EDIT_CALLBACK in _callbacks(fake_bot.sent[0])
 
 
-async def test_me_under_impersonation_has_no_edit_button():
+async def test_me_under_impersonation_has_targeted_edit_button():
     factory = _session_factory()
     _seed(factory)
     dp = build_dispatcher(session_factory=factory)
@@ -115,4 +113,6 @@ async def test_me_under_impersonation_has_no_edit_button():
                          _message_update(fake_bot, 777, "/as 30009999 /me"),
                          dispatcher=dp)
 
-    assert EDIT_CALLBACK not in _callbacks(fake_bot.sent[1])
+    assert impersonation.callback_data(
+        EDIT_CALLBACK, "30009999"
+    ) in _callbacks(fake_bot.sent[1])

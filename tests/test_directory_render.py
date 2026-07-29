@@ -1,11 +1,77 @@
+from jbcub_bot.core.models import Role, User
+from jbcub_bot.core import impersonation
 from jbcub_bot.features.directory.render import (
     EDIT_CALLBACK,
     PRIVACY_CALLBACK,
     me_keyboard,
+    profile_entities,
+    profile_keyboard,
     render_profile,
 )
-from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.directory.visibility import STAFF_ONLY
+
+
+def test_profile_keyboard_combines_grades_and_admin_rows_for_an_admin():
+    viewer = User(last_name="Admin", role=Role.ADMIN)
+    target = User(last_name="Ivanov", role=Role.STUDENT,
+                  matriculation="30000001")
+    keyboard = profile_keyboard(viewer, target, show_grades=True)
+    data = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    assert data == ["dir:grades:30000001:-1", "dir:admin:30000001"]
+
+
+def test_profile_keyboard_shows_grades_for_teacher_but_not_student():
+    target = User(last_name="Ivanov", matriculation="30000001")
+    teacher = User(last_name="Teacher", role=Role.TEACHER)
+    student = User(last_name="Student", role=Role.STUDENT)
+    assert profile_keyboard(teacher, target, show_grades=True) is not None
+    assert profile_keyboard(student, target, show_grades=True) is None
+
+
+def test_profile_keyboard_omits_grades_when_target_has_none():
+    viewer = User(last_name="Admin", role=Role.ADMIN)
+    target = User(last_name="Ivanov", matriculation="30000001")
+    keyboard = profile_keyboard(viewer, target, show_grades=False)
+    data = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    assert data == ["dir:admin:30000001"]
+
+
+def test_render_profile_gives_cohortless_staff_a_source_line_for_admin():
+    admin = User(last_name="Admin", role=Role.ADMIN)
+    target = User(last_name="Teacher", role=Role.TEACHER, source_link="RIGHTS")
+    assert "Source: Rights sheet" in render_profile(admin, target)
+    assert "Source:" not in render_profile(User(last_name="S"), target)
+
+
+def test_profile_entities_link_exact_cohort_value_in_utf16_units():
+    admin = User(last_name="Admin", role=Role.ADMIN)
+    target = User(
+        first_name="Eve",
+        last_name="Expelled",
+        primary_cohort="sdt-2023-2026",
+        source_link="ABC123",
+        departed_at="2026-07-28",
+    )
+    text = render_profile(admin, target)
+    entities = profile_entities(admin, target, text)
+    assert len(entities) == 1
+    entity = entities[0]
+    value = target.primary_cohort
+    prefix = text[:text.index(f"Cohort: {value}")] + "Cohort: "
+    assert entity.offset == len(prefix.encode("utf-16-le")) // 2
+    assert entity.length == len(value.encode("utf-16-le")) // 2
+    assert entity.url == "https://docs.google.com/spreadsheets/d/ABC123"
+
+
+def test_profile_entities_link_rights_fallback_and_hide_from_non_admin():
+    admin = User(last_name="Admin", role=Role.ADMIN)
+    target = User(last_name="Teacher", role=Role.TEACHER, source_link="RIGHTS")
+    text = render_profile(admin, target)
+    entity = profile_entities(admin, target, text)[0]
+    prefix = text[:text.index("Source: Rights sheet")] + "Source: "
+    assert entity.offset == len(prefix.encode("utf-16-le")) // 2
+    assert entity.length == len("Rights sheet".encode("utf-16-le")) // 2
+    assert profile_entities(User(last_name="Student"), target, text) == []
 
 
 def test_render_includes_visible_and_omits_hidden():
@@ -77,9 +143,15 @@ def test_me_keyboard_offers_editing_and_privacy():
     ]
 
 
-def test_me_keyboard_has_nothing_for_a_student_when_not_interactive():
-    assert me_keyboard(User(first_name="S", last_name="Student",
-                            role=Role.STUDENT), interactive=False) is None
+def test_me_keyboard_targets_self_service_during_impersonation():
+    kb = me_keyboard(
+        User(first_name="S", last_name="Student", role=Role.STUDENT),
+        impersonate_ref="30000001",
+    )
+    assert [b.callback_data for row in kb.inline_keyboard for b in row] == [
+        impersonation.callback_data(EDIT_CALLBACK, "30000001"),
+        impersonation.callback_data(PRIVACY_CALLBACK, "30000001"),
+    ]
 
 
 def test_me_keyboard_puts_self_service_above_the_admin_button():

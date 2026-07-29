@@ -1,7 +1,7 @@
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery
 
-from jbcub_bot.core import identity
+from jbcub_bot.core import identity, impersonation
 from jbcub_bot.core.models import Role, User
 
 _RANK = {Role.STUDENT: 0, Role.TEACHER: 1, Role.ADMIN: 2}
@@ -67,6 +67,13 @@ class PrincipalMiddleware(BaseMiddleware):
                     await refuse_departed(event)
                     return None
             ref = data.get("impersonate_ref")
+            if ref is None and isinstance(event, CallbackQuery):
+                _, ref = impersonation.split_callback(event.data)
+            if ref is None and principal is not None \
+                    and principal.role is Role.ADMIN:
+                state = data.get("state")
+                if state is not None:
+                    ref = (await state.get_data()).get("impersonate_ref")
             if ref is not None and principal is not None \
                     and principal.role is Role.ADMIN:
                 target = identity.find_impersonation_target(session, ref)
@@ -79,6 +86,8 @@ class PrincipalMiddleware(BaseMiddleware):
                     return None
                 data["principal"] = target
                 data["impersonator"] = principal
+                if target is not None:
+                    data["impersonate_ref"] = impersonation.canonical_ref(target)
             else:
                 data["principal"] = principal
             return await handler(event, data)

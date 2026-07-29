@@ -41,11 +41,33 @@ def test_every_configurable_field_has_a_default_and_others_do_not():
 def test_field_order_matches_the_rendered_profile_order():
     assert [f.name for f in visibility.FIELDS] == [
         "departed_at",
-        "first_name", "last_name", "role", "primary_cohort",
+        "first_name", "last_name", "role", "primary_cohort", "source_link",
         "telegram", "telegram_id", "status_line",
         "gmail", "cubemail", "github", "codeforces",
         "matriculation", "birthday", "citizenship", "comment",
     ]
+
+
+def test_is_staff_true_for_admin_and_teacher_false_for_student():
+    assert visibility.is_staff(_u(role=Role.ADMIN)) is True
+    assert visibility.is_staff(_u(role=Role.TEACHER)) is True
+    assert visibility.is_staff(_u(role=Role.STUDENT)) is False
+
+
+def test_source_link_is_admin_only_and_not_shown_to_a_student():
+    viewer = _u(role=Role.STUDENT, primary_cohort="2024")
+    target = _u(
+        role=Role.STUDENT,
+        primary_cohort="2024",
+        source_link="https://docs.google.com/spreadsheets/d/ABC",
+    )
+    assert "source_link" not in visible_fields(viewer, target)
+
+
+def test_source_link_is_shown_to_an_admin():
+    viewer = _u(role=Role.ADMIN)
+    target = _u(role=Role.STUDENT, source_link="ABC")
+    assert visible_fields(viewer, target)["source_link"] == "ABC"
 
 
 def test_editable_column_is_the_self_column_for_two_source_fields():

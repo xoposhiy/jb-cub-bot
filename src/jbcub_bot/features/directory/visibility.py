@@ -54,6 +54,8 @@ FIELDS = (
     FieldSpec("last_name", "Last name", Category.ALWAYS),
     FieldSpec("role", "Role", Category.ALWAYS),
     FieldSpec("primary_cohort", "Cohort", Category.ALWAYS),
+    # Rendered as a link on the cohort line (or a Rights-only fallback).
+    FieldSpec("source_link", "Source", Category.ADMIN_ONLY),
     FieldSpec("telegram", "Telegram", Category.CONFIGURABLE, EVERYONE),
     FieldSpec("telegram_id", "Telegram ID", Category.ADMIN_ONLY),
     FieldSpec("status_line", "Status", Category.CONFIGURABLE, EVERYONE,
@@ -166,13 +168,17 @@ def _is_self(viewer: User, target: User) -> bool:
     return viewer.id is not None and viewer.id == target.id
 
 
+def is_staff(user: User) -> bool:
+    return user.role is Role.ADMIN or user.role is Role.TEACHER
+
+
 def visible_fields(viewer: User, target: User) -> dict:
     """Every field of `target` that `viewer` may see, keyed by field name.
 
     A key may map to None -- callers decide whether to render an empty value.
     """
     is_admin = viewer.role is Role.ADMIN
-    is_staff = is_admin or viewer.role is Role.TEACHER
+    staff = is_staff(viewer)
     own = _is_self(viewer, target)
     mates = are_cohort_mates(viewer, target)
 
@@ -181,7 +187,7 @@ def visible_fields(viewer: User, target: User) -> dict:
         if spec.category is Category.ADMIN_ONLY:
             if not is_admin:
                 continue
-        elif spec.category is Category.CONFIGURABLE and not (own or is_staff):
+        elif spec.category is Category.CONFIGURABLE and not (own or staff):
             # Levels govern student-to-student visibility only; staff and the
             # owner are past this gate already.
             level = level_of(target, spec.name)

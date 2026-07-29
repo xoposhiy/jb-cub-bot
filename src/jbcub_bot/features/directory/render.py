@@ -1,17 +1,27 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity
 
+from jbcub_bot.core import impersonation, sheets
 from jbcub_bot.core.models import Role, User
-from jbcub_bot.features.directory.visibility import FIELDS, visible_fields
+from jbcub_bot.features.directory.visibility import (
+    BY_NAME,
+    FIELDS,
+    is_staff,
+    visible_fields,
+)
 
 PRIVACY_CALLBACK = "dir:privacy"
 PROFILE_CALLBACK = "dir:profile"
 EDIT_CALLBACK = "dir:edit"
 ADMIN_CALLBACK = "dir:admin"
 ADMIN_BACK_CALLBACK = "dir:admin_back"
+GRADES_CALLBACK = "dir:grades"
+GRADES_BACK_CALLBACK = "dir:grades_back"
 
 # first_name and last_name render as one "Name" line; every other label comes
 # from the field table.
 _NAME_LABEL = "Name"
+_SOURCE_LABEL = "Source"
+_RIGHTS_SHEET_LABEL = "Rights sheet"
 
 
 def render_profile(viewer: User, target: User) -> str:
@@ -25,6 +35,15 @@ def render_profile(viewer: User, target: User) -> str:
                    f"{fields.get('last_name') or ''}".strip()
             if name:
                 lines.append(f"{_NAME_LABEL}: {name}")
+            continue
+        if spec.name == "source_link":
+            continue
+        if spec.name == "primary_cohort":
+            value = fields.get("primary_cohort")
+            if value:
+                lines.append(f"{spec.label}: {value}")
+            elif "source_link" in fields:
+                lines.append(f"{_SOURCE_LABEL}: {_RIGHTS_SHEET_LABEL}")
             continue
         value = fields.get(spec.name)
         if value in (None, ""):
@@ -50,6 +69,55 @@ def admin_keyboard(target: User) -> InlineKeyboardMarkup | None:
     if not target.matriculation:
         return None
     return InlineKeyboardMarkup(inline_keyboard=[admin_row(target.matriculation)])
+
+
+def grades_row(matriculation: str) -> list[InlineKeyboardButton]:
+    return [InlineKeyboardButton(
+        text="📊 Grades",
+        callback_data=f"{GRADES_CALLBACK}:{matriculation}:-1",
+    )]
+
+
+def profile_keyboard(
+    viewer: User, target: User, *, show_grades: bool
+) -> InlineKeyboardMarkup | None:
+    """Keyboard for a profile rendered for someone other than the viewer."""
+    rows = []
+    if show_grades and is_staff(viewer) and target.matriculation:
+        rows.append(grades_row(target.matriculation))
+    if viewer.role is Role.ADMIN:
+        admin = admin_keyboard(target)
+        if admin is not None:
+            rows.extend(admin.inline_keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def _utf16_len(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def profile_entities(
+    viewer: User, target: User, text: str
+) -> list[MessageEntity]:
+    """Return the admin-only hyperlink covering this profile's source label."""
+    if viewer.role is not Role.ADMIN or not target.source_link:
+        return []
+    if target.primary_cohort:
+        marker = f"{BY_NAME['primary_cohort'].label}: "
+        value = target.primary_cohort
+    else:
+        marker = f"{_SOURCE_LABEL}: "
+        value = _RIGHTS_SHEET_LABEL
+    line = marker + value
+    if line not in text:
+        return []
+    index = text.index(line)
+    return [MessageEntity(
+        type="text_link",
+        offset=_utf16_len(text[:index] + marker),
+        length=_utf16_len(value),
+        url=sheets.sheet_url(target.source_link),
+    )]
 
 
 def invite_row(matriculation: str) -> list[InlineKeyboardButton]:
@@ -79,21 +147,27 @@ def admin_actions_keyboard(target: User) -> InlineKeyboardMarkup:
 
 
 def me_keyboard(user: User, *,
-                interactive: bool = True) -> InlineKeyboardMarkup | None:
+                impersonate_ref: str | None = None) -> InlineKeyboardMarkup | None:
     """Keyboard for a user's own profile.
 
-    `interactive=False` is for an impersonated view: the follow-up callback
-    would arrive without the impersonation ref, so the admin would edit their
-    own profile while looking at someone else's.
+    Impersonated buttons carry their target so every follow-up resolves the
+    same student instead of falling back to the admin who tapped them.
     """
     rows = []
-    if interactive:
-        rows.append([
-            InlineKeyboardButton(text="✏️ Edit my profile",
-                                 callback_data=EDIT_CALLBACK),
-            InlineKeyboardButton(text="\U0001f512 Who sees my data",
-                                 callback_data=PRIVACY_CALLBACK),
-        ])
+    rows.append([
+        InlineKeyboardButton(
+            text="✏️ Edit my profile",
+            callback_data=impersonation.callback_data(
+                EDIT_CALLBACK, impersonate_ref
+            ),
+        ),
+        InlineKeyboardButton(
+            text="\U0001f512 Who sees my data",
+            callback_data=impersonation.callback_data(
+                PRIVACY_CALLBACK, impersonate_ref
+            ),
+        ),
+    ])
     if user.role is Role.ADMIN:
         admin = admin_keyboard(user)
         if admin is not None:

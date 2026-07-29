@@ -260,13 +260,21 @@ Rendered with **`entities`, not `parse_mode`.** The text stays exactly
 `Cohort: sdt-2023-2026` and a `text_link` entity covers the value. The bot sets
 no `parse_mode` anywhere, and turning HTML on for this one line would mean
 escaping every other value in every message — `status_line` is user-supplied and
-course names contain `&`. So `render_profile` returns text plus entities;
-`cmd_me`, `name_search` and the privacy screen's return path pass them along.
+course names contain `&`.
+
+`render_profile` keeps returning `str`; a separate `profile_entities(viewer,
+target, text)` locates the value in that text and returns the entity list.
+Rejected: returning both from `render_profile`. Five tests assert on its output,
+one of them as an exact-equality regression anchor, and a tuple would rewrite all
+of them to buy nothing — the two jobs are separable, and keeping them separate
+leaves the anchor holding literally.
+
 Offsets are counted in UTF-16 code units, not Python characters, because that is
 what Telegram measures and because `⚠️ Departed` renders above the cohort line.
 
 A target with no cohort (Rights-only staff) has no value to attach the link to,
-so it gets its own `Source: Rights sheet` line with the link on the label.
+so `render_profile` gives them a `Source: Rights sheet` line and the entity
+covers that label.
 
 Rejected: appending the raw URL to the cohort line. No machinery at all — clients
 auto-link a bare URL — but it puts 60 characters of noise on every admin's view
@@ -281,8 +289,8 @@ of every profile.
 - **Changed:** `core/models.py` (`Grade`, `User.source_link`), `core/sheets.py`
   (`source_link` in `SHEET_OWNED`, `sheet_url`), `core/config.py`
   (`gradebook_tab`), `.env.example`, `features/directory/render.py`
-  (`profile_keyboard`; `render_profile` returns text plus entities and folds the
-  link into the cohort line), `features/directory/visibility.py` (`is_staff`,
+  (`profile_keyboard`, `profile_entities`; `render_profile` gains the staff
+  `Source:` line), `features/directory/visibility.py` (`is_staff`,
   `source_link` in `FIELDS`), `features/directory/handlers.py` (grades pass in
   `cmd_sync`, `source_link` injected per cohort and for Rights rows,
   `name_search` and `cb_admin_back` use `profile_keyboard`, both profile sends
@@ -313,12 +321,12 @@ of every profile.
 - **`test_directory_sync.py`** — a broken Gradebook reports and the roster still
   syncs and commits; a cohort whose Gradebook fails does not stop the next one;
   `source_link` stored per cohort and from the Rights sheet for a staff row.
-- **`test_directory_render.py`** — the exact-output regression anchor keeps
-  holding for a non-admin, whose cohort line stays plain with no entity; an
-  admin gets one `text_link` entity whose UTF-16 offset and length cover exactly
-  the cohort value, asserted on a profile that carries `⚠️ Departed` above it and
-  on one that does not; a staff row with no cohort gets the `Source:` line
-  instead.
+- **`test_directory_render.py`** — the exact-output regression anchor is left
+  untouched and keeps passing; `profile_entities` returns nothing for a
+  non-admin; an admin gets one `text_link` entity whose UTF-16 offset and length
+  cover exactly the cohort value, asserted on a profile that carries
+  `⚠️ Departed` above it and on one that does not; a staff row with no cohort
+  gets the `Source:` line and the entity on its label.
 
 ## Out of scope (YAGNI)
 
