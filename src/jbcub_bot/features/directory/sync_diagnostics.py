@@ -18,6 +18,7 @@ class IssueGroup:
     effect: str
     action: str
     items: tuple[str, ...]
+    warning: bool = True
 
 
 @dataclass(frozen=True)
@@ -171,6 +172,7 @@ def build_issue_groups(
                 f"{gradebook.sheet_column_name(item.index)} — {item.label}"
                 for item in grades_report.ignored_columns
             ),
+            warning=False,
         ))
     return tuple(groups)
 
@@ -238,7 +240,7 @@ def _gradebook_error_group(error: str) -> IssueGroup:
 
 def _cohort_status(outcome: CohortOutcome) -> str:
     return "⚠️" if (
-        outcome.issues
+        any(group.warning for group in outcome.issues)
         or outcome.gradebook_error is not None
         or outcome.gradebook is None
     ) else "✅"
@@ -321,7 +323,7 @@ def _final_heading(
         return "⚠️ Sync partially completed"
     has_warnings = (
         any(
-            outcome.issues
+            any(group.warning for group in outcome.issues)
             or outcome.gradebook_error is not None
             or outcome.gradebook is None
             for outcome in cohorts

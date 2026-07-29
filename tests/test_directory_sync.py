@@ -1121,7 +1121,7 @@ async def test_sync_reports_the_rows_it_ignored_below_the_roster(session, monkey
     await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
 
     said = [c.args[0] for c in msg.answer.await_args_list]
-    report = next(m for m in said if m.startswith("⚠️ 2024 processed"))
+    report = next(m for m in said if m.startswith("✅ 2024 processed"))
     assert "Roster: 1 student" in report
     assert "2 historical rows below the roster separator were ignored" in report
     assert session.query(User).filter_by(matriculation="30000009").count() == 0
