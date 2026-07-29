@@ -31,6 +31,14 @@ reader. Explain those in conversation instead, where they can be skipped.
 `handlers.is_admin`). `/cohort` and its CSV list current people only, for every
 role — a roster listing states who is here now, and `search.list_cohort_names`
 skips a cohort whose last member left.
+- **The bot serves private chats only.** A command typed in a group would post
+  whoever it addressed — a profile, a cohort CSV row — into that group, since
+  the bot answers wherever it was addressed rather than DMing the caller. The
+  guard sits in `PrincipalMiddleware` beside the `departed_at` refusal, before
+  any lookup, because that is where every entry point authenticates. A command
+  or button tap gets a one-line refusal; an ordinary group message gets
+  silence, because nobody addressed the bot and answering every line in a busy
+  group is spam Telegram will rate-limit.
 - **Profile reads go through `features/directory/visibility.py`** — never bypass it.
   A handler that reads a profile column off the model leaks whatever its owner
   hid (`/cohort` did exactly this until telegram became hideable).
