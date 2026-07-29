@@ -33,9 +33,17 @@ def csv_filename(cohort: str) -> str:
 def _cell(value) -> str:
     if value is None:
         return ""
-    if hasattr(value, "value"):  # enum -> its value
-        return str(value.value)
-    return str(value)
+    text = str(value.value) if hasattr(value, "value") else str(value)  # enum -> its value
+    # A spreadsheet evaluates a cell that opens with = + - or @ as a formula,
+    # and status_line/comment/citizenship are free text a person or an admin
+    # typed -- one of them starting with `=HYPERLINK(...)` would exfiltrate the
+    # neighbouring cells when this file is opened. `@` only ever leads the
+    # `telegram` cell's handle, and the bare handle is what another system
+    # matches on anyway, so drop it outright rather than merely escaping it.
+    text = text.removeprefix("@")
+    if text[:1] in ("=", "+", "-"):
+        text = f"'{text}"
+    return text
 
 
 def cohort_csv(viewer: User, people: list[User]) -> bytes:

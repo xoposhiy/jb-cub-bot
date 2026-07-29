@@ -1,3 +1,6 @@
+import csv
+import io
+
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.directory.export import cohort_csv, csv_filename
 
@@ -15,16 +18,25 @@ def _rows(viewer, people):
     return [line.split(",") for line in text.strip().split("\r\n")]
 
 
+def _parsed_rows(viewer, people):
+    # csv.reader rather than a naive split(","): a cell neutralized with a
+    # leading apostrophe, or one holding a literal quote, must round-trip.
+    text = cohort_csv(viewer, people).decode("utf-8-sig")
+    return list(csv.reader(io.StringIO(text)))
+
+
 def test_teacher_gets_the_linking_keys_but_no_admin_only_field():
     header = _rows(User(last_name="T", role=Role.TEACHER), [_person()])[0]
     assert "matriculation" in header and "telegram_id" in header
     assert "comment" not in header
-    assert "departed_at" not in header and "source_link" not in header
 
 
 def test_admin_gets_the_admin_only_fields_too():
     header = _rows(User(last_name="A", role=Role.ADMIN), [_person()])[0]
     assert "comment" in header
+    # The skip set (not a category, and not visible_fields) is what excludes
+    # these two -- verified against an admin, for whom nothing else would.
+    assert "departed_at" not in header and "source_link" not in header
 
 
 def test_header_is_field_names_in_fields_order():
@@ -43,7 +55,7 @@ def test_values_are_flattened_and_a_missing_one_is_empty():
     people = [_person(gmail=None)]
     header, row = _rows(User(last_name="A", role=Role.ADMIN), people)
     assert row[header.index("role")] == "Student"      # the enum's value
-    assert row[header.index("telegram")] == "@ivanov"
+    assert row[header.index("telegram")] == "ivanov"    # leading @ stripped
     assert row[header.index("telegram_id")] == "42"
     assert row[header.index("gmail")] == ""
 
@@ -62,3 +74,28 @@ def test_no_people_is_a_header_free_empty_file():
 def test_filename_survives_a_hand_typed_cohort_name():
     assert csv_filename("2024") == "cohort-2024.csv"
     assert csv_filename("BSc 2024/25") == "cohort-BSc_2024_25.csv"
+
+
+# --- formula injection: a cell must never open a spreadsheet formula --------
+
+def test_a_formula_looking_status_is_neutralized():
+    header, row = _parsed_rows(User(last_name="A", role=Role.ADMIN),
+                               [_person(status_line='=HYPERLINK("x")')])
+    assert row[header.index("status_line")] == '\'=HYPERLINK("x")'
+
+
+def test_a_comment_starting_with_a_dash_is_neutralized():
+    header, row = _parsed_rows(User(last_name="A", role=Role.ADMIN),
+                               [_person(comment="- on leave")])
+    assert row[header.index("comment")] == "'- on leave"
+
+
+def test_the_telegram_cell_drops_the_at_sign_rather_than_escape_it():
+    header, row = _parsed_rows(User(last_name="A", role=Role.ADMIN),
+                               [_person(handle_observed="ivanov")])
+    assert row[header.index("telegram")] == "ivanov"
+
+
+def test_an_ordinary_value_is_untouched():
+    header, row = _parsed_rows(User(last_name="A", role=Role.ADMIN), [_person()])
+    assert row[header.index("first_name")] == "Ivan"
