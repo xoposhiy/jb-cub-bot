@@ -39,9 +39,17 @@ def test_set_status_updates_user(session):
 # --- departed students are for admins only --------------------------------
 
 def _seed_departed(session):
-    session.add(User(first_name="Eve", last_name="Expelled", role=Role.STUDENT,
-                     primary_cohort="2024", handle_sheet="eve",
-                     matriculation="30000009", departed_at="2026-07-28"))
+    session.add_all([
+        User(first_name="Eve", last_name="Expelled", role=Role.STUDENT,
+             primary_cohort="2024", handle_sheet="eve",
+             matriculation="30000009", departed_at="2026-07-28"),
+        # A current classmate, so the staff branch of cmd_cohort actually
+        # reaches list_cohort/the export instead of stopping at "No cohorts
+        # on file yet" -- which would make these tests pass for the wrong
+        # reason regardless of whether departed people were filtered.
+        User(first_name="Ivan", last_name="Ivanov", role=Role.STUDENT,
+             primary_cohort="2024", matriculation="30000001"),
+    ])
     session.commit()
 
 
@@ -61,10 +69,12 @@ async def test_cohort_list_omits_a_departed_mate_for_a_student(session):
 async def test_cohort_list_omits_a_departed_mate_for_a_teacher(session):
     # Teachers see every field a student may hide, but not a person who left.
     _seed_departed(session)
-    msg = SimpleNamespace(answer=AsyncMock())
+    msg = SimpleNamespace(answer=AsyncMock(), answer_document=AsyncMock())
     await cmd_cohort(msg, principal=_viewer(Role.TEACHER), session=session,
-                     command=SimpleNamespace(args=None))
-    assert "Expelled" not in msg.answer.await_args.args[0]
+                     command=SimpleNamespace(args="2024"))
+    text = msg.answer.await_args.args[0]
+    assert "Ivan Ivanov" in text  # the list was actually reached
+    assert "Expelled" not in text
 
 
 async def test_cohort_list_omits_a_departed_mate_for_an_admin_too(session):
@@ -73,8 +83,10 @@ async def test_cohort_list_omits_a_departed_mate_for_an_admin_too(session):
     _seed_departed(session)
     msg = SimpleNamespace(answer=AsyncMock(), answer_document=AsyncMock())
     await cmd_cohort(msg, principal=_viewer(Role.ADMIN), session=session,
-                     command=SimpleNamespace(args=None))
-    assert "Expelled" not in msg.answer.await_args.args[0]
+                     command=SimpleNamespace(args="2024"))
+    text = msg.answer.await_args.args[0]
+    assert "Ivan Ivanov" in text  # the list was actually reached
+    assert "Expelled" not in text
 
 
 async def test_search_by_handle_does_not_reach_a_departed_profile(session):
