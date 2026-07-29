@@ -42,27 +42,6 @@ class GradesSyncReport:
     duplicate_rows: list[CountedName] = field(default_factory=list)
     ignored_columns: list[gradebook.IgnoredColumn] = field(default_factory=list)
 
-    @property
-    def matched(self) -> int:
-        """Compatibility for the temporary legacy /sync progress text."""
-        return self.matched_people
-
-    @property
-    def unmatched(self) -> list[str]:
-        """Compatibility for the temporary legacy /sync progress text."""
-        return self.no_roster_match + [
-            item.name for item in self.ambiguous_roster_match
-        ]
-
-    @property
-    def duplicates(self) -> list[str]:
-        """Compatibility for the temporary legacy /sync progress text."""
-        return [
-            item.name
-            for item in self.duplicate_rows
-            for _ in range(item.count)
-        ]
-
 
 def sync_cohort(
     session,

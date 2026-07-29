@@ -62,6 +62,89 @@ def _gradebook_rows(*data_rows):
     ]
 
 
+class ProgressMessage:
+    def __init__(self):
+        self.edit_text = AsyncMock()
+
+
+def _sync_message():
+    progress = ProgressMessage()
+    message = SimpleNamespace(
+        answer=AsyncMock(return_value=progress),
+        answer_document=AsyncMock(),
+    )
+    return message, progress
+
+
+async def test_healthy_three_cohort_sync_sends_start_cohorts_and_final_only(
+    session,
+    monkeypatch,
+):
+    cohort_ids = {"2023": "AAA", "2024": "BBB", "2025": "CCC"}
+
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [
+                COHORTS_HEADER,
+                *[
+                    _cohorts_row(cohort, sheet_id)
+                    for cohort, sheet_id in cohort_ids.items()
+                ],
+            ]
+        if range_ == "Rights!A:Z":
+            return [
+                RIGHTS_HEADER,
+                ["", "Boss", "Alice", "Admin", "boss"],
+            ]
+        for index, (cohort, cohort_id) in enumerate(cohort_ids.items(), start=1):
+            if sheet_id == cohort_id and range_ == "A:Z":
+                return [
+                    COHORT_HEADER,
+                    _cohort_row(
+                        f"3000000{index}",
+                        f"Student{index}",
+                        "Alex",
+                        f"alex{index}",
+                    ),
+                ]
+            if sheet_id == cohort_id and range_ == "Gradebook!A:ZZ":
+                return _gradebook_rows([
+                    f"Student{index}",
+                    "Alex",
+                    "91%",
+                ])
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message, progress = _sync_message()
+
+    await cmd_sync(
+        message,
+        principal=User(last_name="Admin", role=Role.ADMIN),
+        session=session,
+    )
+
+    assert message.answer.await_count == 5
+    assert message.answer_document.await_count == 0
+    texts = [call.args[0] for call in message.answer.await_args_list]
+    assert texts[0].startswith("🔄 Sync started")
+    assert [text.splitlines()[0] for text in texts[1:4]] == [
+        "✅ 2023 processed",
+        "✅ 2024 processed",
+        "✅ 2025 processed",
+    ]
+    assert texts[4].startswith("✅ Sync completed")
+    assert "2023 — 1 roster student; 1 Gradebook row matched" in texts[4]
+    assert "2024 — 1 roster student; 1 Gradebook row matched" in texts[4]
+    assert "2025 — 1 roster student; 1 Gradebook row matched" in texts[4]
+    assert "Rights: 1 staff record" in texts[4]
+    progress.edit_text.assert_awaited_with(
+        "🔄 Sync started. Processing 3 cohorts…"
+    )
+
+
 async def test_sync_denied_for_non_admin(session, monkeypatch):
     called = []
     monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows",
@@ -128,7 +211,9 @@ async def test_sync_happy_path(session, monkeypatch):
     assert u.primary_cohort == "2024"
     assert u.first_name == "Ivan"
     assert u.last_name == "Ivanov"
-    assert "Sync done." in msg.answer.await_args.args[0]
+    assert "2024 — 1 roster student; 1 Gradebook row matched" in (
+        msg.answer.await_args.args[0]
+    )
 
 
 async def test_sync_stores_the_cub_email(session, monkeypatch):
@@ -247,9 +332,9 @@ async def test_sync_reports_the_rows_it_ignored_below_the_roster(session, monkey
     await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
 
     said = [c.args[0] for c in msg.answer.await_args_list]
-    read = next(m for m in said if m.startswith("Cohort 2024:"))
-    assert "1 rows read" in read
-    assert "3 rows below the roster ignored" in read
+    report = next(m for m in said if m.startswith("⚠️ 2024 processed"))
+    assert "Roster: 1 student" in report
+    assert "3 historical rows below the roster separator were ignored" in report
     assert session.query(User).filter_by(matriculation="30000009").count() == 0
 
 
@@ -278,7 +363,9 @@ async def test_sync_marks_and_reports_the_students_the_roster_dropped(session, m
     gone = session.query(User).filter_by(matriculation="30000009").one()
     assert gone.departed_at == date.today().isoformat()
     said = [c.args[0] for c in msg.answer.await_args_list]
-    assert any("1 marked departed" in m for m in said)
+    report = next(m for m in said if m.startswith("⚠️ 2024 processed"))
+    assert "Newly marked as departed (1)" in report
+    assert "Eve Expelled (30000009)" in report
 
 
 async def test_sync_reports_nothing_marked_when_the_roster_is_unchanged(session, monkeypatch):
@@ -298,7 +385,7 @@ async def test_sync_reports_nothing_marked_when_the_roster_is_unchanged(session,
     await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN), session=session)
 
     said = [c.args[0] for c in msg.answer.await_args_list]
-    assert any("0 marked departed" in m for m in said)
+    assert not any("Newly marked as departed" in m for m in said)
     assert session.query(User).filter_by(matriculation="30000001").one().departed_at \
         is None
 
@@ -416,8 +503,12 @@ async def test_broken_gradebook_does_not_rollback_roster(session, monkeypatch):
     user = session.query(User).filter_by(matriculation="30000001").one()
     assert user.primary_cohort == "2024"
     said = [call.args[0] for call in message.answer.await_args_list]
-    assert any(text.startswith("Grades for 2024 skipped:") for text in said)
-    assert said[-1] == "Sync done."
+    report = next(text for text in said if text.startswith("⚠️ 2024 processed"))
+    assert "Gradebook: not updated; previous data kept" in report
+    assert "Gradebook was not updated (1)" in report
+    assert "boom" in report
+    assert said[-1].startswith("⚠️ Sync completed with warnings")
+    assert "2024 — 1 roster student; grades not updated, previous data kept" in said[-1]
 
 
 async def test_gradebook_failure_does_not_stop_next_cohort(session, monkeypatch):
@@ -450,8 +541,11 @@ async def test_gradebook_failure_does_not_stop_next_cohort(session, monkeypatch)
     petrov = session.query(User).filter_by(matriculation="30000002").one()
     assert session.query(Grade).filter_by(user_id=petrov.id).count() == 1
     said = [call.args[0] for call in message.answer.await_args_list]
-    assert any(text.startswith("Grades for 2024 skipped:") for text in said)
-    assert any("1 rows matched" in text for text in said)
+    first_report = next(text for text in said if text.startswith("⚠️ 2024 processed"))
+    assert "Gradebook: not updated; previous data kept" in first_report
+    assert "Gradebook header row not found" in first_report
+    assert any(text.startswith("✅ 2025 processed") for text in said)
+    assert "2025 — 1 roster student; 1 Gradebook row matched" in said[-1]
 
 
 async def test_sync_stores_cohort_and_rights_source_links(session, monkeypatch):
