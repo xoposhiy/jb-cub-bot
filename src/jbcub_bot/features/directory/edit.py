@@ -205,7 +205,9 @@ async def cmd_cancel(message: Message, principal: User, session,
         await message.answer(_NOTHING_TO_CANCEL)
         return
     data = await state.get_data()
-    if await state.get_state() is None:
+    # Only this feature's own state: another feature may be waiting for text,
+    # and clearing that would end its session while showing an edit screen.
+    if await state.get_state() != EditProfile.value.state:
         await message.answer(_NOTHING_TO_CANCEL)
         return
     await state.clear()

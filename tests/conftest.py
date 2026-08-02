@@ -18,6 +18,14 @@ def _reset_feature_routers():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _reset_kb_runtime():
+    from jbcub_bot.features.kb import handlers as kb_handlers
+    kb_handlers.reset_runtime()
+    yield
+    kb_handlers.reset_runtime()
+
+
 @pytest.fixture
 def session():
     engine = create_engine("sqlite:///:memory:")

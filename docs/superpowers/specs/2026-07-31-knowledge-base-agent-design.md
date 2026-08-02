@@ -155,7 +155,9 @@ in aiogram's in-memory FSM storage, so a redeploy ends open sessions.
   `sha`; an endpoint failure propagates for `dp.errors` to report.
 - `tests/test_kb_handlers.py` — a student's `/ask` is refused and their unmatched
   text still answers `No one found.`; a teacher gets the offer button and the
-  tap opens the session; text in `KbChat.active` reaches the agent while
-  `/cancel` and Exit close it; a stale session past the idle cut starts fresh;
+  tap opens the session; text in `KbChat.active` reaches the agent while Exit
+  and the twelfth answer close it (`/cancel` belongs to `directory.edit`, which
+  is loaded first, so the KB feature cannot claim that name); a stale session
+  past the idle cut starts fresh;
   `/kb_reload` is admin-only; with any of the three endpoint settings unset
   `/ask` answers that the feature is not configured.

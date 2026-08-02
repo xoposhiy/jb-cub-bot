@@ -76,3 +76,17 @@ def format_miss(query: str, answer: str, principal=None, tg_user=None,
     lines.append(f"query: «{clip(query)}»")
     lines.append(f"answer: «{clip(answer)}»")
     return "\n".join(lines)
+
+
+def format_kb_session(asked: int, principal=None, tg_user=None) -> str:
+    """One entry per closed knowledge base session.
+
+    Staff text that used to land in format_miss now gets an offer to search
+    instead, so this is what replaces that entry: how much the feature was
+    actually used, which is what a daily quota would eventually be chosen from.
+    """
+    return "\n".join([
+        "📚 Knowledge base session",
+        f"from: {describe_sender(principal, tg_user)}",
+        f"questions: {asked}",
+    ])
