@@ -24,6 +24,20 @@ class Settings(BaseSettings):
     # looks like -100…, so this is a str; empty means report to the bootstrap
     # admins' DMs instead.
     log_chat_id: str = ""
+    # Knowledge base search. All three of base URL, key and model must be set
+    # for the feature to work, and none has a default: an unset base URL would
+    # send staff questions to the OpenAI client's own default host, and behind a
+    # proxy a model name is an alias of that one deployment, so there is nothing
+    # honest to guess.
+    kb_base_url: str = ""
+    kb_api_key: str = ""
+    kb_model: str = ""
+    kb_repo: str = "xoposhiy/cub-kb"
+    kb_ttl_seconds: int = 3600
+
+    @property
+    def kb_configured(self) -> bool:
+        return bool(self.kb_base_url and self.kb_api_key and self.kb_model)
 
     @property
     def bootstrap_admin_id_set(self) -> set[int]:

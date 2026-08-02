@@ -62,3 +62,31 @@ def test_service_account_fields_default_to_empty(monkeypatch):
     s = Settings(_env_file=None)  # ignore the developer's real .env
     assert s.google_service_account_file == ""
     assert s.google_service_account_json == ""
+
+
+def _base_env(monkeypatch):
+    monkeypatch.setenv("BOT_TOKEN", "123:abc")
+    monkeypatch.setenv("LINK_SECRET", "s3cret")
+    monkeypatch.setenv("RIGHTS_SHEET_ID", "sheet-xyz")
+    for name in ("KB_BASE_URL", "KB_API_KEY", "KB_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_kb_settings_default_to_unconfigured(monkeypatch):
+    _base_env(monkeypatch)
+    s = Settings(_env_file=None)  # ignore the developer's real .env
+    assert s.kb_base_url == ""
+    assert s.kb_api_key == ""
+    assert s.kb_model == ""
+    assert s.kb_repo == "xoposhiy/cub-kb"
+    assert s.kb_ttl_seconds == 3600
+    assert s.kb_configured is False
+
+
+def test_kb_configured_needs_all_three(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("KB_BASE_URL", "http://localhost:4000")
+    monkeypatch.setenv("KB_API_KEY", "sk-litellm")
+    assert Settings(_env_file=None).kb_configured is False  # no model
+    monkeypatch.setenv("KB_MODEL", "kb-agent")
+    assert Settings(_env_file=None).kb_configured is True
