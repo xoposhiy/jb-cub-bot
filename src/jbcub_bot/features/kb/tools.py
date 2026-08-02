@@ -17,8 +17,13 @@ MAX_CHARS = 20000
 MAX_MATCHES = 40
 TRUNCATION_MARK = "\n[… truncated]"
 
-_UNKNOWN = ("There is no note at {path}. Call list_notes to see which notes "
-            "exist.")
+# The three "nothing here" openings, named because `summarize_result` reads
+# them back to tell an empty result from a full one.
+_NO_NOTE = "There is no note at"
+_NO_MATCH = "No line matches"
+_NO_NOTES = "No notes under"
+
+_UNKNOWN = (_NO_NOTE + " {path}. Call list_notes to see which notes exist.")
 
 
 def clip(text: str, limit: int = MAX_CHARS) -> str:
@@ -35,7 +40,7 @@ def list_notes(snapshot: Snapshot, path_prefix: str = "") -> str:
         label = " — ".join(p for p in (note.title, note.description) if p)
         lines.append(f"{path}{': ' + label if label else ''}")
     if not lines:
-        return f"No notes under {path_prefix or 'kb/'}."
+        return f"{_NO_NOTES} {path_prefix or 'kb/'}."
     return clip("\n".join(lines))
 
 
@@ -61,7 +66,7 @@ def search_notes(snapshot: Snapshot, pattern: str, path_prefix: str = "") -> str
         if truncated:
             break
     if not hits:
-        return f"No line matches {pattern!r} under {path_prefix or 'kb/'}."
+        return f"{_NO_MATCH} {pattern!r} under {path_prefix or 'kb/'}."
     body = clip("\n".join(hits))
     if truncated and not body.endswith(TRUNCATION_MARK):
         body += TRUNCATION_MARK
@@ -91,3 +96,28 @@ def read_note(snapshot: Snapshot, path: str) -> str:
     if note is None:
         return _UNKNOWN.format(path=path)
     return clip(source_hint(note) + note.text)
+
+
+def _size(chars: int) -> str:
+    return f"{chars / 1000:.1f}k" if chars >= 1000 else str(chars)
+
+
+def summarize_result(name: str, output: str) -> str:
+    """What one tool call came back with, in three or four words.
+
+    This reads the "nothing here" openings the functions above write, which is
+    why it lives beside them rather than beside the trace that prints it: a
+    reworded message and its reader change together.
+    """
+    text = output.strip()
+    clipped = text.endswith(TRUNCATION_MARK.strip())
+    if name == "read_note":
+        if text.startswith(_NO_NOTE):
+            return "no such note"
+        return f"{_size(len(output))} chars" + (" (clipped)" if clipped else "")
+    if text.startswith(_NO_MATCH) or text.startswith(_NO_NOTES):
+        return "0 hits"
+    if not text:
+        return "empty"
+    hits = len(text.splitlines()) - (1 if clipped else 0)
+    return f"{hits} hit{'' if hits == 1 else 's'}" + ("+" if clipped else "")

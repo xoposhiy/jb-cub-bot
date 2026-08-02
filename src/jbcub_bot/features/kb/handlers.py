@@ -4,6 +4,13 @@ A feature that waits for free text must own an FSM state: the Dispatcher's own
 nl_fallback runs before every sub-router and only steps aside while the sender
 is in a state.
 
+Leaving that state is the one thing a reader has to be able to find, so there is
+always exactly one Exit button in the chat and it is always under the newest
+thing the bot said. It is not redrawn on every message -- that would pepper the
+chat with buttons -- but moved: after each exchange it is attached to the last
+message sent and stripped from wherever it was before. `button_at` in the FSM
+data remembers where that is.
+
 Note what is *not* here: /cancel. `directory.edit` already registers it and
 `directory` precedes `kb` in the loader's alphabetical walk, so that name is
 taken. A session ends with the Exit button, with a fresh /ask, or on the last
@@ -15,7 +22,7 @@ import logging
 import time
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -46,15 +53,17 @@ IDLE_SECONDS = 900
 
 START_CALLBACK = "kb:start"
 EXIT_CALLBACK = "kb:exit"
+EXIT_TEXT = "🚪 Exit knowledge base"
 
 _NOT_CONFIGURED = ("Knowledge base search is not configured on this bot. "
                    "An admin needs to set KB_BASE_URL, KB_API_KEY and "
                    "KB_MODEL.")
 _OPENED = ("Ask me anything about the program and I'll answer from the "
-           "knowledge base. Tap Exit when you're done.")
+           f"knowledge base. Tap {EXIT_TEXT} when you're done.")
 _CLOSED = "Knowledge base session closed."
 _EXHAUSTED = ("That was the last question in this session — send /ask to start "
               "a fresh one.")
+_IDLE = "That knowledge base session went idle. Send /ask to start a new one."
 _OFFER = "I didn't find anyone by that name. Search the knowledge base instead?"
 _THINKING = "Searching the knowledge base…"
 
@@ -67,34 +76,56 @@ def now() -> float:
     return time.time()
 
 
-async def _answer_html(message: Message, text: str) -> None:
+async def _answer_html(message: Message, text: str):
     """Send as HTML; on a parse failure send the same words with no markup.
 
     Telegram rejects a whole message over one bad tag. Losing the answer to a
-    stray `</b>` would be far worse than losing the bold.
+    stray `</b>` would be far worse than losing the bold. Returns whichever
+    message landed, so the caller can hang the Exit button off it.
     """
     try:
-        await message.answer(text, parse_mode="HTML")
+        return await message.answer(text, parse_mode="HTML")
     except TelegramBadRequest:
         logger.warning("Telegram rejected an HTML answer; retrying as plain")
-        await message.answer(render_mod.plain(text))
+        return await message.answer(render_mod.plain(text))
+
+
+async def _send_trace(target: Message, principal, stats):
+    """What the agent did to earn that answer — admins only.
+
+    A teacher wants the answer; whoever runs the bot wants to see which tools
+    ran, on what, and what came back. Sent plain, after the answer and its
+    attachments, so it never delays or endangers the answer itself. A trace
+    that fails to send is a diagnostic that failed, not a question that failed.
+    """
+    if principal is None or principal.role is not Role.ADMIN:
+        return None
+    try:
+        return await target.answer(render_mod.trace_message(stats))
+    except TelegramAPIError:
+        logger.warning("could not send the knowledge base trace",
+                       exc_info=True)
+        return None
 
 
 async def _attach_sources(bot, message: Message, live, snapshot,
-                          pdfs, already: list[str]) -> list[str]:
+                          pdfs, already: list[str]) -> tuple[list[str], object]:
     """Send each cited PDF this session has not seen yet.
 
-    Returns the updated list. A source document is evidence for an answer that
-    has already been sent, so a failure here changes nothing the reader needs.
+    Returns the updated list and the last attachment that landed. A source
+    document is evidence for an answer that has already been sent, so a failure
+    here changes nothing the reader needs.
     """
-    sent = list(already)
+    sent, last = list(already), None
     for ref in pdfs:
         if ref.file in sent:
             continue
         url = pdf_mod.raw_url(live.repo, snapshot.sha, ref.file)
-        if await pdf_mod.send(bot, message.chat.id, url, ref.caption):
+        attached = await pdf_mod.send(bot, message.chat.id, url, ref.caption)
+        if attached is not None:
             sent.append(ref.file)
-    return sent
+            last = attached
+    return sent, last
 
 
 # The runtime is process-wide and built on first use: get_settings() must not
@@ -168,7 +199,7 @@ class KbChat(StatesGroup):
 
 def _session_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Exit", callback_data=EXIT_CALLBACK)
+        InlineKeyboardButton(text=EXIT_TEXT, callback_data=EXIT_CALLBACK)
     ]])
 
 
@@ -179,21 +210,78 @@ def _offer_keyboard() -> InlineKeyboardMarkup:
     ]])
 
 
-async def _open(state: FSMContext) -> None:
+async def _set_markup(bot, chat_id: int, message_id: int, markup) -> bool:
+    """Put `markup` on a message that has already been sent, or take it off.
+
+    Every failure here is expected traffic rather than a fault: the reader may
+    have deleted the message, it may be older than Telegram allows editing, or
+    the markup may already be what we are asking for. None of that is worth
+    losing an answer over.
+    """
+    try:
+        await bot.edit_message_reply_markup(chat_id=chat_id,
+                                            message_id=message_id,
+                                            reply_markup=markup)
+    except TelegramAPIError:
+        logger.debug("could not move the knowledge base Exit button",
+                     exc_info=True)
+        return False
+    return True
+
+
+async def _park_exit_button(bot, chat_id: int, state: FSMContext,
+                            message) -> None:
+    """Move the one Exit button so that it sits under `message`.
+
+    An inline button scrolls away with the message that carries it, and drawing
+    a fresh one on every message would fill the chat with them. So there is
+    exactly one, and it walks forward: attached to the last thing the bot said,
+    stripped from wherever it was before.
+    """
+    new_id = getattr(message, "message_id", 0) or 0
+    data = await state.get_data()
+    previous = data.get("button_at") or 0
+    if not new_id or new_id == previous:
+        return
+    if not await _set_markup(bot, chat_id, new_id, _session_keyboard()):
+        return  # the old button is still live; better there than nowhere
+    if previous:
+        await _set_markup(bot, chat_id, previous, None)
+    await state.update_data(button_at=new_id)
+
+
+async def _clear_exit_button(bot, chat_id: int, data: dict) -> None:
+    """Take the button down for good: the session it belonged to is over."""
+    previous = data.get("button_at") or 0
+    if bot is not None and previous:
+        await _set_markup(bot, chat_id, previous, None)
+
+
+async def _open(state: FSMContext, bot, chat_id: int) -> None:
+    """Start a session, first taking down any button the last one left."""
+    await _clear_exit_button(bot, chat_id, await state.get_data())
     await state.set_state(KbChat.active)
     await state.set_data({"asked": 0, "last_at": now(), "history": [],
-                          "sent_pdfs": []})
+                          "sent_pdfs": [], "button_at": 0})
+
+
+async def _greet(target: Message, state: FSMContext) -> None:
+    """The opening line, carrying the session's first Exit button."""
+    opened = await target.answer(_OPENED, reply_markup=_session_keyboard())
+    await state.update_data(button_at=getattr(opened, "message_id", 0) or 0)
 
 
 async def _close(state: FSMContext, bot: Bot | None, principal, tg_user,
-                 asked: int) -> None:
-    """End the session and report how much it was used.
+                 chat_id: int, data: dict) -> None:
+    """End the session, take its button down, and report how much it was used.
 
     A session that asked nothing is not worth an entry, which also keeps a bare
     Exit tap off the ops log.
     """
+    await _clear_exit_button(bot, chat_id, data)
     await state.clear()
     live = runtime()
+    asked = data.get("asked", 0)
     if bot is None or live is None or not asked:
         return
     log = oplog_mod.OpsLog(bot, live.log_chat_id, live.admin_ids)
@@ -202,7 +290,7 @@ async def _close(state: FSMContext, bot: Bot | None, principal, tg_user,
 
 @cmd.command("ask", "Ask the knowledge base a question.",
              min_role=Role.TEACHER)
-async def cmd_ask(message: Message, principal: User, session,
+async def cmd_ask(message: Message, principal: User, session, bot: Bot,
                   state: FSMContext | None = None):
     # `state` is optional for the same reason as in directory/edit.py: /as
     # propagates through the Dispatcher without its outer middlewares.
@@ -212,8 +300,8 @@ async def cmd_ask(message: Message, principal: User, session,
     if state is None:
         await message.answer("Open a direct chat with me and send /ask there.")
         return
-    await _open(state)
-    await message.answer(_OPENED, reply_markup=_session_keyboard())
+    await _open(state, bot, message.chat.id)
+    await _greet(message, state)
 
 
 @cmd.command("kb_reload", "Re-download the knowledge base now.",
@@ -239,7 +327,7 @@ async def kb_offer(message: Message, principal, session) -> bool:
     """
     if runtime() is None:
         return False
-    remember_question(message.chat.id, message.text or "")
+    remember_question(message.chat.id, (message.text or "").strip())
     await message.answer(_OFFER, reply_markup=_offer_keyboard())
     return True
 
@@ -262,12 +350,13 @@ async def cb_start(cb: CallbackQuery, principal: User, session,
     if runtime() is None:
         await cb.answer(_NOT_CONFIGURED, show_alert=True)
         return
-    await _open(state)
     if not isinstance(cb.message, Message):
+        await _open(state, bot, cb.from_user.id)
         await cb.answer()
         return
+    await _open(state, bot, cb.message.chat.id)
     pending = take_question(cb.message.chat.id)
-    await cb.message.answer(_OPENED, reply_markup=_session_keyboard())
+    await _greet(cb.message, state)
     # Answered before the agent runs: the button would otherwise spin for the
     # whole search.
     await cb.answer()
@@ -280,9 +369,14 @@ async def cb_start(cb: CallbackQuery, principal: User, session,
 async def cb_exit(cb: CallbackQuery, principal: User, session,
                   state: FSMContext, bot: Bot):
     data = await state.get_data()
-    await _close(state, bot, principal, cb.from_user, data.get("asked", 0))
-    if isinstance(cb.message, Message):
-        await cb.message.answer(_CLOSED)
+    if not isinstance(cb.message, Message):
+        await _close(state, bot, principal, cb.from_user, cb.from_user.id, data)
+        await cb.answer()
+        return
+    # The tapped button is the one the session was tracking, so taking the
+    # markup off that very message is what `_close` is about to do anyway.
+    await _close(state, bot, principal, cb.from_user, cb.message.chat.id, data)
+    await cb.message.answer(_CLOSED)
     await cb.answer()
 
 
@@ -294,12 +388,12 @@ async def _answer_question(target: Message, principal: User, state: FSMContext,
     in a session, or the bot's offer message when the button was tapped -- so
     this serves both entry points without either duplicating the other.
     """
+    data = await state.get_data()
     live = runtime()
     if live is None:  # redeployed without the settings while a session was open
-        await state.clear()
+        await _close(state, bot, principal, tg_user, target.chat.id, data)
         await target.answer(_NOT_CONFIGURED)
         return
-    data = await state.get_data()
 
     await target.answer(_THINKING)
     snapshot = await live.store.get()
@@ -307,18 +401,24 @@ async def _answer_question(target: Message, principal: User, state: FSMContext,
                                        data.get("history", []),
                                        about=describe_asker(principal))
     asked = data.get("asked", 0) + 1
-    rendered = render_mod.render(answer, snapshot, stats)
-    await _answer_html(target, rendered.html)
-    sent_pdfs = await _attach_sources(bot, target, live, snapshot,
-                                      rendered.pdfs,
-                                      data.get("sent_pdfs", []))
+    rendered = render_mod.render(answer, snapshot)
+    # Each of these may or may not be the last word of the exchange; the Exit
+    # button goes under whichever one actually was.
+    last = await _answer_html(target, rendered.html)
+    sent_pdfs, attached = await _attach_sources(bot, target, live, snapshot,
+                                                rendered.pdfs,
+                                                data.get("sent_pdfs", []))
+    last = attached or last
+    last = await _send_trace(target, principal, stats) or last
 
     if asked >= MAX_QUESTIONS:
-        await _close(state, bot, principal, tg_user, asked)
+        # No button to move: the session ends here, so the one it had goes.
+        await _close(state, bot, principal, tg_user, target.chat.id, data)
         await target.answer(_EXHAUSTED)
         return
     await state.update_data(asked=asked, last_at=now(), history=history,
                             sent_pdfs=sent_pdfs)
+    await _park_exit_button(bot, target.chat.id, state, last)
 
 
 @router.message(KbChat.active, F.text & ~F.text.startswith("/"))
@@ -329,17 +429,16 @@ async def on_question(message: Message, principal: User, session,
     Commands are excluded rather than intercepted, so /ask and every other
     command still work while a session is open.
     """
+    data = await state.get_data()
     if runtime() is None:
-        await state.clear()
+        await _close(state, bot, principal, message.from_user,
+                     message.chat.id, data)
         await message.answer(_NOT_CONFIGURED)
         return
-    data = await state.get_data()
     if now() - data.get("last_at", 0.0) > IDLE_SECONDS:
         await _close(state, bot, principal, message.from_user,
-                     data.get("asked", 0))
-        await message.answer(
-            "That knowledge base session went idle. Send /ask to start a new one."
-        )
+                     message.chat.id, data)
+        await message.answer(_IDLE)
         return
     await _answer_question(message, principal, state, bot, message.text,
                            message.from_user)

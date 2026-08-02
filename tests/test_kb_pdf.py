@@ -41,7 +41,7 @@ def test_the_raw_url_is_pinned_to_the_snapshot_sha():
 async def test_the_first_send_uses_the_url():
     bot = FakeBot()
 
-    assert await pdf.send(bot, 5, URL, "Policies") is True
+    assert await pdf.send(bot, 5, URL, "Policies") is not None
     assert bot.documents == [URL]
 
 
@@ -65,5 +65,5 @@ async def test_a_moved_sha_is_a_different_file():
 
 
 async def test_a_failed_send_is_reported_not_raised():
-    assert await pdf.send(FakeBot(explode=True), 5, URL, "Policies") is False
+    assert await pdf.send(FakeBot(explode=True), 5, URL, "Policies") is None
     assert pdf.cached() == {}, "a failure must not poison the cache"

@@ -114,6 +114,35 @@ async def test_reading_one_note_twice_counts_one_note():
     assert stats.notes_read == 1
 
 
+async def test_every_call_is_recorded_with_its_arguments_and_its_result():
+    """The admin trace is built from these, so the pairing is what matters:
+    the framework emits a turn's calls and then that turn's outputs."""
+    model = StubModel([
+        [_call("search_notes", '{"pattern": "retake"}'),
+         _call("read_note", '{"path": "kb/policies/exams.md"}')],
+        [_text("Retakes are allowed once.")],
+    ])
+
+    _, _, stats = await kb_agent.ask(_agent(model), _snapshot(), "q", [])
+
+    assert [(c.name, c.args, c.result) for c in stats.calls] == [
+        ("search_notes", {"pattern": "retake"}, "1 hit"),
+        ("read_note", {"path": "kb/policies/exams.md"}, "26 chars"),
+    ]
+
+
+async def test_a_call_the_model_mangled_is_recorded_with_no_arguments():
+    model = StubModel([
+        [_call("list_notes", "not json at all")],
+        [_text("done")],
+    ])
+
+    _, _, stats = await kb_agent.ask(_agent(model), _snapshot(), "q", [])
+
+    assert stats.calls[0].args == {}
+    assert stats.tool_calls == 1
+
+
 async def test_a_model_that_never_stops_is_cut_and_says_so():
     model = StubModel([[_call("list_notes", '{"path_prefix": "kb/"}')]])
 
@@ -169,6 +198,22 @@ def test_the_prompt_releases_a_broad_question_from_the_quote_rule():
 
     assert "prerequisite" in rules, "the prompt names the shape of such a question"
     assert "skip the quotation" in rules
+
+
+def test_the_prompt_forbids_naming_the_knowledge_base_to_the_reader():
+    rules = kb_agent.SYSTEM_RULES
+
+    assert "Never name a note, a path, a folder or a file in your answer" in rules
+    assert "only the source documents exist" in rules
+
+
+def test_the_prompt_shows_an_answer_that_cites_nothing():
+    """An unanswerable question that still drags a citation behind it is the
+    thing this example exists to prevent."""
+    rules = kb_agent.SYSTEM_RULES
+
+    assert "no Sources: line whatsoever" in rules
+    assert "parking permits" in rules, "the example, not just the rule"
 
 
 async def test_who_is_asking_reaches_the_prompt():

@@ -116,3 +116,71 @@ def test_a_long_note_is_clipped_with_a_visible_mark():
 
     assert len(body) < tools.MAX_CHARS + len(tools.TRUNCATION_MARK) + 1
     assert body.endswith(tools.TRUNCATION_MARK)
+
+
+# --- what a call came back with -----------------------------------------------
+
+def test_a_search_that_found_nothing_summarises_as_no_hits():
+    snapshot = _snapshot()
+
+    assert tools.summarize_result(
+        "search_notes", tools.search_notes(snapshot, "zzzz")) == "0 hits"
+    assert tools.summarize_result(
+        "list_notes", tools.list_notes(snapshot, "kb/nowhere/")) == "0 hits"
+
+
+def test_a_search_that_found_something_counts_its_lines():
+    snapshot = _snapshot()
+
+    summary = tools.summarize_result("search_notes",
+                                     tools.search_notes(snapshot, "retake"))
+
+    assert summary == "2 hits"
+
+
+def test_one_hit_is_singular():
+    snapshot = _snapshot()
+
+    summary = tools.summarize_result("search_notes",
+                                     tools.search_notes(snapshot, "12 May"))
+
+    assert summary == "1 hit"
+
+
+def test_a_capped_search_says_there_were_more():
+    snapshot = Snapshot(sha="s", repo="r", notes={
+        "kb/n.md": Note(path="kb/n.md", text="hit\n" * 60)})
+
+    summary = tools.summarize_result("search_notes",
+                                     tools.search_notes(snapshot, "hit"))
+
+    assert summary == f"{tools.MAX_MATCHES} hits+"
+
+
+def test_a_note_read_reports_its_size():
+    snapshot = _snapshot()
+
+    summary = tools.summarize_result(
+        "read_note", tools.read_note(snapshot, "kb/policies/exams.md"))
+
+    assert summary.endswith(" chars")
+
+
+def test_a_big_note_reports_thousands_and_says_it_was_clipped():
+    huge = "x" * (tools.MAX_CHARS + 500)
+    snapshot = Snapshot(sha="s", repo="r",
+                        notes={"kb/big.md": Note(path="kb/big.md", text=huge)})
+
+    summary = tools.summarize_result("read_note",
+                                     tools.read_note(snapshot, "kb/big.md"))
+
+    assert summary == "20.0k chars (clipped)"
+
+
+def test_a_missing_note_says_so_rather_than_reporting_its_error_text_size():
+    snapshot = _snapshot()
+
+    summary = tools.summarize_result("read_note",
+                                     tools.read_note(snapshot, "kb/ghost.md"))
+
+    assert summary == "no such note"

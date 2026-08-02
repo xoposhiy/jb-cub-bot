@@ -29,8 +29,12 @@ def reset_cache() -> None:
     _FILE_IDS.clear()
 
 
-async def send(bot, chat_id, url: str, caption: str) -> bool:
-    """True if the document landed.
+async def send(bot, chat_id, url: str, caption: str):
+    """The sent message if the document landed, None if it did not.
+
+    The caller needs the message itself, not just the fact of it: the Exit
+    button is moved under whatever the bot said last, and an attachment is
+    often that.
 
     A source document is supporting evidence, not the answer: the answer has
     already been sent and names the document and pages regardless. So a failure
@@ -42,9 +46,9 @@ async def send(bot, chat_id, url: str, caption: str) -> bool:
                                           caption=caption)
     except Exception:  # noqa: BLE001 - a missing attachment must not lose the answer
         logger.exception("Could not send the source document %s", url)
-        return False
+        return None
     document = getattr(message, "document", None)
     file_id = getattr(document, "file_id", "")
     if file_id:
         _FILE_IDS[url] = file_id
-    return True
+    return message

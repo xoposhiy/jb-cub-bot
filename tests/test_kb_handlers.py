@@ -9,7 +9,13 @@ from types import SimpleNamespace
 
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import SendMessage
-from aiogram.types import CallbackQuery, Chat, Message, Update
+from aiogram.types import (
+    CallbackQuery,
+    Chat,
+    InlineKeyboardMarkup,
+    Message,
+    Update,
+)
 from aiogram.types import User as TgUser
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -24,28 +30,59 @@ from jbcub_bot.main import build_dispatcher
 
 TEACHER_ID = 555
 STUDENT_ID = 222
+ADMIN_ID = 999
 
 
 class FakeBot:
+    """Enough of a Bot to answer with real message ids.
+
+    The ids matter: the Exit button is moved from message to message, so a
+    stub that answers None to every send would make that untestable. `events`
+    is the chronological record of every markup this chat has been shown.
+    """
+
     def __init__(self, reject_html=False):
         self.id = 1
         self.sent: list = []
         self.documents: list = []
+        self.events: list[tuple[str, int, object]] = []
         self.reject_html = reject_html
+        self._last_id = 500
+
+    def _reply(self, chat_id, text="") -> Message:
+        self._last_id += 1
+        return Message(message_id=self._last_id,
+                       date=datetime.now(timezone.utc),
+                       chat=Chat(id=chat_id or 0, type="private"),
+                       from_user=TgUser(id=self.id, is_bot=True,
+                                        first_name="bot"),
+                       text=text).as_(self)
 
     async def __call__(self, method, request_timeout=None):
         if self.reject_html and getattr(method, "parse_mode", None) == "HTML":
             raise TelegramBadRequest(method=method,
                                      message="can't parse entities")
         self.sent.append(method)
-        return None
+        sent = self._reply(getattr(method, "chat_id", 0),
+                           getattr(method, "text", "") or "")
+        self.events.append(("send", sent.message_id,
+                            getattr(method, "reply_markup", None)))
+        return sent
 
     async def send_message(self, chat_id, text):
         self.sent.append(SendMessage(chat_id=chat_id, text=text))
 
     async def send_document(self, chat_id, document, caption=None):
         self.documents.append(document)
-        return SimpleNamespace(document=SimpleNamespace(file_id="FILE-1"))
+        sent = self._reply(chat_id)
+        self.events.append(("send", sent.message_id, None))
+        return SimpleNamespace(message_id=sent.message_id,
+                               document=SimpleNamespace(file_id="FILE-1"))
+
+    async def edit_message_reply_markup(self, chat_id, message_id,
+                                        reply_markup=None):
+        self.events.append(("edit", message_id, reply_markup))
+        return None
 
 
 class FakeStore:
@@ -75,8 +112,12 @@ def _install_runtime(monkeypatch,
     async def fake_ask(agent, snapshot, question, history, about=""):
         asked.append(question)
         return (answer, history + [{"role": "user", "content": question}],
-                kb_agent.AskStats(steps=2, tool_calls=1, notes_read=1,
-                                  input_tokens=1200, output_tokens=310))
+                kb_agent.AskStats(
+                    steps=2, tool_calls=1, notes_read=1, input_tokens=1200,
+                    output_tokens=310,
+                    calls=(kb_agent.ToolCall(
+                        "read_note", {"path": "kb/policies/exams.md"},
+                        "1.2k chars"),)))
 
     # handlers.py imported `ask` by name, so that binding is the one in play.
     monkeypatch.setattr(kb, "ask", fake_ask)
@@ -100,6 +141,8 @@ def _seed(factory):
     setup.add(User(last_name="Ivanov", first_name="Ivan",
                    matriculation="30001111", telegram_id=STUDENT_ID,
                    role=Role.STUDENT, primary_cohort="2024"))
+    setup.add(User(last_name="Admin", first_name="Ada",
+                   telegram_id=ADMIN_ID, role=Role.ADMIN))
     setup.commit()
     setup.close()
 
@@ -131,6 +174,28 @@ def _texts(fake_bot) -> list[str]:
     return [getattr(m, "text", "") or "" for m in fake_bot.sent]
 
 
+def _is_exit(markup) -> bool:
+    return isinstance(markup, InlineKeyboardMarkup) and any(
+        button.callback_data == kb.EXIT_CALLBACK
+        for row in markup.inline_keyboard for button in row)
+
+
+def _exit_buttons(fake_bot) -> list[int]:
+    """Which messages show an Exit button right now, replaying every event.
+
+    A message's markup is whatever it was last set to, whether that was at
+    send time or by a later edit — so the last event wins per message id.
+    """
+    shown: dict[int, bool] = {}
+    for _, message_id, markup in fake_bot.events:
+        shown[message_id] = _is_exit(markup)
+    return [message_id for message_id, has in shown.items() if has]
+
+
+def _last_message_id(fake_bot) -> int:
+    return max((message_id for _, message_id, _ in fake_bot.events), default=0)
+
+
 def _setup(monkeypatch, **kw):
     factory = _session_factory()
     _seed(factory)
@@ -158,9 +223,9 @@ async def test_the_answer_cites_the_document_section_and_pages(monkeypatch):
 
     answer = _texts(bot)[-1]
     assert "Policies for Bachelor Studies v8" in answer
-    assert "pp. 18–20" in answer
-    assert "kb/policies/exams.md" not in answer, "no raw paths in the answer"
-    assert "2 steps · 1 tool call · 1 note" in answer
+    assert "§III.4 Grading — pp. 18–20" in answer
+    assert "kb/" not in answer, "the base never shows through to a reader"
+    assert "steps" not in answer, "cost is an admin's business, not a teacher's"
 
 
 async def test_a_student_is_refused_and_still_gets_the_name_search(monkeypatch):
@@ -273,6 +338,181 @@ async def test_exit_closes_the_session(monkeypatch):
                          dispatcher=dp)
 
     assert asked == [], "text after Exit is no longer the agent's"
+    assert kb._CLOSED in _texts(bot)
+
+
+# --- one Exit button, always under the newest message -------------------------
+
+async def test_opening_a_session_draws_the_exit_button(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch)
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+
+    assert _exit_buttons(bot) == [_last_message_id(bot)]
+
+
+async def test_tapping_the_offer_also_draws_it(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch)
+
+    await dp.feed_update(bot, _callback(bot, TEACHER_ID, kb.START_CALLBACK),
+                         dispatcher=dp)
+
+    assert len(_exit_buttons(bot)) == 1
+
+
+async def test_the_button_moves_to_the_newest_message_after_an_answer(
+        monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+    greeting = _last_message_id(bot)
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "retakes?", update_id=2),
+                         dispatcher=dp)
+
+    assert _exit_buttons(bot) == [_last_message_id(bot)]
+    assert greeting not in _exit_buttons(bot), "the old one was taken down"
+
+
+async def test_the_chat_never_holds_two_exit_buttons(monkeypatch):
+    """The whole point: one button, not one per message."""
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+
+    for i in range(4):
+        await dp.feed_update(bot, _message(bot, TEACHER_ID, f"q{i}",
+                                           update_id=10 + i), dispatcher=dp)
+        assert _exit_buttons(bot) == [_last_message_id(bot)]
+
+
+async def test_the_button_lands_on_the_attachment_when_that_came_last(
+        monkeypatch):
+    """A source PDF is sent after the answer, so the answer is not the last
+    word and must not be where the button waits."""
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "retakes?", update_id=2),
+                         dispatcher=dp)
+
+    assert bot.documents, "this answer does attach a PDF"
+    assert _exit_buttons(bot) == [_last_message_id(bot)]
+
+
+async def test_the_button_lands_on_the_trace_for_an_admin(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, ADMIN_ID, "/ask"), dispatcher=dp)
+
+    await dp.feed_update(bot, _message(bot, ADMIN_ID, "retakes?", update_id=2),
+                         dispatcher=dp)
+
+    trace_at = max(mid for kind, mid, _ in bot.events if kind == "send")
+    assert _exit_buttons(bot) == [trace_at]
+
+
+async def test_the_last_answer_takes_the_button_down_with_the_session(
+        monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+
+    for i in range(kb.MAX_QUESTIONS):
+        await dp.feed_update(bot, _message(bot, TEACHER_ID, f"q{i}",
+                                           update_id=10 + i), dispatcher=dp)
+
+    assert _exit_buttons(bot) == []
+
+
+async def test_exiting_takes_the_button_down(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "q", update_id=2),
+                         dispatcher=dp)
+
+    await dp.feed_update(bot, _callback(bot, TEACHER_ID, kb.EXIT_CALLBACK,
+                                        update_id=3), dispatcher=dp)
+
+    assert _exit_buttons(bot) == []
+
+
+async def test_an_idle_session_takes_the_button_down(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "first", update_id=2),
+                         dispatcher=dp)
+
+    real_now = kb.now
+    monkeypatch.setattr(kb, "now", lambda: real_now() + kb.IDLE_SECONDS + 1)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "second", update_id=3),
+                         dispatcher=dp)
+
+    assert _exit_buttons(bot) == []
+
+
+async def test_a_fresh_ask_does_not_leave_the_old_button_behind(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "q", update_id=2),
+                         dispatcher=dp)
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask", update_id=3),
+                         dispatcher=dp)
+
+    assert _exit_buttons(bot) == [_last_message_id(bot)]
+
+
+async def test_a_button_telegram_refuses_to_move_is_left_where_it_is(
+        monkeypatch):
+    """Better a button one message too high than no way out at all."""
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+    greeting = _last_message_id(bot)
+
+    async def refuse(chat_id, message_id, reply_markup=None):
+        raise TelegramBadRequest(method=SendMessage(chat_id=chat_id, text="x"),
+                                 message="message can't be edited")
+
+    monkeypatch.setattr(bot, "edit_message_reply_markup", refuse)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "q", update_id=2),
+                         dispatcher=dp)
+
+    assert _exit_buttons(bot) == [greeting]
+
+
+# --- the admin trace ----------------------------------------------------------
+
+async def test_an_admin_is_shown_what_the_agent_did(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, ADMIN_ID, "/ask"), dispatcher=dp)
+
+    await dp.feed_update(bot, _message(bot, ADMIN_ID, "retakes?", update_id=2),
+                         dispatcher=dp)
+
+    trace = _texts(bot)[-1]
+    assert "read_note kb/policies/exams.md — 1.2k chars" in trace
+    assert "2 steps · 1 tool call · 1 note read · 1.2k in / 310 out" in trace
+
+
+async def test_the_trace_comes_after_the_answer_it_explains(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, ADMIN_ID, "/ask"), dispatcher=dp)
+
+    await dp.feed_update(bot, _message(bot, ADMIN_ID, "retakes?", update_id=2),
+                         dispatcher=dp)
+
+    texts = _texts(bot)
+    answer_at = next(i for i, t in enumerate(texts)
+                     if "Policies for Bachelor Studies" in t)
+    assert answer_at < len(texts) - 1
+
+
+async def test_a_teacher_is_shown_the_answer_and_nothing_else(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "retakes?", update_id=2),
+                         dispatcher=dp)
+
+    assert not any("read_note" in t for t in _texts(bot))
+    assert not any("tool call" in t for t in _texts(bot))
 
 
 async def test_the_twelfth_answer_closes_the_session(monkeypatch):
