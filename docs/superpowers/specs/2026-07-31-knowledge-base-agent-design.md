@@ -15,6 +15,10 @@ read-only tools; it is a search navigator, not an assistant with a shell.
 - **The knowledge base is a separate repository that changes.** The bot has no
   copy of it and no build step that could bake one in, so it fetches the base at
   runtime and has to notice when it moved.
+- **No vendor is baked in.** The bot talks to whatever OpenAI-compatible
+  chat-completions endpoint it is pointed at — a LiteLLM proxy on a laptop for a
+  debug run, whatever gateway the deploy has. Nothing in the code names a model
+  vendor.
 - **The base already documents how to search itself.** `cub-kb/AGENTS.md` names
   the rules — answer from `kb/` only, dates from `kb/calendars/<year>/` and never
   from a policy, read a folder's `_index.md` when filenames don't say which note
@@ -48,35 +52,55 @@ read-only tools; it is a search navigator, not an assistant with a shell.
   `asyncio.to_thread`.
 - **A map of the base goes in the system prompt** — the `kb/` tree plus each
   note's frontmatter `title` and `description`, generated from the snapshot,
-  around 4k tokens, carrying the `cache_control` breakpoint. With it the agent
-  usually reaches the right note in one `read_note` instead of three steps of
-  reconnaissance; fewer iterations is both cheaper and faster than making the
-  model rediscover the tree per question. Whether it caches depends on the
-  model's minimum cacheable prefix, and an uncached prefix costs cents — the map
-  earns its place on iteration count either way.
+  around 4k tokens. With it the agent usually reaches the right note in one
+  `read_note` instead of three steps of reconnaissance; fewer iterations is both
+  cheaper and faster than making the model rediscover the tree per question. No
+  cache breakpoint is marked: that annotation is one vendor's, and the map sits
+  first in a prompt that does not change between questions, so whatever prefix
+  caching the endpoint does on its own applies. The map earns its place on
+  iteration count either way.
+- **The snapshot reaches the agent as run context**, so the instructions render
+  the map from it and the tools read it out of it. The agent is built once and a
+  `/kb_reload` between two questions is picked up without rebuilding anything.
 - **Three tools:** `list_notes(path_prefix)` returns paths with descriptions,
   `search_notes(pattern, path_prefix)` returns `path:line: text` under a match
   cap, `read_note(path)` returns a whole note (5–18 KB, no chunking needed).
   Every result is truncated by length with a visible mark, so one tool call
   cannot fill the context.
-- **`claude-haiku-4-5`, set by `KB_MODEL`** so the model changes without a code
-  deploy. A question costs roughly $0.02–0.03: about three requests, 15–25k input
-  tokens, ~700 output. `claude-sonnet-5` is the switch if navigation
-  disappoints — three times the tariff, usually fewer steps.
-- **Our own async tool loop, not the SDK's beta tool runner.** The loop is where
-  the iteration cap lives and where a fake client substitutes in tests; the
-  runner would own both.
+- **The endpoint is a setting, not a vendor.** `KB_BASE_URL`, `KB_API_KEY` and
+  `KB_MODEL` name an OpenAI-compatible chat-completions endpoint, its key, and
+  the model to ask for. None of the three has a default: an unset base URL would
+  send staff questions to `api.openai.com`, and behind a proxy a model name is an
+  alias of that one deployment, so there is nothing honest to guess. A question
+  is about three requests, 15–25k input tokens and ~700 output; what that costs
+  is a property of whatever `KB_MODEL` resolves to on the gateway, and a bigger
+  model is the switch if navigation disappoints. Rejected: the Anthropic Messages
+  API — LiteLLM does serve it, but that makes the deploy depend on a route being
+  enabled, while chat completions is the surface every configuration has.
+- **`openai-agents` runs the loop.** The framework owns the tool cycle, the
+  schemas it derives from the three functions' signatures, and the iteration cap,
+  so our code holds the tools, the prompt and nothing else. Two settings are not
+  its defaults: the model is pinned to the chat-completions class over our own
+  client rather than the Responses API, and tracing is off — otherwise the
+  framework exports every run to OpenAI, which is both a leak and an error when
+  the key belongs to a proxy. The agent carries the three functions and nothing
+  else: no hosted tools, no handoffs. Rejected: our own async loop — it was the
+  plan while the iteration cap and the test seam had nowhere else to live, and
+  the framework offers both.
 - **Staff only, by role:** `min_role=Role.TEACHER` on the command, the intent and
   the manifest. Answer quality and real cost get observed on a narrow group
   before students see the feature, and opening it later is one line. Private
   chats and `departed_at` are already closed by `PrincipalMiddleware`. No
   per-person quota table: the structural caps below bound one session, and the
   ops-log report is what a daily quota would eventually be chosen from.
-- **Caps per question and per session:** 6 tool iterations and 1024 output
+- **Caps per question and per session:** 6 model turns and 1024 output
   tokens per question, 12 questions per session, and a 15-minute idle cut checked
   on the next message rather than by a background task. An exhausted iteration
-  budget answers with what the agent has and says the search was cut short; the
-  twelfth answer closes the session and says a new `/ask` starts a fresh one.
+  budget is answered by the framework's `max_turns` handler with a line saying
+  the search was cut short — a fixed sentence rather than a partial answer, since
+  the run is abandoned and not concluded. The twelfth answer closes the session
+  and says a new `/ask` starts a fresh one. Between questions the session carries
+  the run's own input list, in FSM storage.
 - **The user's text and every note are framed as data.** The system prompt says
   instructions found inside either are content to report, never orders to follow.
   The tools bound the damage if that fails: there is nothing to execute.
@@ -96,14 +120,14 @@ read-only tools; it is a search navigator, not an assistant with a shell.
   (`blob/<sha>/kb/...#L42`), so a line number still points at the line the agent
   read. Messages carry no `parse_mode`: a quotation from a policy holding `_` or
   `*` would otherwise break the message.
-- **An unset `ANTHROPIC_API_KEY` disables the feature, not the bot.** `/ask`
+- **Any of the three settings unset disables the feature, not the bot.** `/ask`
   answers that knowledge base search is not configured; `/help` and the test
   suite are unaffected.
 - **New modules rather than more of an existing feature:** `core/kb_snapshot.py`
-  fetches, parses frontmatter and builds the map with no aiogram or anthropic
+  fetches, parses frontmatter and builds the map with no aiogram or model-client
   import; `features/kb/tools.py` holds the three functions; `features/kb/agent.py`
-  the loop, the prompt and citation rendering; `features/kb/handlers.py` the
-  router, `/ask`, the FSM state, `/kb_reload` and the manifest.
+  builds the agent, the prompt and citation rendering; `features/kb/handlers.py`
+  the router, `/ask`, the FSM state, `/kb_reload` and the manifest.
 
 ## Out of scope
 
@@ -124,14 +148,14 @@ in aiogram's in-memory FSM storage, so a redeploy ends open sessions.
   unknown; `search_notes` respects `path_prefix`, caps its matches and reports
   the truncation; an invalid regex is answered, not raised; `list_notes` on an
   empty prefix lists the whole base.
-- `tests/test_kb_agent.py` — a scripted fake client drives a `tool_use` sequence
-  to an answer; a client that never stops calling tools is cut at 6 iterations
-  and the answer says so; an unknown tool name comes back as a tool error rather
-  than an exception; citations render against the snapshot `sha`; an API failure
-  propagates for `dp.errors` to report.
+- `tests/test_kb_agent.py` — a scripted stub model drives a tool-call sequence to
+  an answer; a stub that never stops calling tools is cut at 6 turns and the
+  answer says so; a tool that raises comes back to the model as an error instead
+  of ending the run; citations render against the snapshot
+  `sha`; an endpoint failure propagates for `dp.errors` to report.
 - `tests/test_kb_handlers.py` — a student's `/ask` is refused and their unmatched
   text still answers `No one found.`; a teacher gets the offer button and the
   tap opens the session; text in `KbChat.active` reaches the agent while
   `/cancel` and Exit close it; a stale session past the idle cut starts fresh;
-  `/kb_reload` is admin-only; with no API key `/ask` answers that the feature is
-  not configured.
+  `/kb_reload` is admin-only; with any of the three endpoint settings unset
+  `/ask` answers that the feature is not configured.
