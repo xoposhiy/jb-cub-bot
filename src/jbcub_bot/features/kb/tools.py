@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from jbcub_bot.core.kb_snapshot import Snapshot
+from jbcub_bot.core.kb_snapshot import Note, Snapshot
 
 MAX_CHARS = 20000
 MAX_MATCHES = 40
@@ -68,9 +68,26 @@ def search_notes(snapshot: Snapshot, pattern: str, path_prefix: str = "") -> str
     return body
 
 
+def source_hint(note: Note) -> str:
+    """One line naming the document, section and pages this note reproduces.
+
+    The agent needs it to tell a policy note from a calendar note without
+    guessing from the path, and to know a source exists at all.
+    """
+    src = note.source
+    if src is None:
+        return ""
+    bits = [src.document or src.file]
+    if src.sections:
+        bits.append("; ".join(src.sections))
+    if src.pdf_pages:
+        bits.append(f"pp. {src.pdf_pages}")
+    return "[source: " + " · ".join(b for b in bits if b) + "]\n\n"
+
+
 def read_note(snapshot: Snapshot, path: str) -> str:
     """A whole note. Notes are 5–18 KB, so there is nothing to chunk."""
     note = snapshot.notes.get(path)
     if note is None:
         return _UNKNOWN.format(path=path)
-    return clip(note.text)
+    return clip(source_hint(note) + note.text)

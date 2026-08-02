@@ -1,6 +1,6 @@
 """Three functions over a dict. The point of the design is that a bad path is a
 missing key rather than a filesystem call, so that is what these prove."""
-from jbcub_bot.core.kb_snapshot import Note, Snapshot
+from jbcub_bot.core.kb_snapshot import Note, Snapshot, Source
 from jbcub_bot.features.kb import tools
 
 
@@ -78,6 +78,33 @@ def test_search_notes_caps_its_matches_and_says_so():
 
     assert hits.count("kb/big.md:") == tools.MAX_MATCHES
     assert tools.TRUNCATION_MARK in hits
+
+
+def _sourced() -> Snapshot:
+    return Snapshot(sha="abc123", repo="r", notes={
+        "kb/p.md": Note(
+            path="kb/p.md", text="Retakes are allowed once.\n",
+            title="Grading",
+            source=Source(file="sources/policies/bachelor_policies_v8.pdf",
+                          document="Policies for Bachelor Studies",
+                          version="8", sections=("III.4 Grading",),
+                          pdf_pages="18-20")),
+    })
+
+
+def test_read_note_tells_the_agent_which_document_it_is_reading():
+    body = tools.read_note(_sourced(), "kb/p.md")
+
+    assert "Policies for Bachelor Studies" in body
+    assert "III.4 Grading" in body
+    assert "18-20" in body
+    assert "Retakes are allowed once." in body
+
+
+def test_a_note_without_a_source_gets_no_hint():
+    body = tools.read_note(_snapshot(), "kb/policies/exams.md")
+
+    assert body.startswith("---")
 
 
 def test_a_long_note_is_clipped_with_a_visible_mark():
