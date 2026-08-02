@@ -84,7 +84,7 @@ not to this feature.
   `Settings.kb_model: str`, `Settings.kb_repo: str`,
   `Settings.kb_ttl_seconds: int`, `Settings.kb_configured -> bool`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_config.py`:
 
@@ -117,12 +117,12 @@ def test_kb_configured_needs_all_three(monkeypatch):
     assert Settings(_env_file=None).kb_configured is True
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_config.py -v`
 Expected: FAIL with `AttributeError: 'Settings' object has no attribute 'kb_base_url'`
 
-- [ ] **Step 3: Add the settings**
+- [x] **Step 3: Add the settings**
 
 In `src/jbcub_bot/core/config.py`, after the `log_chat_id` field and before the
 `bootstrap_admin_id_set` property:
@@ -144,12 +144,12 @@ In `src/jbcub_bot/core/config.py`, after the `log_chat_id` field and before the
         return bool(self.kb_base_url and self.kb_api_key and self.kb_model)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_config.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Document the settings in `.env.example`**
+- [x] **Step 5: Document the settings in `.env.example`**
 
 Append to `.env.example`:
 
@@ -165,11 +165,11 @@ KB_REPO=xoposhiy/cub-kb
 KB_TTL_SECONDS=3600
 ```
 
-- [ ] **Step 6: Add the agent framework**
+- [x] **Step 6: Add the agent framework**
 
 Run: `uv add openai-agents`
 
-- [ ] **Step 7: Verify the imports the later tasks need actually resolve**
+- [x] **Step 7: Verify the imports the later tasks need actually resolve**
 
 Run:
 
@@ -181,7 +181,7 @@ Expected: `ok`. If `MaxTurnsExceeded` is not under `agents.exceptions`, find it
 with `uv run python -c "import agents; print([n for n in dir(agents) if 'Turns' in n])"`
 and use that import path everywhere in Task 4 instead.
 
-- [ ] **Step 8: Run the whole suite and commit**
+- [x] **Step 8: Run the whole suite and commit**
 
 Run: `uv run pytest`
 Expected: PASS
@@ -214,7 +214,7 @@ git commit -m "feat: add knowledge base endpoint settings"
   - `SnapshotStore(repo, ttl_seconds, *, opener=..., clock=...)` with
     `async def get(self, *, force: bool = False) -> Snapshot`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_kb_snapshot.py`:
 
@@ -377,12 +377,12 @@ async def test_force_skips_the_ttl():
     assert sum("/commits/" in u for u in opener.urls) == 1
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_kb_snapshot.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.core.kb_snapshot'`
 
-- [ ] **Step 3: Write the module**
+- [x] **Step 3: Write the module**
 
 Create `src/jbcub_bot/core/kb_snapshot.py`:
 
@@ -546,12 +546,12 @@ class SnapshotStore:
             return self._snapshot
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_kb_snapshot.py -v`
 Expected: PASS, 8 tests
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/jbcub_bot/core/kb_snapshot.py tests/test_kb_snapshot.py
@@ -579,7 +579,7 @@ git commit -m "feat: fetch the knowledge base into an in-memory snapshot"
 `manifest`/`router`, so an empty file here is inert and keeps `tests/conftest.py`
 happy until Task 5.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_kb_tools.py`:
 
@@ -677,17 +677,17 @@ def test_a_long_note_is_clipped_with_a_visible_mark():
     assert body.endswith(tools.TRUNCATION_MARK)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_kb_tools.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.features.kb'`
 
-- [ ] **Step 3: Create the package marker**
+- [x] **Step 3: Create the package marker**
 
 Create `src/jbcub_bot/features/kb/__init__.py` as an empty file. On Windows, do
 not use `New-Item -Force` on an existing file.
 
-- [ ] **Step 4: Write the tools**
+- [x] **Step 4: Write the tools**
 
 Create `src/jbcub_bot/features/kb/tools.py`:
 
@@ -770,12 +770,12 @@ def read_note(snapshot: Snapshot, path: str) -> str:
     return clip(note.text)
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_kb_tools.py -v`
 Expected: PASS, 10 tests
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/jbcub_bot/features/kb/ tests/test_kb_tools.py
@@ -803,7 +803,7 @@ git commit -m "feat: add the three knowledge base search tools"
     `repo: str`, `log_chat_id: str = ""`, `admin_ids: tuple[int, ...] = ()`
   - `build_runtime(settings) -> KbRuntime | None` (None when not configured)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_kb_agent.py`:
 
@@ -953,7 +953,7 @@ def test_no_runtime_without_all_three_settings():
     assert kb_agent.build_runtime(Unconfigured()) is None
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_kb_agent.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.features.kb.agent'`
@@ -963,7 +963,7 @@ If instead an *import* in the test file fails (`ResponseFunctionToolCall`,
 `uv run python -c "import agents, inspect; print(inspect.signature(agents.ModelResponse))"`
 and adjust the three helper builders — the test's intent does not change.
 
-- [ ] **Step 3: Write the agent**
+- [x] **Step 3: Write the agent**
 
 Create `src/jbcub_bot/features/kb/agent.py`:
 
@@ -1155,7 +1155,7 @@ def build_runtime(settings) -> KbRuntime | None:
     )
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `uv run pytest tests/test_kb_agent.py -v`
 Expected: PASS, 8 tests
@@ -1166,7 +1166,7 @@ If `test_a_model_that_never_stops_is_cut_and_says_so` reports a different
 and assert that number — do **not** raise `MAX_TURNS` to make the test pass. The
 cap is 6 by spec.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/jbcub_bot/features/kb/agent.py tests/test_kb_agent.py
@@ -1192,7 +1192,7 @@ git commit -m "feat: run the knowledge base agent over an OpenAI-compatible endp
   `set_runtime(runtime)` / `reset_runtime()` (test seams),
   `oplog.format_kb_session(asked, principal, tg_user) -> str`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_kb_handlers.py`:
 
@@ -1445,12 +1445,12 @@ def _reset_kb_runtime():
     kb_handlers.reset_runtime()
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_kb_handlers.py -v`
 Expected: FAIL with `ImportError: cannot import name 'handlers' from 'jbcub_bot.features.kb'`
 
-- [ ] **Step 3: Add the ops-log entry format**
+- [x] **Step 3: Add the ops-log entry format**
 
 Append to `src/jbcub_bot/core/oplog.py`:
 
@@ -1469,7 +1469,7 @@ def format_kb_session(asked: int, principal=None, tg_user=None) -> str:
     ])
 ```
 
-- [ ] **Step 4: Write the handlers**
+- [x] **Step 4: Write the handlers**
 
 Create `src/jbcub_bot/features/kb/handlers.py`:
 
@@ -1712,7 +1712,7 @@ async def on_question(message: Message, principal: User, session,
     await state.update_data(asked=asked, last_at=now(), history=history)
 ```
 
-- [ ] **Step 5: Write the feature manifest**
+- [x] **Step 5: Write the feature manifest**
 
 Replace the contents of `src/jbcub_bot/features/kb/__init__.py`:
 
@@ -1733,7 +1733,7 @@ manifest = Manifest(
 __all__ = ["router", "manifest"]
 ```
 
-- [ ] **Step 6: Make directory's `/cancel` mind its own state**
+- [x] **Step 6: Make directory's `/cancel` mind its own state**
 
 In `src/jbcub_bot/features/directory/edit.py`, replace the body of `cmd_cancel`
 (currently lines 200-213) with:
@@ -1757,17 +1757,17 @@ async def cmd_cancel(message: Message, principal: User, session,
                   edit_keyboard(principal, impersonate_ref))
 ```
 
-- [ ] **Step 7: Add the conftest fixture**
+- [x] **Step 7: Add the conftest fixture**
 
 Add the `_reset_kb_runtime` fixture from Step 1 to `tests/conftest.py`,
 importing `pytest` if it is not already imported there (it is).
 
-- [ ] **Step 8: Run the new tests**
+- [x] **Step 8: Run the new tests**
 
 Run: `uv run pytest tests/test_kb_handlers.py -v`
 Expected: PASS, 10 tests
 
-- [ ] **Step 9: Run the whole suite**
+- [x] **Step 9: Run the whole suite**
 
 Run: `uv run pytest`
 Expected: PASS. Two existing suites are the likely casualties and both are real
@@ -1779,7 +1779,7 @@ signals, not noise to silence:
   asserts the old behaviour for a teacher, change it to assert the offer; if it
   asserts it for a student, it must still pass untouched.
 
-- [ ] **Step 10: Verify the intent order is what the design assumes**
+- [x] **Step 10: Verify the intent order is what the design assumes**
 
 Run:
 
@@ -1793,12 +1793,12 @@ print([f.manifest.name for f in discover_features(p)])"
 Expected: `directory` appears before `kb`. If it does not, the name search has
 lost its right of first refusal — stop and report rather than reordering by hand.
 
-- [ ] **Step 11: Check the bot still starts**
+- [x] **Step 11: Check the bot still starts**
 
 Run: `uv run python -c "from jbcub_bot.main import build_dispatcher; build_dispatcher(lambda: None); print('ok')"`
 Expected: `ok`
 
-- [ ] **Step 12: Correct the spec's `/cancel` line**
+- [x] **Step 12: Correct the spec's `/cancel` line**
 
 In `docs/superpowers/specs/2026-07-31-knowledge-base-agent-design.md`, in the
 `tests/test_kb_handlers.py` bullet, replace:
@@ -1817,7 +1817,7 @@ with:
   past the idle cut starts fresh;
 ```
 
-- [ ] **Step 13: Commit**
+- [x] **Step 13: Commit**
 
 ```bash
 git add src/jbcub_bot/features/kb/ src/jbcub_bot/core/oplog.py \
@@ -1843,3 +1843,41 @@ unsupported tool-call shape surfaces, and neither can be caught by a stub model.
       declarations, not in this plan's structure — the `strict_mode=False`
       already set in Task 4 is the first knob; the second is simplifying the
       tool signatures to a single required string parameter.
+
+---
+
+## Deviations found while executing (2026-08-02)
+
+Two of the plan's *test expectations* were wrong against the code the plan
+itself specifies. In both cases the module was left as written and the
+assertion corrected.
+
+1. **Task 2, `SnapshotStore` clock ticks.** `get()` consumes one clock tick on a
+   cold call, not two, so the `iter([0.0, 0.0, 9999.0, 9999.0])` fixture never
+   pushed the store past its TTL: `test_a_moved_sha_refetches` failed, and
+   `test_an_unchanged_sha_reuses_the_snapshot_without_downloading` passed
+   without ever exercising the expiry path it names. Both now use
+   `_ticks(0.0, 9999.0, 9999.0)` and expect two commits calls (the cold load
+   plus the re-check).
+2. **Task 2, `test_force_skips_the_ttl`.** The forced `get()` is the *second*
+   commits call, not the first, so the assertion is `== 2`. With the clock
+   frozen an unforced call would have asked nothing, which is what makes 2 the
+   evidence that `force` bypassed the TTL.
+3. **Task 4, the stub model.** `openai-agents` 0.19.2 type-checks `Agent.model`
+   against `agents.models.interface.Model`, so the plan's duck-typed `StubModel`
+   / `ExplodingModel` were rejected before any run started. Both now subclass
+   that interface; the tests' intent is unchanged, and `MAX_TURNS` still cuts at
+   exactly 6.
+
+**Predicted casualties that did not happen.** Task 5, Step 9 expected
+`test_help_integration.py` and `test_fallback.py` / `test_search_integration.py`
+to need updating. They pass untouched: the autouse `_reset_kb_runtime` fixture
+leaves the runtime unbuilt, so `kb_offer` declines and staff text still falls
+through to `No one found.` in those suites.
+
+**Second core-wide wart, alongside the "Admins only." one.** `render_help` pools
+every non-`STUDENT` command into a single `🔐 Admin` block, so a teacher's
+`/help` lists `/ask` under "Admin" and the `kb` manifest's `📚` emoji and
+`help_text` never render. That is the help renderer's behaviour for every
+elevated command, not something this feature introduced, so it is left alone
+here for the same reason.
