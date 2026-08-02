@@ -168,7 +168,7 @@ def test_the_metrics_line_reports_all_five_numbers():
 
     assert "3 steps" in line
     assert "4 tool calls" in line
-    assert "2 notes" in line
+    assert "2 notes read" in line
     assert "1.2k in" in line
     assert "310 out" in line
 
@@ -178,7 +178,14 @@ def test_one_of_something_is_singular():
 
     assert "1 step ·" in line
     assert "1 tool call ·" in line
-    assert "1 note ·" in line
+    assert "1 note read ·" in line
+
+
+def test_reading_nothing_says_so_rather_than_looking_broken():
+    """A bare "0 notes" reads as a fault; it is a legitimate outcome."""
+    line = render.metrics_line(FakeStats(notes_read=0))
+
+    assert "0 notes read" in line
 
 
 # --- the whole message --------------------------------------------------------
@@ -225,6 +232,47 @@ def test_an_answer_citing_nothing_gets_no_sources_block_but_keeps_metrics():
     assert "📄" not in out.html
     assert "🌐" not in out.html
     assert "3 steps" in out.html
+
+
+def test_a_broad_answer_does_not_drown_in_its_own_sources():
+    snapshot = _snapshot()
+    for i in range(12):
+        snapshot.notes[f"kb/n{i}.md"] = Note(path=f"kb/n{i}.md", text="b")
+    cited = ", ".join(f"kb/n{i}.md" for i in range(12))
+
+    out = render.render(f"A list.\nSources: {cited}", snapshot, FakeStats())
+
+    shown = [ln for ln in out.html.splitlines() if ln.startswith("📄")]
+    assert len(shown) == render.MAX_SOURCE_LINES
+    assert "… and 7 more sources" in out.html
+
+
+def test_one_source_over_the_cap_is_counted_in_the_singular():
+    snapshot = _snapshot()
+    for i in range(6):
+        snapshot.notes[f"kb/n{i}.md"] = Note(path=f"kb/n{i}.md", text="b")
+    cited = ", ".join(f"kb/n{i}.md" for i in range(6))
+
+    out = render.render(f"A list.\nSources: {cited}", snapshot, FakeStats())
+
+    assert "… and 1 more source" in out.html
+    assert "more sources" not in out.html
+
+
+def test_notes_cut_from_one_chapter_cite_that_chapter_once():
+    """Ten notes off one section share a page range; printing it ten times is
+    noise, not provenance."""
+    snapshot = _snapshot()
+    shared = snapshot.notes["kb/p.md"].source
+    for i in range(9):
+        snapshot.notes[f"kb/s{i}.md"] = Note(path=f"kb/s{i}.md", text="b",
+                                             source=shared)
+    cited = ", ".join(f"kb/s{i}.md" for i in range(9))
+
+    out = render.render(f"A list.\nSources: {cited}", snapshot, FakeStats())
+
+    assert out.html.count("Policies for Bachelor Studies") == 1
+    assert "more source" not in out.html, "one line is under the cap"
 
 
 def test_an_over_long_answer_is_clipped_to_what_telegram_accepts():

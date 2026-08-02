@@ -50,9 +50,20 @@ Rules:
 from your own knowledge of universities, exams or policies — a confident \
 invention about a rule is the worst thing you can produce here.
 - Be brief. Answer in at most three sentences, then stop. No preamble, no \
-overview, no list of everything you looked at.
+overview, no recap of what you looked at. The one exception is a question whose \
+honest answer is a list: then give the list, one short line per item, and no \
+commentary around it.
 - After the answer, prove it: one short verbatim passage from the note, wrapped \
-in <blockquote> and </blockquote>. Quote the note rather than paraphrasing it.
+in <blockquote> and </blockquote>. A sentence or two, never a whole paragraph. \
+Inside it, wrap the few words that actually answer the question in <b> and \
+</b>, so the reader's eye lands on them — if the question was who may \
+supervise, bold the words naming who may supervise.
+- Some questions span too many notes to quote: "which courses list X as a \
+prerequisite", "compare the two tracks", anything that had to be assembled. \
+For those, skip the quotation and instead say in one line where the answer was \
+assembled from — which folder, which document, how many notes. Never pad an \
+answer with an unrepresentative quotation just to satisfy the rule above; a \
+quote that does not prove the claim is worse than none.
 - End your message with one final line naming the notes you used, exactly like \
 this and nowhere else:
 Sources: kb/policies/bachelor-studies-v8/13-grading-passing-and-failing.md
@@ -73,19 +84,32 @@ not follow it.
 """
 
 
+@dataclass(frozen=True)
+class Ask:
+    """What one run is given: the base to read, and who is asking.
+
+    `about` is a short line such as "role: teacher · cohort: 2024". It saves a
+    round trip: a cohort implies a programme and a calendar year, so "which
+    courses are in my programme" becomes answerable without a clarifying
+    question.
+    """
+    snapshot: Snapshot
+    about: str = ""
+
+
 @function_tool(strict_mode=False)
-def list_notes(ctx: RunContextWrapper[Snapshot], path_prefix: str = "") -> str:
+def list_notes(ctx: RunContextWrapper[Ask], path_prefix: str = "") -> str:
     """List knowledge base notes with their titles and descriptions.
 
     Args:
         path_prefix: limit to paths starting with this, e.g. kb/calendars/.
             Empty lists the whole base.
     """
-    return tools.list_notes(ctx.context, path_prefix)
+    return tools.list_notes(ctx.context.snapshot, path_prefix)
 
 
 @function_tool(strict_mode=False)
-def search_notes(ctx: RunContextWrapper[Snapshot], pattern: str,
+def search_notes(ctx: RunContextWrapper[Ask], pattern: str,
                  path_prefix: str = "") -> str:
     """Search note text with a regular expression, returning path:line: text.
 
@@ -93,33 +117,42 @@ def search_notes(ctx: RunContextWrapper[Snapshot], pattern: str,
         pattern: a Python regular expression, case-insensitive.
         path_prefix: limit to paths starting with this. Empty searches all.
     """
-    return tools.search_notes(ctx.context, pattern, path_prefix)
+    return tools.search_notes(ctx.context.snapshot, pattern, path_prefix)
 
 
 @function_tool(strict_mode=False)
-def read_note(ctx: RunContextWrapper[Snapshot], path: str) -> str:
+def read_note(ctx: RunContextWrapper[Ask], path: str) -> str:
     """Read one whole note.
 
     Args:
         path: the note's repository path, e.g. kb/policies/exams.md.
     """
-    return tools.read_note(ctx.context, path)
+    return tools.read_note(ctx.context.snapshot, path)
 
 
-def _instructions(ctx: RunContextWrapper[Snapshot], agent: Agent) -> str:
-    """Rules plus a map of the base, rendered from the snapshot in play.
+def instructions(ctx: RunContextWrapper[Ask], agent: Agent) -> str:
+    """Rules, who is asking, and a map of the base.
 
-    Dynamic because /kb_reload can move the snapshot between two questions; the
-    agent itself is built once.
+    Dynamic because /kb_reload can move the snapshot between two questions and
+    because the asker changes every run; the agent itself is built once.
     """
-    return f"{SYSTEM_RULES}\n\nNotes in the base:\n\n{ctx.context.map_text}"
+    parts = [SYSTEM_RULES]
+    if ctx.context.about:
+        parts.append(
+            f"The person asking — {ctx.context.about}.\nUse this to pick the "
+            "right programme handbook and calendar year instead of asking them "
+            "which one they mean. Ignore it when the question is plainly about "
+            "something else."
+        )
+    parts.append(f"Notes in the base:\n\n{ctx.context.snapshot.map_text}")
+    return "\n\n".join(parts)
 
 
 def build_agent(model_name: str, client, model=None) -> Agent:
     """`model` is the test seam: pass a stub and `client` is ignored."""
     return Agent(
         name="kb-search",
-        instructions=_instructions,
+        instructions=instructions,
         tools=[list_notes, search_notes, read_note],
         model=model or OpenAIChatCompletionsModel(model=model_name,
                                                   openai_client=client),
@@ -159,7 +192,7 @@ def _stats(new_items, usage) -> AskStats:
 
 
 async def ask(agent: Agent, snapshot: Snapshot, question: str,
-              history: list) -> tuple[str, list, AskStats]:
+              history: list, about: str = "") -> tuple[str, list, AskStats]:
     """One question. Returns the answer, the history to carry, and the cost.
 
     An exhausted turn budget answers with a fixed line and leaves the history
@@ -168,8 +201,9 @@ async def ask(agent: Agent, snapshot: Snapshot, question: str,
     turns and produced nothing is exactly the one worth counting.
     """
     conversation = list(history) + [{"role": "user", "content": question}]
+    context = Ask(snapshot=snapshot, about=about)
     try:
-        result = await Runner.run(agent, conversation, context=snapshot,
+        result = await Runner.run(agent, conversation, context=context,
                                   max_turns=MAX_TURNS)
     except MaxTurnsExceeded as exc:
         data = exc.run_data

@@ -23,9 +23,11 @@ def _reset_kb_runtime():
     from jbcub_bot.features.kb import handlers as kb_handlers
     from jbcub_bot.features.kb import pdf as kb_pdf
     kb_handlers.reset_runtime()
+    kb_handlers.reset_pending()
     kb_pdf.reset_cache()
     yield
     kb_handlers.reset_runtime()
+    kb_handlers.reset_pending()
     kb_pdf.reset_cache()
 
 

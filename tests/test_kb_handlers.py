@@ -72,7 +72,7 @@ def _install_runtime(monkeypatch,
     store = FakeStore()
     asked: list[str] = []
 
-    async def fake_ask(agent, snapshot, question, history):
+    async def fake_ask(agent, snapshot, question, history, about=""):
         asked.append(question)
         return (answer, history + [{"role": "user", "content": question}],
                 kb_agent.AskStats(steps=2, tool_calls=1, notes_read=1,
@@ -193,6 +193,74 @@ async def test_tapping_the_offer_opens_the_session(monkeypatch):
                          dispatcher=dp)
 
     assert asked == ["retakes?"]
+
+
+async def test_the_tap_answers_the_question_that_earned_the_button(monkeypatch):
+    """The whole point of the button: not to have to retype the question."""
+    dp, bot, _, asked = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "how many retakes?"),
+                         dispatcher=dp)
+    assert asked == [], "still nothing spent before the tap"
+
+    await dp.feed_update(bot, _callback(bot, TEACHER_ID, kb.START_CALLBACK),
+                         dispatcher=dp)
+
+    assert asked == ["how many retakes?"]
+    assert "Policies for Bachelor Studies" in _texts(bot)[-1]
+
+
+async def test_the_tap_uses_the_most_recent_unanswered_question(monkeypatch):
+    dp, bot, _, asked = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "first thing"),
+                         dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "second thing",
+                                       update_id=2), dispatcher=dp)
+
+    await dp.feed_update(bot, _callback(bot, TEACHER_ID, kb.START_CALLBACK,
+                                        update_id=3), dispatcher=dp)
+
+    assert asked == ["second thing"]
+
+
+async def test_a_bare_tap_with_nothing_pending_just_opens_the_session(
+        monkeypatch):
+    dp, bot, _, asked = _setup(monkeypatch)
+
+    await dp.feed_update(bot, _callback(bot, TEACHER_ID, kb.START_CALLBACK),
+                         dispatcher=dp)
+
+    assert asked == []
+    assert any("Ask me anything" in t for t in _texts(bot))
+
+
+async def test_the_agent_is_told_the_asker_role_and_cohort(monkeypatch):
+    seen: list[str] = []
+    factory = _session_factory()
+    _seed(factory)
+    store = FakeStore()
+
+    async def fake_ask(agent, snapshot, question, history, about=""):
+        seen.append(about)
+        return "ok", history, kb_agent.AskStats()
+
+    monkeypatch.setattr(kb, "ask", fake_ask)
+    kb.set_runtime(kb_agent.KbRuntime(agent=object(), store=store,
+                                      repo="xoposhiy/cub-kb"))
+    dp, bot = build_dispatcher(session_factory=factory), FakeBot()
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "q", update_id=2),
+                         dispatcher=dp)
+
+    assert seen == ["role: Teacher"], "a teacher has no cohort to pass on"
+
+
+def test_a_students_cohort_is_what_picks_the_programme():
+    student = User(last_name="I", first_name="I", telegram_id=1,
+                   role=Role.STUDENT, primary_cohort="2024")
+
+    assert kb.describe_asker(student) == "role: Student · cohort: 2024"
+    assert kb.describe_asker(None) == ""
 
 
 async def test_exit_closes_the_session(monkeypatch):

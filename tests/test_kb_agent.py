@@ -4,7 +4,7 @@ The framework owns the tool loop, so the seam is the model: a stub that returns
 scripted responses proves the wiring without a network call or an API key.
 """
 import pytest
-from agents import ModelResponse
+from agents import ModelResponse, RunContextWrapper
 from agents.items import TResponseOutputItem
 from agents.models.interface import Model
 from agents.usage import Usage
@@ -153,6 +153,38 @@ def test_the_prompt_asks_for_brevity_and_forbids_invented_pages():
     assert "<blockquote>" in rules
     assert "Sources:" in rules
     assert "never write a page number" in rules.lower()
+
+
+def test_the_prompt_asks_for_the_key_words_to_be_bolded_inside_the_quote():
+    rules = kb_agent.SYSTEM_RULES
+
+    assert "<b>" in rules
+    assert "bold" in rules.lower()
+
+
+def test_the_prompt_releases_a_broad_question_from_the_quote_rule():
+    """Forcing a quote out of an answer assembled from twenty notes produces
+    an unrepresentative one, which is worse than none."""
+    rules = kb_agent.SYSTEM_RULES.lower()
+
+    assert "prerequisite" in rules, "the prompt names the shape of such a question"
+    assert "skip the quotation" in rules
+
+
+async def test_who_is_asking_reaches_the_prompt():
+    ctx = RunContextWrapper(kb_agent.Ask(snapshot=_snapshot(),
+                                         about="role: Student · cohort: 2024"))
+
+    text = kb_agent.instructions(ctx, None)
+
+    assert "cohort: 2024" in text
+    assert "kb/policies/exams.md" in text, "the map of the base is still there"
+
+
+async def test_an_anonymous_run_says_nothing_about_the_asker():
+    ctx = RunContextWrapper(kb_agent.Ask(snapshot=_snapshot()))
+
+    assert "The person asking" not in kb_agent.instructions(ctx, None)
 
 
 def test_no_runtime_without_all_three_settings():

@@ -122,6 +122,46 @@ def reset_runtime() -> None:
     _runtime, _built = None, False
 
 
+# The question that earned the offer button, kept until the tap. Without it the
+# button opens an empty session and the person has to type the question again,
+# which is the whole reason they were offered a button.
+#
+# Keyed by chat, so a second unanswered question replaces the first: the tap is
+# always about the most recent thing they said. Process-wide like the runtime,
+# and cleared wholesale if it ever grows -- a convenience, not a record.
+_PENDING: dict[int, str] = {}
+_PENDING_MAX = 500
+
+
+def remember_question(chat_id: int, text: str) -> None:
+    if len(_PENDING) >= _PENDING_MAX:
+        _PENDING.clear()
+    _PENDING[chat_id] = text
+
+
+def take_question(chat_id: int) -> str:
+    return _PENDING.pop(chat_id, "")
+
+
+def reset_pending() -> None:
+    _PENDING.clear()
+
+
+def describe_asker(principal) -> str:
+    """The one line about the caller that the agent gets.
+
+    A cohort implies a programme and an academic year, which is most of what a
+    "which courses do I have" question needs in order to pick a handbook.
+    """
+    if principal is None:
+        return ""
+    bits = [f"role: {principal.role.value}"]
+    cohort = getattr(principal, "primary_cohort", "")
+    if cohort:
+        bits.append(f"cohort: {cohort}")
+    return " · ".join(bits)
+
+
 class KbChat(StatesGroup):
     active = State()
 
@@ -199,6 +239,7 @@ async def kb_offer(message: Message, principal, session) -> bool:
     """
     if runtime() is None:
         return False
+    remember_question(message.chat.id, message.text or "")
     await message.answer(_OFFER, reply_markup=_offer_keyboard())
     return True
 
@@ -214,7 +255,7 @@ kb_offer_intent = Intent(
 
 @router.callback_query(F.data == START_CALLBACK)
 async def cb_start(cb: CallbackQuery, principal: User, session,
-                   state: FSMContext):
+                   state: FSMContext, bot: Bot):
     if principal is None or principal.role is Role.STUDENT:
         await cb.answer("Staff only.", show_alert=True)
         return
@@ -222,9 +263,17 @@ async def cb_start(cb: CallbackQuery, principal: User, session,
         await cb.answer(_NOT_CONFIGURED, show_alert=True)
         return
     await _open(state)
-    if isinstance(cb.message, Message):
-        await cb.message.answer(_OPENED, reply_markup=_session_keyboard())
+    if not isinstance(cb.message, Message):
+        await cb.answer()
+        return
+    pending = take_question(cb.message.chat.id)
+    await cb.message.answer(_OPENED, reply_markup=_session_keyboard())
+    # Answered before the agent runs: the button would otherwise spin for the
+    # whole search.
     await cb.answer()
+    if pending:
+        await _answer_question(cb.message, principal, state, bot, pending,
+                               cb.from_user)
 
 
 @router.callback_query(F.data == EXIT_CALLBACK)
@@ -237,6 +286,41 @@ async def cb_exit(cb: CallbackQuery, principal: User, session,
     await cb.answer()
 
 
+async def _answer_question(target: Message, principal: User, state: FSMContext,
+                           bot: Bot, question: str, tg_user) -> None:
+    """Put one question to the agent and send back what it says.
+
+    `target` is whatever message the reply hangs off -- the person's own message
+    in a session, or the bot's offer message when the button was tapped -- so
+    this serves both entry points without either duplicating the other.
+    """
+    live = runtime()
+    if live is None:  # redeployed without the settings while a session was open
+        await state.clear()
+        await target.answer(_NOT_CONFIGURED)
+        return
+    data = await state.get_data()
+
+    await target.answer(_THINKING)
+    snapshot = await live.store.get()
+    answer, history, stats = await ask(live.agent, snapshot, question,
+                                       data.get("history", []),
+                                       about=describe_asker(principal))
+    asked = data.get("asked", 0) + 1
+    rendered = render_mod.render(answer, snapshot, stats)
+    await _answer_html(target, rendered.html)
+    sent_pdfs = await _attach_sources(bot, target, live, snapshot,
+                                      rendered.pdfs,
+                                      data.get("sent_pdfs", []))
+
+    if asked >= MAX_QUESTIONS:
+        await _close(state, bot, principal, tg_user, asked)
+        await target.answer(_EXHAUSTED)
+        return
+    await state.update_data(asked=asked, last_at=now(), history=history,
+                            sent_pdfs=sent_pdfs)
+
+
 @router.message(KbChat.active, F.text & ~F.text.startswith("/"))
 async def on_question(message: Message, principal: User, session,
                       state: FSMContext, bot: Bot):
@@ -245,8 +329,7 @@ async def on_question(message: Message, principal: User, session,
     Commands are excluded rather than intercepted, so /ask and every other
     command still work while a session is open.
     """
-    live = runtime()
-    if live is None:  # redeployed without the settings while a session was open
+    if runtime() is None:
         await state.clear()
         await message.answer(_NOT_CONFIGURED)
         return
@@ -258,21 +341,5 @@ async def on_question(message: Message, principal: User, session,
             "That knowledge base session went idle. Send /ask to start a new one."
         )
         return
-
-    await message.answer(_THINKING)
-    snapshot = await live.store.get()
-    answer, history, stats = await ask(live.agent, snapshot, message.text,
-                                       data.get("history", []))
-    asked = data.get("asked", 0) + 1
-    rendered = render_mod.render(answer, snapshot, stats)
-    await _answer_html(message, rendered.html)
-    sent_pdfs = await _attach_sources(bot, message, live, snapshot,
-                                      rendered.pdfs,
-                                      data.get("sent_pdfs", []))
-
-    if asked >= MAX_QUESTIONS:
-        await _close(state, bot, principal, message.from_user, asked)
-        await message.answer(_EXHAUSTED)
-        return
-    await state.update_data(asked=asked, last_at=now(), history=history,
-                            sent_pdfs=sent_pdfs)
+    await _answer_question(message, principal, state, bot, message.text,
+                           message.from_user)

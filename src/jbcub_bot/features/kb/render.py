@@ -20,6 +20,9 @@ from jbcub_bot.core.kb_snapshot import Note, Snapshot
 
 ALLOWED = ("b", "i", "code", "blockquote")
 CLIP_LIMIT = 4096  # Telegram's own limit on a text message
+# A question assembled from twenty notes would otherwise bury its own answer
+# under twenty lines of provenance.
+MAX_SOURCE_LINES = 5
 TRUNCATION_MARK = "\n[… truncated]"
 RULE = "─" * 13
 
@@ -192,10 +195,16 @@ def _tokens(number: int) -> str:
 
 
 def metrics_line(stats: Stats) -> str:
+    """`3 steps · 4 tool calls · 2 notes read · 1.2k in / 310 out`.
+
+    "notes read" rather than "notes": a bare "0 notes" reads like a fault, when
+    it truthfully means the answer came from the map and the search results
+    without any note being opened.
+    """
     return " · ".join([
         _count(stats.steps, "step"),
         _count(stats.tool_calls, "tool call"),
-        _count(stats.notes_read, "note"),
+        _count(stats.notes_read, "note") + " read",
         f"{_tokens(stats.input_tokens)} in / {_tokens(stats.output_tokens)} out",
     ])
 
@@ -221,12 +230,20 @@ def render(answer: str, snapshot: Snapshot, stats: Stats) -> Rendered:
     pdfs: list[PdfRef] = []
     for path in paths:
         line, pdf = source_line(path, snapshot.notes.get(path))
-        lines.append(line)
+        # Ten notes cut from one chapter share a section and a page range, so
+        # citing each of them separately would print the same line ten times.
+        if line not in lines:
+            lines.append(line)
         if pdf is not None and all(p.file != pdf.file for p in pdfs):
             pdfs.append(pdf)
     parts = [balance(escape_subset(body))]
     if lines:
-        parts.append("\n".join(lines))
+        shown = lines[:MAX_SOURCE_LINES]
+        hidden = len(lines) - len(shown)
+        if hidden:
+            shown.append(f"… and {hidden} more source"
+                         f"{'' if hidden == 1 else 's'}")
+        parts.append("\n".join(shown))
     parts.append(f"{RULE}\n{metrics_line(stats)}")
     return Rendered(html=_clip("\n\n".join(p for p in parts if p)),
                     pdfs=tuple(pdfs))
