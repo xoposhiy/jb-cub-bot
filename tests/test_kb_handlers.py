@@ -5,7 +5,9 @@ that a teacher's text reaches it, a student's does not, and that the session
 opens, counts and closes.
 """
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import SendMessage
 from aiogram.types import CallbackQuery, Chat, Message, Update
 from aiogram.types import User as TgUser
@@ -14,7 +16,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from jbcub_bot.core.db import Base
-from jbcub_bot.core.kb_snapshot import Note, Snapshot
+from jbcub_bot.core.kb_snapshot import Note, Snapshot, Source
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.kb import agent as kb_agent
 from jbcub_bot.features.kb import handlers as kb
@@ -25,24 +27,37 @@ STUDENT_ID = 222
 
 
 class FakeBot:
-    def __init__(self):
+    def __init__(self, reject_html=False):
         self.id = 1
         self.sent: list = []
+        self.documents: list = []
+        self.reject_html = reject_html
 
     async def __call__(self, method, request_timeout=None):
+        if self.reject_html and getattr(method, "parse_mode", None) == "HTML":
+            raise TelegramBadRequest(method=method,
+                                     message="can't parse entities")
         self.sent.append(method)
         return None
 
     async def send_message(self, chat_id, text):
         self.sent.append(SendMessage(chat_id=chat_id, text=text))
 
+    async def send_document(self, chat_id, document, caption=None):
+        self.documents.append(document)
+        return SimpleNamespace(document=SimpleNamespace(file_id="FILE-1"))
+
 
 class FakeStore:
     def __init__(self):
         self.snapshot = Snapshot(sha="abc123", repo="xoposhiy/cub-kb", notes={
-            "kb/policies/exams.md": Note(path="kb/policies/exams.md",
-                                         text="Retakes are allowed once.\n",
-                                         title="Exam rules"),
+            "kb/policies/exams.md": Note(
+                path="kb/policies/exams.md",
+                text="Retakes are allowed once.\n", title="Exam rules",
+                source=Source(
+                    file="sources/policies/bachelor_policies_v8.pdf",
+                    document="Policies for Bachelor Studies", version="8",
+                    sections=("III.4 Grading",), pdf_pages="18-20")),
         })
         self.forced = 0
 
@@ -131,10 +146,10 @@ async def test_a_teacher_ask_opens_the_session(monkeypatch):
                                        update_id=2), dispatcher=dp)
 
     assert asked == ["how many retakes?"]
-    assert "kb/policies/exams.md" in _texts(bot)[-1]
+    assert "Policies for Bachelor Studies" in _texts(bot)[-1]
 
 
-async def test_the_answer_carries_a_sources_block_and_the_metrics(monkeypatch):
+async def test_the_answer_cites_the_document_section_and_pages(monkeypatch):
     dp, bot, _, _ = _setup(monkeypatch)
 
     await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
@@ -142,7 +157,9 @@ async def test_the_answer_carries_a_sources_block_and_the_metrics(monkeypatch):
                          dispatcher=dp)
 
     answer = _texts(bot)[-1]
-    assert "📄" in answer
+    assert "Policies for Bachelor Studies v8" in answer
+    assert "pp. 18–20" in answer
+    assert "kb/policies/exams.md" not in answer, "no raw paths in the answer"
     assert "2 steps · 1 tool call · 1 note" in answer
 
 
@@ -246,6 +263,59 @@ async def test_kb_reload_is_admin_only(monkeypatch):
 
     assert store.forced == 0
     assert "Admins only." in _texts(bot)
+
+
+async def test_the_source_pdf_is_attached_once_per_session(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "a", update_id=2),
+                         dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "b", update_id=3),
+                         dispatcher=dp)
+
+    assert len(bot.documents) == 1, "the second answer references, not re-sends"
+
+
+async def test_a_fresh_session_gets_the_pdf_again(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "a", update_id=2),
+                         dispatcher=dp)
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask", update_id=3),
+                         dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "b", update_id=4),
+                         dispatcher=dp)
+
+    assert len(bot.documents) == 2
+
+
+async def test_an_answer_citing_nothing_attaches_nothing(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch,
+                           answer="The base does not cover this.")
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "a", update_id=2),
+                         dispatcher=dp)
+
+    assert bot.documents == []
+
+
+async def test_a_rejected_html_message_is_resent_as_plain_text(monkeypatch):
+    factory = _session_factory()
+    _seed(factory)
+    _install_runtime(monkeypatch, answer="<b>Retakes</b> once.")
+    dp, bot = build_dispatcher(session_factory=factory), FakeBot()
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+    bot.reject_html = True
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "a", update_id=2),
+                         dispatcher=dp)
+
+    answer = _texts(bot)[-1]
+    assert "Retakes once." in answer
+    assert "<b>" not in answer, "the fallback carries the words, not the markup"
 
 
 async def test_ask_without_a_configured_endpoint_says_so(monkeypatch):

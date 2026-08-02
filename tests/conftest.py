@@ -21,9 +21,12 @@ def _reset_feature_routers():
 @pytest.fixture(autouse=True)
 def _reset_kb_runtime():
     from jbcub_bot.features.kb import handlers as kb_handlers
+    from jbcub_bot.features.kb import pdf as kb_pdf
     kb_handlers.reset_runtime()
+    kb_pdf.reset_cache()
     yield
     kb_handlers.reset_runtime()
+    kb_pdf.reset_cache()
 
 
 @pytest.fixture

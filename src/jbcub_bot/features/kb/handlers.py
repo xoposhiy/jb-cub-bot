@@ -11,9 +11,11 @@ allowed answer.
 """
 from __future__ import annotations
 
+import logging
 import time
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -28,6 +30,7 @@ from jbcub_bot.core.commands import CommandRegistrar
 from jbcub_bot.core.config import get_settings
 from jbcub_bot.core.intents import Intent
 from jbcub_bot.core.models import Role, User
+from jbcub_bot.features.kb import pdf as pdf_mod
 from jbcub_bot.features.kb import render as render_mod
 from jbcub_bot.features.kb.agent import (
     KbRuntime,
@@ -56,9 +59,42 @@ _OFFER = "I didn't find anyone by that name. Search the knowledge base instead?"
 _THINKING = "Searching the knowledge base…"
 
 
+logger = logging.getLogger(__name__)
+
+
 def now() -> float:
     """Wall clock, in one place so a test can move it."""
     return time.time()
+
+
+async def _answer_html(message: Message, text: str) -> None:
+    """Send as HTML; on a parse failure send the same words with no markup.
+
+    Telegram rejects a whole message over one bad tag. Losing the answer to a
+    stray `</b>` would be far worse than losing the bold.
+    """
+    try:
+        await message.answer(text, parse_mode="HTML")
+    except TelegramBadRequest:
+        logger.warning("Telegram rejected an HTML answer; retrying as plain")
+        await message.answer(render_mod.plain(text))
+
+
+async def _attach_sources(bot, message: Message, live, snapshot,
+                          pdfs, already: list[str]) -> list[str]:
+    """Send each cited PDF this session has not seen yet.
+
+    Returns the updated list. A source document is evidence for an answer that
+    has already been sent, so a failure here changes nothing the reader needs.
+    """
+    sent = list(already)
+    for ref in pdfs:
+        if ref.file in sent:
+            continue
+        url = pdf_mod.raw_url(live.repo, snapshot.sha, ref.file)
+        if await pdf_mod.send(bot, message.chat.id, url, ref.caption):
+            sent.append(ref.file)
+    return sent
 
 
 # The runtime is process-wide and built on first use: get_settings() must not
@@ -105,7 +141,8 @@ def _offer_keyboard() -> InlineKeyboardMarkup:
 
 async def _open(state: FSMContext) -> None:
     await state.set_state(KbChat.active)
-    await state.set_data({"asked": 0, "last_at": now(), "history": []})
+    await state.set_data({"asked": 0, "last_at": now(), "history": [],
+                          "sent_pdfs": []})
 
 
 async def _close(state: FSMContext, bot: Bot | None, principal, tg_user,
@@ -227,10 +264,15 @@ async def on_question(message: Message, principal: User, session,
     answer, history, stats = await ask(live.agent, snapshot, message.text,
                                        data.get("history", []))
     asked = data.get("asked", 0) + 1
-    await message.answer(render_mod.render(answer, snapshot, stats).html)
+    rendered = render_mod.render(answer, snapshot, stats)
+    await _answer_html(message, rendered.html)
+    sent_pdfs = await _attach_sources(bot, message, live, snapshot,
+                                      rendered.pdfs,
+                                      data.get("sent_pdfs", []))
 
     if asked >= MAX_QUESTIONS:
         await _close(state, bot, principal, message.from_user, asked)
         await message.answer(_EXHAUSTED)
         return
-    await state.update_data(asked=asked, last_at=now(), history=history)
+    await state.update_data(asked=asked, last_at=now(), history=history,
+                            sent_pdfs=sent_pdfs)
