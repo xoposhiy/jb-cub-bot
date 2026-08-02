@@ -35,9 +35,15 @@ def _text(body: str) -> TResponseOutputItem:
     )
 
 
+# Distinct ids: the framework pairs a tool output back to its call, so two
+# calls sharing an id in one response are matched wrongly.
+_CALL_IDS = iter(range(1, 10_000))
+
+
 def _call(name: str, arguments: str) -> TResponseOutputItem:
     return ResponseFunctionToolCall(type="function_call", name=name,
-                                    arguments=arguments, call_id="call-1")
+                                    arguments=arguments,
+                                    call_id=f"call-{next(_CALL_IDS)}")
 
 
 # Both stubs subclass the framework's Model: Agent type-checks its `model`
@@ -52,8 +58,12 @@ class StubModel(Model):
     async def get_response(self, *args, **kwargs):
         self.calls += 1
         items = self.script[min(self.calls - 1, len(self.script) - 1)]
-        return ModelResponse(output=list(items), usage=Usage(),
-                             response_id=f"resp-{self.calls}")
+        # A real model reports one request and its tokens per response, and the
+        # framework sums them; a bare Usage() would make every count read zero.
+        return ModelResponse(
+            output=list(items),
+            usage=Usage(requests=1, input_tokens=600, output_tokens=155),
+            response_id=f"resp-{self.calls}")
 
     def stream_response(self, *args, **kwargs):
         raise NotImplementedError("the bot never streams")
@@ -74,25 +84,46 @@ def _agent(model):
 async def test_a_tool_call_sequence_reaches_an_answer():
     model = StubModel([
         [_call("read_note", '{"path": "kb/policies/exams.md"}')],
-        [_text("Retakes are allowed once (kb/policies/exams.md).")],
+        [_text("Retakes are allowed once.\nSources: kb/policies/exams.md")],
     ])
 
-    answer, history = await kb_agent.ask(_agent(model), _snapshot(),
-                                         "How many retakes?", [])
+    answer, history, stats = await kb_agent.ask(_agent(model), _snapshot(),
+                                                "How many retakes?", [])
 
     assert "Retakes are allowed once" in answer
     assert model.calls == 2
     assert history, "the run's input list carries the session forward"
+    assert stats.steps == 2
+    assert stats.tool_calls == 1
+    assert stats.notes_read == 1
+    assert stats.input_tokens == 1200, "tokens sum across the run's two turns"
+    assert stats.output_tokens == 310
+
+
+async def test_reading_one_note_twice_counts_one_note():
+    model = StubModel([
+        [_call("read_note", '{"path": "kb/policies/exams.md"}'),
+         _call("read_note", '{"path": "kb/policies/exams.md"}'),
+         _call("list_notes", '{"path_prefix": "kb/"}')],
+        [_text("Retakes are allowed once.")],
+    ])
+
+    _, _, stats = await kb_agent.ask(_agent(model), _snapshot(), "q", [])
+
+    assert stats.tool_calls == 3
+    assert stats.notes_read == 1
 
 
 async def test_a_model_that_never_stops_is_cut_and_says_so():
     model = StubModel([[_call("list_notes", '{"path_prefix": "kb/"}')]])
 
-    answer, history = await kb_agent.ask(_agent(model), _snapshot(), "hi", [])
+    answer, history, stats = await kb_agent.ask(_agent(model), _snapshot(),
+                                                "hi", [])
 
     assert answer == kb_agent.CUT_SHORT
     assert model.calls == kb_agent.MAX_TURNS
     assert history == [], "an abandoned run must not pollute the session"
+    assert stats.tool_calls > 0, "a cut-short run still reports what it burned"
 
 
 async def test_a_raising_tool_comes_back_as_an_error_not_a_crash(monkeypatch):
@@ -105,7 +136,7 @@ async def test_a_raising_tool_comes_back_as_an_error_not_a_crash(monkeypatch):
         [_text("I could not read that note.")],
     ])
 
-    answer, _ = await kb_agent.ask(_agent(model), _snapshot(), "retakes?", [])
+    answer, _, _ = await kb_agent.ask(_agent(model), _snapshot(), "retakes?", [])
 
     assert "could not read" in answer
 
@@ -115,28 +146,13 @@ async def test_an_endpoint_failure_propagates():
         await kb_agent.ask(_agent(ExplodingModel()), _snapshot(), "hi", [])
 
 
-def test_citations_render_against_the_snapshot_sha():
-    rendered = kb_agent.render_answer(
-        "Retakes are allowed once, see kb/policies/exams.md:5.",
-        repo="xoposhiy/cub-kb", sha="abc123")
+def test_the_prompt_asks_for_brevity_and_forbids_invented_pages():
+    rules = kb_agent.SYSTEM_RULES
 
-    assert ("https://github.com/xoposhiy/cub-kb/blob/abc123/"
-            "kb/policies/exams.md#L5") in rendered
-
-
-def test_an_answer_without_a_note_reference_gets_no_sources_block():
-    rendered = kb_agent.render_answer("I could not find that.",
-                                      repo="r", sha="abc123")
-
-    assert rendered == "I could not find that."
-
-
-def test_each_note_is_linked_once():
-    rendered = kb_agent.render_answer(
-        "kb/a.md:1 says one thing and kb/a.md:1 says it again.",
-        repo="r", sha="s")
-
-    assert rendered.count("https://github.com/r/blob/s/kb/a.md#L1") == 1
+    assert "three sentences" in rules
+    assert "<blockquote>" in rules
+    assert "Sources:" in rules
+    assert "never write a page number" in rules.lower()
 
 
 def test_no_runtime_without_all_three_settings():

@@ -52,13 +52,16 @@ class FakeStore:
         return self.snapshot
 
 
-def _install_runtime(monkeypatch, answer="Retakes once. kb/policies/exams.md:1"):
+def _install_runtime(monkeypatch,
+                     answer="Retakes once.\nSources: kb/policies/exams.md"):
     store = FakeStore()
     asked: list[str] = []
 
     async def fake_ask(agent, snapshot, question, history):
         asked.append(question)
-        return answer, history + [{"role": "user", "content": question}]
+        return (answer, history + [{"role": "user", "content": question}],
+                kb_agent.AskStats(steps=2, tool_calls=1, notes_read=1,
+                                  input_tokens=1200, output_tokens=310))
 
     # handlers.py imported `ask` by name, so that binding is the one in play.
     monkeypatch.setattr(kb, "ask", fake_ask)
@@ -131,15 +134,16 @@ async def test_a_teacher_ask_opens_the_session(monkeypatch):
     assert "kb/policies/exams.md" in _texts(bot)[-1]
 
 
-async def test_the_answer_carries_a_link_pinned_to_the_sha(monkeypatch):
+async def test_the_answer_carries_a_sources_block_and_the_metrics(monkeypatch):
     dp, bot, _, _ = _setup(monkeypatch)
 
     await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
     await dp.feed_update(bot, _message(bot, TEACHER_ID, "retakes?", update_id=2),
                          dispatcher=dp)
 
-    assert ("https://github.com/xoposhiy/cub-kb/blob/abc123/"
-            "kb/policies/exams.md#L1") in _texts(bot)[-1]
+    answer = _texts(bot)[-1]
+    assert "📄" in answer
+    assert "2 steps · 1 tool call · 1 note" in answer
 
 
 async def test_a_student_is_refused_and_still_gets_the_name_search(monkeypatch):

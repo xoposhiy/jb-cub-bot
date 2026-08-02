@@ -28,11 +28,11 @@ from jbcub_bot.core.commands import CommandRegistrar
 from jbcub_bot.core.config import get_settings
 from jbcub_bot.core.intents import Intent
 from jbcub_bot.core.models import Role, User
+from jbcub_bot.features.kb import render as render_mod
 from jbcub_bot.features.kb.agent import (
     KbRuntime,
     ask,
     build_runtime,
-    render_answer,
 )
 
 router = Router(name="kb")
@@ -224,10 +224,10 @@ async def on_question(message: Message, principal: User, session,
 
     await message.answer(_THINKING)
     snapshot = await live.store.get()
-    answer, history = await ask(live.agent, snapshot, message.text,
-                                data.get("history", []))
+    answer, history, stats = await ask(live.agent, snapshot, message.text,
+                                       data.get("history", []))
     asked = data.get("asked", 0) + 1
-    await message.answer(render_answer(answer, live.repo, snapshot.sha))
+    await message.answer(render_mod.render(answer, snapshot, stats).html)
 
     if asked >= MAX_QUESTIONS:
         await _close(state, bot, principal, message.from_user, asked)
