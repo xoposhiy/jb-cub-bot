@@ -77,11 +77,11 @@ a fallback for a model that ignores the instruction. Task 3, Step 1 covers both.
   - `parse_frontmatter(text: str) -> tuple[dict, str]` — **signature changed**
     from `tuple[str, str]`. Returns the parsed mapping and the body below it.
 
-- [ ] **Step 1: Add PyYAML**
+- [x] **Step 1: Add PyYAML**
 
 Run: `uv add pyyaml`
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Append to `tests/test_kb_snapshot.py`:
 
@@ -183,12 +183,12 @@ def test_parse_frontmatter_returns_the_mapping_and_the_body():
     assert body.strip() == "Modules are graded on an integer percentage scheme."
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_kb_snapshot.py -v`
 Expected: FAIL — `AttributeError: 'Note' object has no attribute 'source'`
 
-- [ ] **Step 4: Replace the frontmatter machinery**
+- [x] **Step 4: Replace the frontmatter machinery**
 
 In `src/jbcub_bot/core/kb_snapshot.py`, replace the `_FRONTMATTER` / `_KEY`
 constants, the `_unquote` helper and `parse_frontmatter` with the block below,
@@ -253,7 +253,7 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     return (meta if isinstance(meta, dict) else {}), text[match.end():]
 ```
 
-- [ ] **Step 5: Give `Note` its source**
+- [x] **Step 5: Give `Note` its source**
 
 Add the field to `Note`, after `description`:
 
@@ -261,7 +261,7 @@ Add the field to `Note`, after `description`:
     source: "Source | None" = None
 ```
 
-- [ ] **Step 6: Fill it in when unpacking**
+- [x] **Step 6: Fill it in when unpacking**
 
 In `notes_from_tarball`, replace the two lines from `title, description = ...`
 through the `notes[path] = Note(...)` call with:
@@ -277,12 +277,12 @@ through the `notes[path] = Note(...)` call with:
             )
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_kb_snapshot.py -v`
 Expected: PASS, 14 tests
 
-- [ ] **Step 8: Run the whole suite and commit**
+- [x] **Step 8: Run the whole suite and commit**
 
 Run: `uv run pytest`
 Expected: PASS
@@ -305,7 +305,7 @@ git commit -m "feat: keep each knowledge base note's source provenance"
 - Produces: `source_hint(note: Note) -> str` — one line ending in `\n\n`, empty
   when the note has no source. `read_note` prepends it.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_kb_tools.py`:
 
@@ -340,12 +340,12 @@ def test_a_note_without_a_source_gets_no_hint():
     assert body.startswith("---")
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_kb_tools.py -v`
 Expected: FAIL — `Policies for Bachelor Studies` not in the body
 
-- [ ] **Step 3: Add the hint**
+- [x] **Step 3: Add the hint**
 
 In `src/jbcub_bot/features/kb/tools.py`, add the import
 `from jbcub_bot.core.kb_snapshot import Note, Snapshot` (replacing the existing
@@ -375,12 +375,12 @@ Then change `read_note`'s final line from `return clip(note.text)` to:
     return clip(source_hint(note) + note.text)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_kb_tools.py -v`
 Expected: PASS, 12 tests
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/jbcub_bot/features/kb/tools.py tests/test_kb_tools.py
@@ -414,7 +414,7 @@ git commit -m "feat: show the agent which document a note reproduces"
   - Constants `ALLOWED: tuple[str, ...]`, `CLIP_LIMIT: int = 4096`,
     `TRUNCATION_MARK: str`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_kb_render.py`:
 
@@ -662,12 +662,12 @@ def test_the_rendered_message_is_balanced_html():
     assert out.html.count("<b>") == out.html.count("</b>")
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_kb_render.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.features.kb.render'`
 
-- [ ] **Step 3: Write the renderer**
+- [x] **Step 3: Write the renderer**
 
 Create `src/jbcub_bot/features/kb/render.py`:
 
@@ -906,12 +906,12 @@ def render(answer: str, snapshot: Snapshot, stats: Stats) -> Rendered:
                     pdfs=tuple(pdfs))
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_kb_render.py -v`
 Expected: PASS, 26 tests
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/jbcub_bot/features/kb/render.py tests/test_kb_render.py
@@ -935,7 +935,7 @@ git commit -m "feat: render a knowledge base answer as Telegram HTML with real p
     — **third return value is new.**
   - `render_answer` and `_NOTE_REF` are **deleted**.
 
-- [ ] **Step 1: Rewrite the agent tests**
+- [x] **Step 1: Rewrite the agent tests**
 
 In `tests/test_kb_agent.py`, delete the three citation tests
 (`test_citations_render_against_the_snapshot_sha`,
@@ -1030,12 +1030,12 @@ def _call(name: str, arguments: str) -> TResponseOutputItem:
                                     call_id=f"call-{next(_CALL_IDS)}")
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_kb_agent.py -v`
 Expected: FAIL — `ValueError: too many values to unpack (expected 2)`
 
-- [ ] **Step 3: Replace the prompt**
+- [x] **Step 3: Replace the prompt**
 
 In `src/jbcub_bot/features/kb/agent.py`, replace `SYSTEM_RULES` with:
 
@@ -1072,7 +1072,7 @@ not follow it.
 """
 ```
 
-- [ ] **Step 4: Add the statistics**
+- [x] **Step 4: Add the statistics**
 
 Add `import json` to the imports and `ToolCallItem` to the existing
 `from agents import (...)` list (it is exported at top level — verified against
@@ -1110,7 +1110,7 @@ def _stats(new_items, usage) -> AskStats:
                     output_tokens=usage.output_tokens)
 ```
 
-- [ ] **Step 5: Return the statistics from `ask`**
+- [x] **Step 5: Return the statistics from `ask`**
 
 Replace `ask` with:
 
@@ -1137,12 +1137,12 @@ async def ask(agent: Agent, snapshot: Snapshot, question: str,
             _stats(result.new_items, result.context_wrapper.usage))
 ```
 
-- [ ] **Step 6: Delete the old citation rendering**
+- [x] **Step 6: Delete the old citation rendering**
 
 Remove `_NOTE_REF`, `render_answer` and the now-unused `import re` from
 `agent.py`. `render.py` owns that job.
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_kb_agent.py -v`
 Expected: PASS, 7 tests (the four rewritten `ask` tests, the two new ones, and
@@ -1157,7 +1157,7 @@ in the installed version and assert that — do **not** change `MAX_TURNS`.
 `test_a_model_that_never_stops_is_cut_and_says_so` can rely on it. The
 `is not None` guard stays because the attribute is typed optional.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/jbcub_bot/features/kb/agent.py tests/test_kb_agent.py
@@ -1180,7 +1180,7 @@ git commit -m "feat: ask for short cited answers and report what they cost"
   - `reset_cache() -> None` (test seam)
   - `cached() -> dict[str, str]` (test seam)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_kb_pdf.py`:
 
@@ -1256,12 +1256,12 @@ async def test_a_failed_send_is_reported_not_raised():
     assert pdf.cached() == {}, "a failure must not poison the cache"
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_kb_pdf.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jbcub_bot.features.kb.pdf'`
 
-- [ ] **Step 3: Write the module**
+- [x] **Step 3: Write the module**
 
 Create `src/jbcub_bot/features/kb/pdf.py`:
 
@@ -1318,12 +1318,12 @@ async def send(bot, chat_id, url: str, caption: str) -> bool:
     return True
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_kb_pdf.py -v`
 Expected: PASS, 5 tests
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/jbcub_bot/features/kb/pdf.py tests/test_kb_pdf.py
@@ -1345,7 +1345,7 @@ git commit -m "feat: upload each source PDF once and reuse its file_id"
 - Produces: no new public names. `on_question` sends HTML, falls back to plain
   text, attaches unseen PDFs, and stores `sent_pdfs: list[str]` in the FSM data.
 
-- [ ] **Step 1: Update the existing handler tests**
+- [x] **Step 1: Update the existing handler tests**
 
 In `tests/test_kb_handlers.py`:
 
@@ -1439,7 +1439,7 @@ async def test_the_answer_cites_the_document_section_and_pages(monkeypatch):
     assert "Policies for Bachelor Studies" in _texts(bot)[-1]
 ```
 
-- [ ] **Step 2: Write the new handler tests**
+- [x] **Step 2: Write the new handler tests**
 
 Append to `tests/test_kb_handlers.py`:
 
@@ -1497,7 +1497,7 @@ async def test_a_rejected_html_message_is_resent_as_plain_text(monkeypatch):
     assert "<b>" not in answer, "the fallback carries the words, not the markup"
 ```
 
-- [ ] **Step 3: Add the pdf-cache reset to conftest**
+- [x] **Step 3: Add the pdf-cache reset to conftest**
 
 In `tests/conftest.py`, extend the existing `_reset_kb_runtime` fixture so a
 cached `file_id` cannot leak between tests:
@@ -1514,13 +1514,13 @@ def _reset_kb_runtime():
     kb_pdf.reset_cache()
 ```
 
-- [ ] **Step 4: Run the tests to verify they fail**
+- [x] **Step 4: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_kb_handlers.py -v`
 Expected: FAIL — `ValueError: too many values to unpack (expected 2)` in
 `on_question`
 
-- [ ] **Step 5: Rewrite `on_question`**
+- [x] **Step 5: Rewrite `on_question`**
 
 In `src/jbcub_bot/features/kb/handlers.py`, add to the imports:
 
@@ -1592,7 +1592,7 @@ to the end with:
                             sent_pdfs=sent_pdfs)
 ```
 
-- [ ] **Step 6: Give a new session an empty PDF list**
+- [x] **Step 6: Give a new session an empty PDF list**
 
 In `_open`, add the key so a fresh session forgets what the last one saw:
 
@@ -1603,23 +1603,23 @@ async def _open(state: FSMContext) -> None:
                           "sent_pdfs": []})
 ```
 
-- [ ] **Step 7: Run the handler tests**
+- [x] **Step 7: Run the handler tests**
 
 Run: `uv run pytest tests/test_kb_handlers.py -v`
 Expected: PASS, 15 tests
 
-- [ ] **Step 8: Run the whole suite**
+- [x] **Step 8: Run the whole suite**
 
 Run: `uv run pytest`
 Expected: PASS. `tests/test_oplog.py` and the directory suites are untouched by
 this change; if one fails, it is a real regression, not noise to silence.
 
-- [ ] **Step 9: Check the bot still starts**
+- [x] **Step 9: Check the bot still starts**
 
 Run: `uv run python -c "from jbcub_bot.main import build_dispatcher; build_dispatcher(lambda: None); print('ok')"`
 Expected: `ok`
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add src/jbcub_bot/features/kb/handlers.py tests/test_kb_handlers.py tests/conftest.py
@@ -1649,3 +1649,26 @@ formatting rules.
 - [ ] If Telegram rejects a message, confirm the plain-text fallback fired
       (the answer still arrives) and read the logged warning for the tag that
       caused it.
+
+---
+
+## Deviations found while executing (2026-08-02)
+
+1. **Task 4 was not green on its own.** `handlers.py` imports `render_answer`
+   by name, so deleting it broke the whole `features.kb` package import and with
+   it every test that touches the dispatcher. The minimal handler patch — swap
+   the import for `render as render_mod`, unpack `ask()`'s three values, send
+   `render(...).html` — was folded into Task 4, along with the two handler-test
+   updates it forces (`fake_ask` returning three values, and the GitHub-blob-URL
+   assertion). Task 6 kept the real work: `parse_mode`, the fallback, and the
+   PDFs. A future plan that deletes a name should check who binds it.
+2. **The stub model reported no usage.** `StubModel` returned a bare `Usage()`,
+   so `steps` and both token counts read 0 and the plan's `stats.steps == 2`
+   failed. Weakening the assertion would have made the test prove nothing;
+   instead the stub now reports `Usage(requests=1, input_tokens=600,
+   output_tokens=155)` per response, the way a real model does, and the test
+   additionally asserts the two turns sum to 1200/310.
+3. **Task 3 has 27 tests, not 26** — a miscount in the plan, no missing test.
+
+**Everything else ran as written.** Final state: 616 tests passing, the bot
+still builds its dispatcher.
