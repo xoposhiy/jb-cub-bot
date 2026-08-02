@@ -17,12 +17,49 @@ import time
 import urllib.request
 from dataclasses import dataclass
 
-# Frontmatter is only ever read for two keys, so a two-line regex beats adding a
-# YAML parser to the image for it.
+import yaml
+
 _FRONTMATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
-_KEY = r"^{key}:[ \t]*(?P<value>.*?)[ \t]*$"
 
 _TIMEOUT = 30
+
+
+@dataclass(frozen=True)
+class Source:
+    """Where a note's text came from, as the note itself records it.
+
+    The knowledge base is generated with this block in every note, so the bot
+    never parses a PDF and never computes a page number -- it reads one the
+    repository's own tooling wrote.
+    """
+    file: str = ""       # sources/policies/bachelor_policies_v8.pdf
+    document: str = ""   # "Policies for Bachelor Studies"
+    version: str = ""
+    sections: tuple[str, ...] = ()
+    pdf_pages: str = ""  # "18" or "18-20"; empty for a web source
+    url: str = ""        # set for a web source, empty for a PDF
+
+    @property
+    def is_pdf(self) -> bool:
+        return self.file.lower().endswith(".pdf")
+
+    @classmethod
+    def from_mapping(cls, raw) -> "Source | None":
+        """None unless `raw` is a mapping. Every value is coerced to str:
+        YAML reads `version: 8` as an int and `valid_from:` as a date."""
+        if not isinstance(raw, dict):
+            return None
+        sections = raw.get("sections") or ()
+        if isinstance(sections, str):
+            sections = (sections,)
+        return cls(
+            file=str(raw.get("file") or ""),
+            document=str(raw.get("document") or ""),
+            version=str(raw.get("version") or ""),
+            sections=tuple(str(s) for s in sections),
+            pdf_pages=str(raw.get("pdf_pages") or ""),
+            url=str(raw.get("url") or ""),
+        )
 
 
 @dataclass(frozen=True)
@@ -31,6 +68,7 @@ class Note:
     text: str
     title: str = ""
     description: str = ""
+    source: "Source | None" = None
 
 
 @dataclass(frozen=True)
@@ -44,23 +82,20 @@ class Snapshot:
         return render_map(self.notes)
 
 
-def _unquote(value: str) -> str:
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-        return value[1:-1]
-    return value
+def parse_frontmatter(text: str) -> tuple[dict, str]:
+    """`(mapping, body)`. An absent or unparseable block yields `({}, ...)`.
 
-
-def parse_frontmatter(text: str) -> tuple[str, str]:
-    """`(title, description)` from a note's frontmatter, empty when absent."""
+    A person edits these notes, so one bad note must cost that note's metadata
+    and nothing else -- never the whole snapshot.
+    """
     match = _FRONTMATTER.match(text)
     if match is None:
-        return "", ""
-    block = match.group(1)
-    found = []
-    for key in ("title", "description"):
-        hit = re.search(_KEY.format(key=key), block, re.MULTILINE)
-        found.append(_unquote(hit.group("value")) if hit else "")
-    return found[0], found[1]
+        return {}, text
+    try:
+        meta = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return {}, text[match.end():]
+    return (meta if isinstance(meta, dict) else {}), text[match.end():]
 
 
 def notes_from_tarball(blob: bytes) -> dict[str, Note]:
@@ -81,9 +116,14 @@ def notes_from_tarball(blob: bytes) -> dict[str, Note]:
             if handle is None:
                 continue
             text = handle.read().decode("utf-8", errors="replace")
-            title, description = parse_frontmatter(text)
-            notes[path] = Note(path=path, text=text, title=title,
-                               description=description)
+            meta, _body = parse_frontmatter(text)
+            notes[path] = Note(
+                path=path,
+                text=text,
+                title=str(meta.get("title") or ""),
+                description=str(meta.get("description") or ""),
+                source=Source.from_mapping(meta.get("source")),
+            )
     return notes
 
 

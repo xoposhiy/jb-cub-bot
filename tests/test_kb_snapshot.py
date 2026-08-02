@@ -162,3 +162,102 @@ async def test_force_skips_the_ttl():
     # The second commits call is the whole evidence that force bypassed the TTL.
     assert sum("/commits/" in u for u in opener.urls) == 2
     assert opener.downloads == 1, "the sha did not move, so nothing to download"
+
+
+# --- provenance ---------------------------------------------------------------
+
+POLICY = """---
+title: "Grading, Passing and Failing of Modules"
+description: "The 45% pass threshold."
+type: policy-note
+source:
+  file: sources/policies/bachelor_policies_v8.pdf
+  document: "Policies for Bachelor Studies"
+  version: "8"
+  valid_from: 2025-09-01
+  sections: ["III.4 Grading, Passing and Failing of Modules"]
+  pdf_pages: "18-20"
+---
+
+Modules are graded on an integer percentage scheme.
+"""
+
+CALENDAR = """---
+title: "Spring Semester 2026"
+description: "Dates of the Spring Semester 2026."
+type: calendar-note
+source:
+  file: sources/academic-calendars/2025-2026.html
+  url: https://constructor.university/student-life/academic-calendars/2025-2026
+  retrieved: 2026-07-31
+  document: "Academic Calendar 2025/2026"
+  sections: ["Academic Calendar – Degree Programs", "Spring Semester 2026"]
+---
+
+Classes begin in February.
+"""
+
+BROKEN = """---
+title: "Half a note
+description: [unclosed
+---
+
+Body survives.
+"""
+
+
+def test_a_pdf_source_is_parsed_whole():
+    notes = kb_snapshot.notes_from_tarball(_tarball({"kb/p.md": POLICY}))
+    src = notes["kb/p.md"].source
+
+    assert src.file == "sources/policies/bachelor_policies_v8.pdf"
+    assert src.document == "Policies for Bachelor Studies"
+    assert src.version == "8"
+    assert src.sections == ("III.4 Grading, Passing and Failing of Modules",)
+    assert src.pdf_pages == "18-20"
+    assert src.url == ""
+    assert src.is_pdf is True
+
+
+def test_a_web_source_carries_a_url_and_no_pages():
+    notes = kb_snapshot.notes_from_tarball(_tarball({"kb/c.md": CALENDAR}))
+    src = notes["kb/c.md"].source
+
+    assert src.url.endswith("/2025-2026")
+    assert src.pdf_pages == ""
+    assert src.is_pdf is False
+    assert len(src.sections) == 2
+
+
+def test_a_note_with_no_frontmatter_has_no_source():
+    notes = kb_snapshot.notes_from_tarball(_tarball({"kb/loose.md": BARE}))
+
+    assert notes["kb/loose.md"].source is None
+    assert notes["kb/loose.md"].title == ""
+
+
+def test_one_unparseable_note_does_not_empty_the_snapshot():
+    notes = kb_snapshot.notes_from_tarball(_tarball({
+        "kb/broken.md": BROKEN,
+        "kb/p.md": POLICY,
+    }))
+
+    assert sorted(notes) == ["kb/broken.md", "kb/p.md"]
+    assert notes["kb/broken.md"].source is None
+    assert notes["kb/p.md"].source is not None
+
+
+def test_a_version_written_as_a_number_still_reads_as_text():
+    # PyYAML turns `version: 8` into int 8; a renderer must not crash on it.
+    notes = kb_snapshot.notes_from_tarball(_tarball({
+        "kb/n.md": POLICY.replace('version: "8"', "version: 8"),
+    }))
+
+    assert notes["kb/n.md"].source.version == "8"
+
+
+def test_parse_frontmatter_returns_the_mapping_and_the_body():
+    meta, body = kb_snapshot.parse_frontmatter(POLICY)
+
+    assert meta["title"] == "Grading, Passing and Failing of Modules"
+    assert body.strip() == "Modules are graded on an integer percentage scheme."
