@@ -10,10 +10,18 @@ context window.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from jbcub_bot.core.kb_snapshot import Note, Snapshot
 
 MAX_CHARS = 20000
+# A listing gets a looser cap than a note. The prompt now carries folders
+# rather than filenames, so a listing is the agent's only route to a note's
+# name, and a clipped one hides its tail of notes for good -- while a clipped
+# note still shows most of what it says. The biggest folder in the base today
+# lists at 19k, close enough to MAX_CHARS that the ordinary growth of one
+# handbook would have started swallowing notes.
+MAX_LIST_CHARS = 60000
 MAX_MATCHES = 40
 TRUNCATION_MARK = "\n[… truncated]"
 
@@ -41,7 +49,7 @@ def list_notes(snapshot: Snapshot, path_prefix: str = "") -> str:
         lines.append(f"{path}{': ' + label if label else ''}")
     if not lines:
         return f"{_NO_NOTES} {path_prefix or 'kb/'}."
-    return clip("\n".join(lines))
+    return clip("\n".join(lines), MAX_LIST_CHARS)
 
 
 def search_notes(snapshot: Snapshot, pattern: str, path_prefix: str = "") -> str:
@@ -96,6 +104,100 @@ def read_note(snapshot: Snapshot, path: str) -> str:
     if note is None:
         return _UNKNOWN.format(path=path)
     return clip(source_hint(note) + note.text)
+
+
+@dataclass(frozen=True)
+class SourceRef:
+    """A source document to put in the chat, resolved from frontmatter.
+
+    `file` is the session's deduplication key, and it is what decides the
+    shape: a PDF is uploaded, a web page is linked. Both come from the note's
+    own `source:` block, so the agent picks *which* document without ever
+    naming a file or an address itself.
+    """
+    file: str     # repository path under sources/
+    caption: str  # the document's name, as its frontmatter gives it
+    url: str = ""  # set for a web source, empty for a PDF
+
+    @property
+    def is_pdf(self) -> bool:
+        return self.file.lower().endswith(".pdf")
+
+
+def numbered_sources(snapshot: Snapshot, paths: list[str]) -> str:
+    """The notes the agent read, numbered, for it to choose among.
+
+    Each line carries what the choice turns on -- which document the note came
+    out of, and where in it -- so the agent is picking documents it can
+    recognise rather than filenames.
+    """
+    lines = []
+    for number, path in enumerate(paths, 1):
+        note = snapshot.notes.get(path)
+        src = note.source if note is not None else None
+        bits = [(note.title if note is not None else "") or path]
+        if src is not None:
+            if src.document:
+                bits.append(src.document)
+            if src.sections:
+                bits.append("§" + "; ".join(src.sections))
+            if src.pdf_pages:
+                bits.append(f"pp. {src.pdf_pages}")
+        lines.append(f"{number}. " + " — ".join(bits))
+    return "\n".join(lines)
+
+
+def choose_sources(snapshot: Snapshot, options: list[str],
+                   basket: list[SourceRef], numbers) -> str:
+    """Resolve the chosen numbers to source documents, for the caller to send.
+
+    The agent hands over numbers and nothing else. Everything the reader ends
+    up seeing -- the document's name, whether it is a PDF or a page, the address
+    -- is read here out of that note's frontmatter, so it is either true or
+    absent. A note whose frontmatter names no source at all is dropped rather
+    than shown as a repository path.
+    """
+    if not options:
+        return ("You have not been asked about sources yet. Answer the "
+                "question first; you will be given the list to choose from.")
+    picked: list[str] = []
+    unusable: list[str] = []
+    for raw in numbers or ():
+        try:
+            index = int(raw)
+        except (TypeError, ValueError):
+            unusable.append(str(raw))
+            continue
+        if not 1 <= index <= len(options):
+            unusable.append(str(raw))
+            continue
+        path = options[index - 1]
+        if path not in picked:
+            picked.append(path)
+
+    added: list[str] = []
+    for path in picked:
+        note = snapshot.notes.get(path)
+        src = note.source if note is not None else None
+        if src is None or not src.file:
+            continue
+        if any(ref.file == src.file for ref in basket):
+            continue
+        name = src.document or src.file
+        basket.append(SourceRef(file=src.file, caption=name, url=src.url))
+        added.append(name)
+
+    parts = []
+    if added:
+        parts.append("The reader will be given " + ", ".join(added) + ".")
+    elif picked:
+        parts.append("Those notes name no source document to show, so nothing "
+                     "will be attached.")
+    else:
+        parts.append("Nothing will be attached.")
+    if unusable:
+        parts.append(f"There is no source numbered {', '.join(unusable)}.")
+    return " ".join(parts)
 
 
 def _size(chars: int) -> str:

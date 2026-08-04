@@ -79,7 +79,7 @@ class Snapshot:
 
     @property
     def map_text(self) -> str:
-        return render_map(self.notes)
+        return render_folder_map(self.notes)
 
 
 def parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -127,17 +127,32 @@ def notes_from_tarball(blob: bytes) -> dict[str, Note]:
     return notes
 
 
-def render_map(notes: dict[str, Note]) -> str:
-    """One line per note: the path, its title and its description.
+def render_folder_map(notes: dict[str, Note]) -> str:
+    """One line per folder: its path, how many notes it holds, what it covers.
 
-    This goes in the system prompt so the agent usually reaches the right note
-    in one read instead of three steps of reconnaissance.
+    This goes in the system prompt, and a line per folder rather than a line per
+    note is the whole point: one folder here is one source document, so this map
+    is the list of documents and it grows with the shelf rather than with the
+    page count. A question the base cannot answer is then decided against a few
+    hundred characters instead of every filename in the repository.
+
+    The description is the folder's own `_index.md` frontmatter, so the map
+    stays honest without anybody maintaining a second copy of it. A folder
+    without one still gets its line -- a folder the agent cannot see is a folder
+    it will never search.
     """
+    folders: dict[str, int] = {}
+    for path in notes:
+        folder, _, _ = path.rpartition("/")
+        folders[folder] = folders.get(folder, 0) + 1
     lines = []
-    for path in sorted(notes):
-        note = notes[path]
-        label = " — ".join(p for p in (note.title, note.description) if p)
-        lines.append(f"- {path}{': ' + label if label else ''}")
+    for folder in sorted(folders):
+        index = notes.get(f"{folder}/_index.md")
+        label = " — ".join(p for p in (index.title, index.description)
+                           if p) if index else ""
+        count = folders[folder]
+        head = f"- {folder}/ ({count} note{'' if count == 1 else 's'})"
+        lines.append(f"{head}{': ' + label if label else ''}")
     return "\n".join(lines)
 
 

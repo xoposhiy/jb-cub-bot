@@ -26,6 +26,7 @@ from jbcub_bot.core.kb_snapshot import Note, Snapshot, Source
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.kb import agent as kb_agent
 from jbcub_bot.features.kb import handlers as kb
+from jbcub_bot.features.kb import tools
 from jbcub_bot.main import build_dispatcher
 
 TEACHER_ID = 555
@@ -104,20 +105,33 @@ class FakeStore:
         return self.snapshot
 
 
-def _install_runtime(monkeypatch,
-                     answer="Retakes once.\nSources: kb/policies/exams.md"):
+_PDF = tools.SourceRef(file="sources/policies/bachelor_policies_v8.pdf",
+                       caption="Policies for Bachelor Studies")
+_WEB = tools.SourceRef(
+    file="sources/academic-calendars/2026-2027.html",
+    caption="Academic Calendar 2026/2027",
+    url="https://constructor.university/student-life/academic-calendars/2026-2027")
+# The agent writes its own citation now, so the stub answer carries one.
+_ANSWER = ("Retakes once.\n"
+           "📄 Policies for Bachelor Studies v8 — §III.4 Grading, pp. 18–20")
+
+
+def _install_runtime(monkeypatch, answer=_ANSWER, pdfs=(_PDF,), complaints=()):
     store = FakeStore()
     asked: list[str] = []
 
     async def fake_ask(agent, snapshot, question, history, about=""):
         asked.append(question)
-        return (answer, history + [{"role": "user", "content": question}],
-                kb_agent.AskStats(
-                    steps=2, tool_calls=1, notes_read=1, input_tokens=1200,
-                    output_tokens=310,
-                    calls=(kb_agent.ToolCall(
-                        "read_note", {"path": "kb/policies/exams.md"},
-                        "1.2k chars"),)))
+        return kb_agent.Answer(
+            text=answer,
+            history=history + [{"role": "user", "content": question}],
+            stats=kb_agent.AskStats(
+                steps=2, tool_calls=1, notes_read=1, input_tokens=1200,
+                output_tokens=310,
+                calls=(kb_agent.ToolCall(
+                    "read_note", {"path": "kb/policies/exams.md"},
+                    "1.2k chars"),)),
+            sources=tuple(pdfs), complaints=tuple(complaints))
 
     # handlers.py imported `ask` by name, so that binding is the one in play.
     monkeypatch.setattr(kb, "ask", fake_ask)
@@ -214,7 +228,9 @@ async def test_a_teacher_ask_opens_the_session(monkeypatch):
     assert "Policies for Bachelor Studies" in _texts(bot)[-1]
 
 
-async def test_the_answer_cites_the_document_section_and_pages(monkeypatch):
+async def test_the_reader_gets_the_agents_words_unedited(monkeypatch):
+    """The bot no longer rewrites the answer or bolts a sources block on: the
+    agent cites the document itself and this is sent as it stands."""
     dp, bot, _, _ = _setup(monkeypatch)
 
     await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
@@ -222,9 +238,7 @@ async def test_the_answer_cites_the_document_section_and_pages(monkeypatch):
                          dispatcher=dp)
 
     answer = _texts(bot)[-1]
-    assert "Policies for Bachelor Studies v8" in answer
-    assert "§III.4 Grading — pp. 18–20" in answer
-    assert "kb/" not in answer, "the base never shows through to a reader"
+    assert answer == _ANSWER
     assert "steps" not in answer, "cost is an admin's business, not a teacher's"
 
 
@@ -306,7 +320,7 @@ async def test_the_agent_is_told_the_asker_role_and_cohort(monkeypatch):
 
     async def fake_ask(agent, snapshot, question, history, about=""):
         seen.append(about)
-        return "ok", history, kb_agent.AskStats()
+        return kb_agent.Answer("ok", history, kb_agent.AskStats())
 
     monkeypatch.setattr(kb, "ask", fake_ask)
     kb.set_runtime(kb_agent.KbRuntime(agent=object(), store=store,
@@ -599,9 +613,37 @@ async def test_a_fresh_session_gets_the_pdf_again(monkeypatch):
     assert len(bot.documents) == 2
 
 
-async def test_an_answer_citing_nothing_attaches_nothing(monkeypatch):
+async def test_a_web_source_arrives_as_a_link_rather_than_a_file(monkeypatch):
+    """The academic calendar is a web page. Its frontmatter carries the address,
+    and a 100 KB scrape of that page would be no use to anybody."""
+    dp, bot, _, _ = _setup(monkeypatch, pdfs=(_WEB,))
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "when?", update_id=2),
+                         dispatcher=dp)
+
+    assert bot.documents == [], "nothing to upload"
+    posted = [t for t in _texts(bot) if _WEB.url in t]
+    assert len(posted) == 1
+    assert "Academic Calendar 2026/2027" in posted[0]
+
+
+async def test_a_link_is_posted_once_per_session_like_a_file(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch, pdfs=(_WEB,))
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "a", update_id=2),
+                         dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "b", update_id=3),
+                         dispatcher=dp)
+
+    assert sum(_WEB.url in t for t in _texts(bot)) == 1
+
+
+async def test_an_agent_that_named_no_source_gets_nothing_attached(monkeypatch):
+    """Attachments follow the sources the agent chose, not a reading of its
+    prose, so an answer that named none sends none."""
     dp, bot, _, _ = _setup(monkeypatch,
-                           answer="The base does not cover this.")
+                           answer="The base does not cover this.", pdfs=())
     await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
 
     await dp.feed_update(bot, _message(bot, TEACHER_ID, "a", update_id=2),

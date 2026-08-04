@@ -56,8 +56,7 @@ EXIT_CALLBACK = "kb:exit"
 EXIT_TEXT = "🚪 Exit knowledge base"
 
 _NOT_CONFIGURED = ("Knowledge base search is not configured on this bot. "
-                   "An admin needs to set KB_BASE_URL, KB_API_KEY and "
-                   "KB_MODEL.")
+                   "An admin needs to set KB_LLM_API_KEY.")
 _OPENED = ("Ask me anything about the program and I'll answer from the "
            f"knowledge base. Tap {EXIT_TEXT} when you're done.")
 _CLOSED = "Knowledge base session closed."
@@ -90,7 +89,7 @@ async def _answer_html(message: Message, text: str):
         return await message.answer(render_mod.plain(text))
 
 
-async def _send_trace(target: Message, principal, stats):
+async def _send_trace(target: Message, principal, stats, complaints=()):
     """What the agent did to earn that answer — admins only.
 
     A teacher wants the answer; whoever runs the bot wants to see which tools
@@ -101,7 +100,7 @@ async def _send_trace(target: Message, principal, stats):
     if principal is None or principal.role is not Role.ADMIN:
         return None
     try:
-        return await target.answer(render_mod.trace_message(stats))
+        return await target.answer(render_mod.trace_message(stats, complaints))
     except TelegramAPIError:
         logger.warning("could not send the knowledge base trace",
                        exc_info=True)
@@ -109,22 +108,38 @@ async def _send_trace(target: Message, principal, stats):
 
 
 async def _attach_sources(bot, message: Message, live, snapshot,
-                          pdfs, already: list[str]) -> tuple[list[str], object]:
-    """Send each cited PDF this session has not seen yet.
+                          sources, already: list[str]) -> tuple[list[str],
+                                                                object]:
+    """Give the reader each source the agent named, once per session.
 
-    Returns the updated list and the last attachment that landed. A source
-    document is evidence for an answer that has already been sent, so a failure
-    here changes nothing the reader needs.
+    A PDF is uploaded; a web page is linked, because its frontmatter carries the
+    address and a 100 KB scrape of the page would be no use to anybody. The
+    links go out together in one message rather than one apiece.
+
+    Returns the updated list and the last thing that landed. All of this is
+    evidence for an answer that has already been sent, so a failure here changes
+    nothing the reader needs.
     """
     sent, last = list(already), None
-    for ref in pdfs:
+    links: list[str] = []
+    for ref in sources:
         if ref.file in sent:
             continue
-        url = pdf_mod.raw_url(live.repo, snapshot.sha, ref.file)
-        attached = await pdf_mod.send(bot, message.chat.id, url, ref.caption)
-        if attached is not None:
+        if ref.is_pdf:
+            url = pdf_mod.raw_url(live.repo, snapshot.sha, ref.file)
+            attached = await pdf_mod.send(bot, message.chat.id, url,
+                                          ref.caption)
+            if attached is not None:
+                sent.append(ref.file)
+                last = attached
+        elif ref.url:
+            links.append(f"🌐 {ref.caption}\n{ref.url}")
             sent.append(ref.file)
-            last = attached
+    if links:
+        try:
+            last = await message.answer("\n\n".join(links)) or last
+        except TelegramAPIError:
+            logger.warning("could not send the source links", exc_info=True)
     return sent, last
 
 
@@ -397,19 +412,20 @@ async def _answer_question(target: Message, principal: User, state: FSMContext,
 
     await target.answer(_THINKING)
     snapshot = await live.store.get()
-    answer, history, stats = await ask(live.agent, snapshot, question,
-                                       data.get("history", []),
-                                       about=describe_asker(principal))
+    result = await ask(live.agent, snapshot, question, data.get("history", []),
+                       about=describe_asker(principal))
     asked = data.get("asked", 0) + 1
-    rendered = render_mod.render(answer, snapshot)
+    # The agent's own words, clipped only if it wrote past what Telegram takes.
     # Each of these may or may not be the last word of the exchange; the Exit
     # button goes under whichever one actually was.
-    last = await _answer_html(target, rendered.html)
+    last = await _answer_html(target, render_mod.clip(result.text))
     sent_pdfs, attached = await _attach_sources(bot, target, live, snapshot,
-                                                rendered.pdfs,
+                                                result.sources,
                                                 data.get("sent_pdfs", []))
     last = attached or last
-    last = await _send_trace(target, principal, stats) or last
+    last = await _send_trace(target, principal, result.stats,
+                             result.complaints) or last
+    history = result.history
 
     if asked >= MAX_QUESTIONS:
         # No button to move: the session ends here, so the one it had goes.

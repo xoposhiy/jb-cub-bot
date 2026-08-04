@@ -89,20 +89,39 @@ def test_a_note_without_frontmatter_is_still_listed():
     notes = kb_snapshot.notes_from_tarball(_tarball({"kb/loose.md": BARE}))
 
     assert notes["kb/loose.md"].title == ""
-    assert kb_snapshot.render_map(notes).count("kb/loose.md") == 1
+    assert kb_snapshot.render_folder_map(notes).count("kb/") == 1
 
 
-def test_the_map_carries_one_line_per_note():
+def test_the_map_carries_one_line_per_folder_not_per_note():
     notes = kb_snapshot.notes_from_tarball(_tarball({
         "kb/policies/exams.md": NOTE,
+        "kb/policies/grades.md": NOTE,
         "kb/loose.md": BARE,
     }))
 
-    lines = [ln for ln in kb_snapshot.render_map(notes).splitlines() if ln.strip()]
+    lines = [ln for ln in
+             kb_snapshot.render_folder_map(notes).splitlines() if ln.strip()]
 
-    assert len(lines) == 2
-    assert any("kb/policies/exams.md" in ln and "Exam rules" in ln
-               and "how retakes work" in ln for ln in lines)
+    assert len(lines) == 2, "two folders, three notes"
+    assert any("kb/policies/ (2 notes)" in ln for ln in lines)
+    assert not any("exams.md" in ln for ln in lines), "no filenames in the map"
+
+
+def test_a_folder_is_described_by_its_index_note():
+    notes = kb_snapshot.notes_from_tarball(_tarball({
+        "kb/policies/_index.md": NOTE,
+        "kb/policies/grades.md": BARE,
+    }))
+
+    line = kb_snapshot.render_folder_map(notes)
+
+    assert "Exam rules" in line and "how retakes work" in line
+
+
+def test_a_folder_without_an_index_note_still_gets_a_line():
+    notes = kb_snapshot.notes_from_tarball(_tarball({"kb/policies/x.md": BARE}))
+
+    assert kb_snapshot.render_folder_map(notes).strip() == "- kb/policies/ (1 note)"
 
 
 async def test_first_get_downloads_and_caches():

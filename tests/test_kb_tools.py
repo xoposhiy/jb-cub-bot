@@ -118,6 +118,22 @@ def test_a_long_note_is_clipped_with_a_visible_mark():
     assert body.endswith(tools.TRUNCATION_MARK)
 
 
+def test_a_folder_listing_survives_past_a_notes_clip_limit():
+    """The prompt maps folders, so a listing is the only way to learn a note's
+    name. Clipping one at MAX_CHARS would hide its last notes for good."""
+    notes = {f"kb/big/note-{i:03d}.md": Note(path=f"kb/big/note-{i:03d}.md",
+                                             text="body",
+                                             description="d" * 400)
+             for i in range(60)}  # ~25k chars of listing, over MAX_CHARS
+    snapshot = Snapshot(sha="abc123", repo="r", notes=notes)
+
+    listing = tools.list_notes(snapshot, "kb/big/")
+
+    assert len(listing) > tools.MAX_CHARS
+    assert "kb/big/note-059.md" in listing, "the tail is still there"
+    assert not listing.endswith(tools.TRUNCATION_MARK)
+
+
 # --- what a call came back with -----------------------------------------------
 
 def test_a_search_that_found_nothing_summarises_as_no_hits():

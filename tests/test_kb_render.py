@@ -1,11 +1,11 @@
-"""What the reader actually sees, and why it cannot break the message.
+"""The admin's trace, and the two fallbacks for sending an answer.
 
-Telegram rejects a whole message over one stray tag, so escaping and balancing
-are the load-bearing parts here. Everything else is layout.
+The answer itself is not rendered any more — it goes out as the agent wrote it —
+so what is left to test here is the diagnostics an admin reads and the two
+things that fire only after Telegram has already said no.
 """
 from dataclasses import dataclass, field
 
-from jbcub_bot.core.kb_snapshot import Note, Snapshot, Source
 from jbcub_bot.features.kb import render
 
 
@@ -26,244 +26,28 @@ class FakeStats:
     calls: tuple = ()
 
 
-def _snapshot() -> Snapshot:
-    return Snapshot(sha="abc123", repo="xoposhiy/cub-kb", notes={
-        "kb/p.md": Note(
-            path="kb/p.md", text="body", title="Grading",
-            source=Source(file="sources/policies/bachelor_policies_v8.pdf",
-                          document="Policies for Bachelor Studies",
-                          version="8", sections=("III.4 Grading",),
-                          pdf_pages="18-20")),
-        "kb/one.md": Note(
-            path="kb/one.md", text="body", title="One pager",
-            source=Source(file="sources/sdt-handbook/2026-SDT-BSc.pdf",
-                          document="Program Handbook", version="V 1.0",
-                          sections=("2.1 General",), pdf_pages="12")),
-        "kb/c.md": Note(
-            path="kb/c.md", text="body", title="Spring",
-            source=Source(file="sources/academic-calendars/2025-2026.html",
-                          document="Academic Calendar 2025/2026",
-                          sections=("Spring Semester 2026",),
-                          url="https://constructor.university/ac/2025-2026")),
-        "kb/bare.md": Note(path="kb/bare.md", text="body"),
-    })
+# --- the two last resorts -----------------------------------------------------
 
+def test_an_answer_within_the_limit_is_passed_through_untouched():
+    """The whole point of the rewrite: the agent's words are not edited."""
+    answer = "Retakes are allowed once.\n📄 Policies — §III.4, pp. 18–20"
 
-# --- escaping and balancing ---------------------------------------------------
+    assert render.clip(answer) == answer
 
-def test_markup_the_model_is_allowed_survives():
-    assert render.escape_subset("<b>bold</b> and <i>it</i>") == \
-        "<b>bold</b> and <i>it</i>"
 
+def test_an_over_long_answer_is_cut_to_what_telegram_accepts():
+    out = render.clip("x" * 5000)
 
-def test_everything_else_is_inert():
-    out = render.escape_subset("<script>alert(1)</script> a & b")
+    assert len(out) <= render.CLIP_LIMIT
+    assert out.endswith(render.TRUNCATION_MARK)
 
-    assert "<script>" not in out
-    assert "&lt;script&gt;" in out
-    assert "&amp;" in out
 
+def test_plain_strips_every_tag_not_just_the_allowed_ones():
+    """It is called because Telegram refused the markup, so the offending tag
+    is by definition one the allow-list does not know."""
+    out = render.plain("<b>Bold</b> and <span class=x>odd</span>")
 
-def test_a_tag_with_attributes_is_not_restored():
-    out = render.escape_subset('<a href="http://x">x</a>')
-
-    assert "<a href" not in out
-
-
-def test_a_quote_full_of_markdown_punctuation_is_untouched():
-    body = "the _rule_ is *45%* and #4 applies"
-
-    assert render.escape_subset(body) == body
-
-
-def test_an_unclosed_tag_is_closed():
-    assert render.balance("<b>bold") == "<b>bold</b>"
-
-
-def test_a_stray_closing_tag_is_dropped():
-    assert render.balance("plain</i> text") == "plain text"
-
-
-def test_crossed_tags_are_closed_in_order():
-    assert render.balance("<b><i>x</b>") == "<b><i>x</i></b>"
-
-
-def test_plain_strips_tags_and_entities():
-    assert render.plain("<b>a</b> &amp; b") == "a & b"
-
-
-# --- the sources line the model writes ----------------------------------------
-
-def test_the_sources_line_is_taken_off_the_body():
-    body, paths = render.split_sources(
-        "Retakes are allowed once.\n\nSources: kb/p.md")
-
-    assert paths == ["kb/p.md"]
-    assert "Sources" not in body
-    assert body == "Retakes are allowed once."
-
-
-def test_several_paths_on_the_sources_line():
-    _, paths = render.split_sources("x\nSources: kb/p.md, kb/c.md")
-
-    assert paths == ["kb/p.md", "kb/c.md"]
-
-
-def test_a_path_repeated_is_listed_once():
-    _, paths = render.split_sources("x\nSources: kb/p.md, kb/p.md")
-
-    assert paths == ["kb/p.md"]
-
-
-def test_a_model_that_ignores_the_instruction_still_gets_cited():
-    body, paths = render.split_sources("Retakes (kb/p.md) are allowed once.")
-
-    assert paths == ["kb/p.md"]
-    assert "kb/p.md" not in body
-    assert body == "Retakes are allowed once."
-
-
-def test_an_answer_with_no_paths_keeps_its_body():
-    body, paths = render.split_sources("The base does not cover this.")
-
-    assert paths == []
-    assert body == "The base does not cover this."
-
-
-# --- the sources block --------------------------------------------------------
-
-def _block(*paths, snapshot=None) -> str:
-    text, _ = render.sources_block(list(paths), snapshot or _snapshot())
-    return text
-
-
-def test_a_pdf_note_renders_document_version_section_and_pages():
-    block, pdfs = render.sources_block(["kb/p.md"], _snapshot())
-
-    assert "📄 Policies for Bachelor Studies v8" in block
-    assert "§III.4 Grading — pp. 18–20" in block
-    assert pdfs[0].file == "sources/policies/bachelor_policies_v8.pdf"
-
-
-def test_a_single_page_is_not_plural():
-    block = _block("kb/one.md")
-
-    assert "p. 12" in block
-    assert "pp." not in block
-
-
-def test_a_web_note_links_and_attaches_nothing():
-    block, pdfs = render.sources_block(["kb/c.md"], _snapshot())
-
-    assert "🌐 Academic Calendar 2025/2026" in block
-    assert "§Spring Semester 2026" in block
-    assert "https://constructor.university/ac/2025-2026" in block
-    assert pdfs == ()
-
-
-def test_a_note_with_no_source_is_dropped_rather_than_shown_as_a_path():
-    """The reader has never heard of the knowledge base. A citation the bot
-    cannot resolve to a real document is worth less than the confusion of
-    printing a repository path."""
-    block = _block("kb/bare.md")
-
-    assert block == ""
-
-
-def test_a_path_that_is_not_in_the_snapshot_leaks_nothing():
-    block = _block("kb/ghost.md")
-
-    assert block == ""
-    assert "ghost" not in block
-
-
-# --- grouping by document -----------------------------------------------------
-
-def _with_sections(snapshot, *specs):
-    """Add notes off one PDF, each `(path, section, pages)`."""
-    base = snapshot.notes["kb/p.md"].source
-    for path, section, pages in specs:
-        snapshot.notes[path] = Note(
-            path=path, text="b",
-            source=Source(file=base.file, document=base.document,
-                          version=base.version, sections=(section,),
-                          pdf_pages=pages))
-    return snapshot
-
-
-def test_one_document_is_named_once_with_its_sections_under_it():
-    snapshot = _with_sections(_snapshot(),
-                              ("kb/a.md", "III.4 Grading", "18-20"),
-                              ("kb/b.md", "V.2 Thesis", "31"))
-
-    block = _block("kb/a.md", "kb/b.md", snapshot=snapshot)
-
-    assert block.count("Policies for Bachelor Studies") == 1
-    assert block.splitlines() == [
-        "📄 Policies for Bachelor Studies v8",
-        "   §III.4 Grading — pp. 18–20",
-        "   §V.2 Thesis — p. 31",
-    ]
-
-
-def test_two_notes_off_one_section_merge_their_pages():
-    snapshot = _with_sections(_snapshot(),
-                              ("kb/a.md", "III.4 Grading", "18-20"),
-                              ("kb/b.md", "III.4 Grading", "31"))
-
-    block = _block("kb/a.md", "kb/b.md", snapshot=snapshot)
-
-    assert "§III.4 Grading — pp. 18–20, 31" in block
-    assert len(block.splitlines()) == 2
-
-
-def test_ten_notes_off_one_section_print_it_once():
-    snapshot = _with_sections(_snapshot(), *[
-        (f"kb/s{i}.md", "III.4 Grading", "18-20") for i in range(10)])
-
-    block = _block(*(f"kb/s{i}.md" for i in range(10)), snapshot=snapshot)
-
-    assert block.count("III.4 Grading") == 1
-
-
-def test_two_documents_each_keep_their_own_heading():
-    block = _block("kb/p.md", "kb/one.md", "kb/c.md")
-
-    assert block.count("📄") == 2
-    assert block.count("🌐") == 1
-
-
-def test_a_document_with_too_many_sections_says_how_many_it_hid():
-    snapshot = _with_sections(_snapshot(), *[
-        (f"kb/s{i}.md", f"Section {i}", str(i)) for i in range(7)])
-
-    block = _block(*(f"kb/s{i}.md" for i in range(7)), snapshot=snapshot)
-
-    assert block.count("   §") == render.MAX_SECTIONS
-    assert "… and 3 more sections" in block
-
-
-def test_one_hidden_section_is_counted_in_the_singular():
-    snapshot = _with_sections(_snapshot(), *[
-        (f"kb/s{i}.md", f"Section {i}", str(i)) for i in range(5)])
-
-    block = _block(*(f"kb/s{i}.md" for i in range(5)), snapshot=snapshot)
-
-    assert "… and 1 more section" in block
-    assert "more sections" not in block
-
-
-def test_a_note_whose_frontmatter_names_no_section_still_shows_its_pages():
-    snapshot = _snapshot()
-    snapshot.notes["kb/n.md"] = Note(
-        path="kb/n.md", text="b",
-        source=Source(file="sources/policies/bachelor_policies_v8.pdf",
-                      document="Policies for Bachelor Studies", pdf_pages="9"))
-
-    block = _block("kb/n.md", snapshot=snapshot)
-
-    assert block.splitlines() == ["📄 Policies for Bachelor Studies",
-                                  "   p. 9"]
+    assert out == "Bold and odd"
 
 
 # --- the metrics line ---------------------------------------------------------
@@ -292,115 +76,6 @@ def test_reading_nothing_says_so_rather_than_looking_broken():
 
     assert "0 notes read" in line
 
-
-# --- the whole message --------------------------------------------------------
-
-def test_the_message_has_the_answer_then_its_sources_and_no_metrics():
-    out = render.render("Retakes are allowed once.\nSources: kb/p.md",
-                        _snapshot())
-
-    assert out.html.index("Retakes are allowed once.") < \
-        out.html.index("Policies for Bachelor Studies")
-    assert "steps" not in out.html, "cost belongs in the admin trace"
-
-
-def test_the_cited_pdf_comes_back_for_attaching():
-    out = render.render("x\nSources: kb/p.md", _snapshot())
-
-    assert [p.file for p in out.pdfs] == [
-        "sources/policies/bachelor_policies_v8.pdf"]
-    assert "Policies for Bachelor Studies" in out.pdfs[0].caption
-
-
-def test_two_notes_from_one_pdf_attach_it_once():
-    snapshot = _snapshot()
-    same = snapshot.notes["kb/p.md"]
-    snapshot.notes["kb/p2.md"] = Note(path="kb/p2.md", text="b",
-                                      source=same.source)
-
-    out = render.render("x\nSources: kb/p.md, kb/p2.md", snapshot)
-
-    assert len(out.pdfs) == 1
-
-
-def test_a_web_only_answer_attaches_nothing():
-    out = render.render("x\nSources: kb/c.md", _snapshot())
-
-    assert out.pdfs == ()
-
-
-def test_an_answer_citing_nothing_gets_no_sources_block():
-    out = render.render("The base does not cover this.", _snapshot())
-
-    assert out.html == "The base does not cover this."
-
-
-def test_a_broad_answer_does_not_drown_in_its_own_sources():
-    snapshot = _snapshot()
-    for i in range(12):
-        snapshot.notes[f"kb/n{i}.md"] = Note(
-            path=f"kb/n{i}.md", text="b",
-            source=Source(file=f"sources/d{i}.pdf", document=f"Document {i}"))
-    cited = ", ".join(f"kb/n{i}.md" for i in range(12))
-
-    out = render.render(f"A list.\nSources: {cited}", snapshot)
-
-    shown = [ln for ln in out.html.splitlines() if ln.startswith("📄")]
-    assert len(shown) == render.MAX_DOCUMENTS
-    assert "… and 8 more documents" in out.html
-
-
-def test_one_document_over_the_cap_is_counted_in_the_singular():
-    snapshot = _snapshot()
-    for i in range(5):
-        snapshot.notes[f"kb/n{i}.md"] = Note(
-            path=f"kb/n{i}.md", text="b",
-            source=Source(file=f"sources/d{i}.pdf", document=f"Document {i}"))
-    cited = ", ".join(f"kb/n{i}.md" for i in range(5))
-
-    out = render.render(f"A list.\nSources: {cited}", snapshot)
-
-    assert "… and 1 more document" in out.html
-    assert "more documents" not in out.html
-
-
-def test_an_over_long_answer_is_clipped_to_what_telegram_accepts():
-    out = render.render("x" * 6000, _snapshot())
-
-    assert len(out.html) <= render.CLIP_LIMIT
-    assert render.TRUNCATION_MARK in out.html
-
-
-def test_the_rendered_message_is_balanced_html():
-    out = render.render("<b>Retakes\nSources: kb/p.md", _snapshot())
-
-    assert out.html.count("<b>") == out.html.count("</b>")
-
-
-# --- the base never shows through ---------------------------------------------
-
-def test_no_rendered_message_mentions_the_knowledge_base():
-    """The whole point: for the reader only the source documents exist."""
-    answer = ("Assembled from the notes in kb/policies/bachelor-studies-v8/ "
-              "and kb/calendars/2025-2026/.\nSources: kb/p.md")
-
-    out = render.render(answer, _snapshot())
-
-    assert "kb/" not in out.html
-
-
-def test_a_bare_folder_is_swept_from_the_prose_without_becoming_a_source():
-    body, paths = render.split_sources("Gathered from kb/calendars/2025-2026/.")
-
-    assert paths == []
-    assert "kb/" not in body
-
-
-def test_an_index_note_named_inline_is_still_a_citation():
-    body, paths = render.split_sources("See kb/policies/_index.md for the list.")
-
-    assert paths == ["kb/policies/_index.md"]
-    assert "kb/" not in body
 
 
 # --- the trace ----------------------------------------------------------------
@@ -475,6 +150,33 @@ def test_the_trace_survives_a_pattern_full_of_angle_brackets():
         FakeCall("search_notes", {"pattern": "<b>&x"}, "0 hits")))
 
     assert "<b>&x" in text, "plain text, so nothing needs escaping"
+
+
+def test_the_trace_names_the_sources_the_agent_chose():
+    """The follow-up turn is part of what the question cost, so the admin sees
+    it alongside the reads it chose among."""
+    text = render.trace_message(
+        _stats(FakeCall("choose_sources", {"numbers": [1, 3]}, "2 hits")))
+
+    assert "📎 choose_sources 1, 3" in text
+
+
+def test_the_trace_says_so_when_the_agent_chose_no_source():
+    text = render.trace_message(
+        _stats(FakeCall("choose_sources", {"numbers": []}, "0 hits")))
+
+    assert "📎 choose_sources none" in text
+
+
+def test_the_trace_shows_what_the_check_complained_about():
+    """Whether the agent then fixed it or stood its ground is the thing worth
+    watching while the prompt is still settling — and it belongs to the admin,
+    not the reader."""
+    text = render.trace_message(
+        _stats(FakeCall("read_note", {"path": "kb/p.md"}, "2.0k chars")),
+        ["The answer names kb/p.md."])
+
+    assert "⚠ The answer names kb/p.md." in text
 
 
 def test_a_runaway_trace_keeps_its_totals():

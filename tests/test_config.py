@@ -68,25 +68,32 @@ def _base_env(monkeypatch):
     monkeypatch.setenv("BOT_TOKEN", "123:abc")
     monkeypatch.setenv("LINK_SECRET", "s3cret")
     monkeypatch.setenv("RIGHTS_SHEET_ID", "sheet-xyz")
-    for name in ("KB_BASE_URL", "KB_API_KEY", "KB_MODEL"):
+    for name in ("KB_LLM_BASE_URL", "KB_LLM_API_KEY", "KB_LLM_MODEL"):
         monkeypatch.delenv(name, raising=False)
 
 
 def test_kb_settings_default_to_unconfigured(monkeypatch):
     _base_env(monkeypatch)
     s = Settings(_env_file=None)  # ignore the developer's real .env
-    assert s.kb_base_url == ""
-    assert s.kb_api_key == ""
-    assert s.kb_model == ""
+    assert s.kb_llm_api_key == ""
+    assert s.kb_llm_base_url == ""  # empty means OpenAI's own host
+    assert s.kb_llm_model == "gpt-5.6-luna"
     assert s.kb_repo == "xoposhiy/cub-kb"
     assert s.kb_ttl_seconds == 3600
     assert s.kb_configured is False
 
 
-def test_kb_configured_needs_all_three(monkeypatch):
+def test_kb_configured_needs_only_the_api_key(monkeypatch):
     _base_env(monkeypatch)
-    monkeypatch.setenv("KB_BASE_URL", "http://localhost:4000")
-    monkeypatch.setenv("KB_API_KEY", "sk-litellm")
-    assert Settings(_env_file=None).kb_configured is False  # no model
-    monkeypatch.setenv("KB_MODEL", "kb-agent")
+    monkeypatch.setenv("KB_LLM_API_KEY", "sk-openai")
     assert Settings(_env_file=None).kb_configured is True
+
+
+def test_kb_endpoint_and_model_are_overridable(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("KB_LLM_API_KEY", "sk-litellm")
+    monkeypatch.setenv("KB_LLM_BASE_URL", "http://localhost:4000")
+    monkeypatch.setenv("KB_LLM_MODEL", "kb-agent")
+    s = Settings(_env_file=None)
+    assert s.kb_llm_base_url == "http://localhost:4000"
+    assert s.kb_llm_model == "kb-agent"
