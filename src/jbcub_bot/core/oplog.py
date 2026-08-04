@@ -78,15 +78,15 @@ def format_miss(query: str, answer: str, principal=None, tg_user=None,
     return "\n".join(lines)
 
 
-def format_kb_session(asked: int, principal=None, tg_user=None) -> str:
-    """One entry per closed knowledge base session.
+def format_kb_question(question: str, principal=None, tg_user=None) -> str:
+    """The head of one entry per question put to the knowledge base.
 
-    Staff text that used to land in format_miss now gets an offer to search
-    instead, so this is what replaces that entry: how much the feature was
-    actually used, which is what a daily quota would eventually be chosen from.
+    Who asked and what they asked, which is the whole point of watching this
+    chat while the bot is out with the team. The caller appends the same trace
+    an admin sees, so the cost of the answer sits directly under the question.
     """
     return "\n".join([
-        "📚 Knowledge base session",
+        "📚 Knowledge base question",
         f"from: {describe_sender(principal, tg_user)}",
-        f"questions: {asked}",
+        f"question: «{clip(question)}»",
     ])

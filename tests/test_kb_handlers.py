@@ -116,7 +116,8 @@ _ANSWER = ("Retakes once.\n"
            "📄 Policies for Bachelor Studies v8 — §III.4 Grading, pp. 18–20")
 
 
-def _install_runtime(monkeypatch, answer=_ANSWER, pdfs=(_PDF,), complaints=()):
+def _install_runtime(monkeypatch, answer=_ANSWER, pdfs=(_PDF,), complaints=(),
+                     log_chat_id=""):
     store = FakeStore()
     asked: list[str] = []
 
@@ -136,7 +137,8 @@ def _install_runtime(monkeypatch, answer=_ANSWER, pdfs=(_PDF,), complaints=()):
     # handlers.py imported `ask` by name, so that binding is the one in play.
     monkeypatch.setattr(kb, "ask", fake_ask)
     kb.set_runtime(kb_agent.KbRuntime(agent=object(), store=store,
-                                      repo="xoposhiy/cub-kb"))
+                                      repo="xoposhiy/cub-kb",
+                                      log_chat_id=log_chat_id))
     return store, asked
 
 
@@ -353,6 +355,55 @@ async def test_exit_closes_the_session(monkeypatch):
 
     assert asked == [], "text after Exit is no longer the agent's"
     assert kb._CLOSED in _texts(bot)
+
+
+# --- what the ops chat sees ---------------------------------------------------
+
+LOG_CHAT = "-1009999"
+
+
+def _logged(fake_bot) -> list[str]:
+    return [m.text for m in fake_bot.sent
+            if str(getattr(m, "chat_id", "")) == LOG_CHAT]
+
+
+async def test_every_question_reaches_the_ops_chat_with_its_cost(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch, log_chat_id=LOG_CHAT)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "how many retakes?",
+                                       update_id=2), dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "and resits?",
+                                       update_id=3), dispatcher=dp)
+
+    entries = _logged(bot)
+    assert len(entries) == 2, "one entry per question, not per session"
+    assert "Tanya Teacher" in entries[0], "who asked"
+    assert "«how many retakes?»" in entries[0], "and what they asked"
+    assert "1 tool call" in entries[0] and "1.2k in / 310 out" in entries[0]
+    assert "«and resits?»" in entries[1]
+
+
+async def test_a_students_text_never_reaches_the_ops_chat(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch, log_chat_id=LOG_CHAT)
+
+    await dp.feed_update(bot, _message(bot, STUDENT_ID, "how many retakes?"),
+                         dispatcher=dp)
+
+    assert _logged(bot) == []
+
+
+async def test_closing_a_session_reports_nothing(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch, log_chat_id=LOG_CHAT)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "how many retakes?",
+                                       update_id=2), dispatcher=dp)
+    before = len(_logged(bot))
+
+    await dp.feed_update(bot, _callback(bot, TEACHER_ID, kb.EXIT_CALLBACK,
+                                        update_id=3), dispatcher=dp)
+
+    assert len(_logged(bot)) == before, "the closing tally is gone"
 
 
 # --- one Exit button, always under the newest message -------------------------

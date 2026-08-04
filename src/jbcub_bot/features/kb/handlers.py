@@ -286,21 +286,32 @@ async def _greet(target: Message, state: FSMContext) -> None:
     await state.update_data(button_at=getattr(opened, "message_id", 0) or 0)
 
 
-async def _close(state: FSMContext, bot: Bot | None, principal, tg_user,
-                 chat_id: int, data: dict) -> None:
-    """End the session, take its button down, and report how much it was used.
+async def _close(state: FSMContext, bot: Bot | None, chat_id: int,
+                 data: dict) -> None:
+    """End the session and take its button down.
 
-    A session that asked nothing is not worth an entry, which also keeps a bare
-    Exit tap off the ops log.
+    Nothing is reported: the ops log now carries every question as it is asked,
+    which says everything a closing tally used to and says it while the team is
+    still typing.
     """
     await _clear_exit_button(bot, chat_id, data)
     await state.clear()
-    live = runtime()
-    asked = data.get("asked", 0)
-    if bot is None or live is None or not asked:
-        return
+
+
+async def _log_question(bot, live, principal, tg_user, question,
+                        result) -> None:
+    """Put the question, and what it cost, in the ops chat.
+
+    Sent after the answer, for the same reason the admin trace is: whoever
+    asked is waiting on the answer, and a report is never worth delaying it.
+    `OpsLog` swallows its own delivery failures, so there is nothing to guard.
+    """
+    head = oplog_mod.format_kb_question(question, principal, tg_user)
+    room = render_mod.CLIP_LIMIT - len(head) - 1
+    trace = render_mod.trace_message(result.stats, result.complaints,
+                                     limit=room)
     log = oplog_mod.OpsLog(bot, live.log_chat_id, live.admin_ids)
-    await log.send(oplog_mod.format_kb_session(asked, principal, tg_user))
+    await log.send(f"{head}\n{trace}")
 
 
 @cmd.command("ask", "Ask the knowledge base a question.",
@@ -385,12 +396,12 @@ async def cb_exit(cb: CallbackQuery, principal: User, session,
                   state: FSMContext, bot: Bot):
     data = await state.get_data()
     if not isinstance(cb.message, Message):
-        await _close(state, bot, principal, cb.from_user, cb.from_user.id, data)
+        await _close(state, bot, cb.from_user.id, data)
         await cb.answer()
         return
     # The tapped button is the one the session was tracking, so taking the
     # markup off that very message is what `_close` is about to do anyway.
-    await _close(state, bot, principal, cb.from_user, cb.message.chat.id, data)
+    await _close(state, bot, cb.message.chat.id, data)
     await cb.message.answer(_CLOSED)
     await cb.answer()
 
@@ -406,7 +417,7 @@ async def _answer_question(target: Message, principal: User, state: FSMContext,
     data = await state.get_data()
     live = runtime()
     if live is None:  # redeployed without the settings while a session was open
-        await _close(state, bot, principal, tg_user, target.chat.id, data)
+        await _close(state, bot, target.chat.id, data)
         await target.answer(_NOT_CONFIGURED)
         return
 
@@ -425,11 +436,12 @@ async def _answer_question(target: Message, principal: User, state: FSMContext,
     last = attached or last
     last = await _send_trace(target, principal, result.stats,
                              result.complaints) or last
+    await _log_question(bot, live, principal, tg_user, question, result)
     history = result.history
 
     if asked >= MAX_QUESTIONS:
         # No button to move: the session ends here, so the one it had goes.
-        await _close(state, bot, principal, tg_user, target.chat.id, data)
+        await _close(state, bot, target.chat.id, data)
         await target.answer(_EXHAUSTED)
         return
     await state.update_data(asked=asked, last_at=now(), history=history,
@@ -447,13 +459,11 @@ async def on_question(message: Message, principal: User, session,
     """
     data = await state.get_data()
     if runtime() is None:
-        await _close(state, bot, principal, message.from_user,
-                     message.chat.id, data)
+        await _close(state, bot, message.chat.id, data)
         await message.answer(_NOT_CONFIGURED)
         return
     if now() - data.get("last_at", 0.0) > IDLE_SECONDS:
-        await _close(state, bot, principal, message.from_user,
-                     message.chat.id, data)
+        await _close(state, bot, message.chat.id, data)
         await message.answer(_IDLE)
         return
     await _answer_question(message, principal, state, bot, message.text,

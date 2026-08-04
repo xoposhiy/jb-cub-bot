@@ -134,13 +134,18 @@ def call_line(call: Call) -> str:
     return line + (f" — {call.result}" if call.result else "")
 
 
-def trace_message(stats: Stats, complaints: Sequence[str] = ()) -> str:
+def trace_message(stats: Stats, complaints: Sequence[str] = (),
+                  limit: int = CLIP_LIMIT) -> str:
     """What the agent actually did, for the admin who wants to see the work.
 
     `complaints` is what the check said about the first answer, if it said
     anything. It belongs here rather than in the reader's message: whether the
     agent then fixed it or stood its ground is exactly the kind of thing worth
     watching while the prompt is still settling.
+
+    `limit` is what the caller has room for. The ops log puts this under a
+    question and a sender line, so it gets less than a whole message — but the
+    tail-first cut below is the same either way, and belongs in one place.
 
     Plain text, never HTML: a regular expression the model searched for is as
     likely to hold a `<` as anything else, and this message is diagnostics — it
@@ -157,8 +162,8 @@ def trace_message(stats: Stats, complaints: Sequence[str] = ()) -> str:
         lines.append(f"⚠ {complaint}")
     lines += [RULE, metrics_line(stats)]
     text = "\n".join(lines)
-    if len(text) <= CLIP_LIMIT:
+    if len(text) <= limit:
         return text
     # Cut the calls, never the totals: the tail is the part worth keeping.
     keep = f"{TRUNCATION_MARK}\n{RULE}\n{metrics_line(stats)}"
-    return text[:CLIP_LIMIT - len(keep)] + keep
+    return text[:max(0, limit - len(keep))] + keep

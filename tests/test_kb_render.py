@@ -188,3 +188,15 @@ def test_a_runaway_trace_keeps_its_totals():
     assert len(text.splitlines()) == render.MAX_TRACE_CALLS + 3
     assert "… and 20 more calls" in text
     assert text.endswith(render.metrics_line(FakeStats()))
+
+
+def test_a_smaller_limit_still_keeps_the_totals():
+    """The ops log puts this under a question, so it gets less than a whole
+    message — and the totals are the part it is there for."""
+    calls = [FakeCall("read_note", {"path": f"kb/n{i}.md"}, "1.0k chars")
+             for i in range(20)]
+
+    text = render.trace_message(_stats(*calls), limit=300)
+
+    assert len(text) <= 300
+    assert text.endswith(render.metrics_line(FakeStats()))

@@ -2,7 +2,12 @@
 from types import SimpleNamespace
 
 from jbcub_bot.core.models import Role, User
-from jbcub_bot.core.oplog import MISS_LIMIT, OpsLog, format_miss
+from jbcub_bot.core.oplog import (
+    MISS_LIMIT,
+    OpsLog,
+    format_kb_question,
+    format_miss,
+)
 
 
 class FakeBot:
@@ -95,5 +100,20 @@ def test_an_impersonated_miss_names_the_admin_and_the_target():
 
 def test_a_pasted_wall_of_text_is_clipped():
     text = format_miss(query="x" * 5000, answer="No one found.")
+    assert len(text) < MISS_LIMIT + 300
+    assert "…" in text
+
+
+def test_a_knowledge_base_entry_names_the_asker_and_quotes_the_question():
+    text = format_kb_question("how many retakes?", principal=_student(),
+                              tg_user=SimpleNamespace(id=777,
+                                                      username="ivan_i"))
+    assert "Ivan Ivanov" in text
+    assert "@ivan_i" in text
+    assert "«how many retakes?»" in text
+
+
+def test_a_pasted_wall_of_a_question_is_clipped_too():
+    text = format_kb_question("x" * 5000)
     assert len(text) < MISS_LIMIT + 300
     assert "…" in text

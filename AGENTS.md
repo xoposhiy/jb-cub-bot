@@ -91,10 +91,13 @@ skips a cohort whose last member left.
   `LOG_CHAT_ID` and falls back to `BOOTSTRAP_ADMIN_IDS` in DM when that chat is
   unset or refuses the message, so a report never depends on one destination
   working. `core/errors.py` only formats; `build_dispatcher.ops_log(bot)` builds
-  the destination per update, since a `Bot` exists only then. Three call sites
-  use it: the `dp.errors` handler, and the two dead ends in `main.py` — a text
-  query no intent took, and a non-text message. An unknown command and an
-  access refusal are deliberately *not* logged: the bot answered correctly.
+  the destination per update, since a `Bot` exists only then. Four call sites
+  use it: the `dp.errors` handler, the two dead ends in `main.py` — a text
+  query no intent took, and a non-text message — and every knowledge base
+  question, logged with the same trace an admin sees so that whoever runs the
+  bot can watch what the team asks and what each answer costs. An unknown
+  command and an access refusal are deliberately *not* logged: the bot answered
+  correctly.
   Entries are plain text with no `parse_mode`, because a query containing `_`
   would otherwise break the message.
 - **Blocking I/O in an async handler freezes the whole bot** (one event loop, no threads). Google Sheets reads go through `read_rows()`, which adds a thread hop and a deadline.
