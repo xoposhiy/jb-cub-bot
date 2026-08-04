@@ -522,7 +522,8 @@ def build_runtime(settings) -> KbRuntime | None:
     return KbRuntime(
         agent=build_agent(settings.kb_llm_model, client,
                           reasoning_effort=settings.kb_llm_reasoning_effort),
-        store=SnapshotStore(settings.kb_repo, settings.kb_ttl_seconds),
+        store=SnapshotStore(settings.kb_repo, settings.kb_ttl_seconds,
+                            token=settings.kb_github_token),
         repo=settings.kb_repo,
         log_chat_id=settings.log_chat_id,
         admin_ids=tuple(sorted(settings.bootstrap_admin_id_set)),

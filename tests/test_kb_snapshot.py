@@ -6,6 +6,9 @@ so nothing here touches GitHub or the disk.
 import io
 import json
 import tarfile
+import urllib.error
+
+import pytest
 
 from jbcub_bot.core import kb_snapshot
 
@@ -46,22 +49,45 @@ class FakeResponse:
 
 
 class FakeOpener:
-    """Answers the commits call with `sha` and the tarball call with `files`."""
+    """Answers the commits call with `sha` and the tarball call with `files`.
 
-    def __init__(self, sha: str, files: dict[str, str]):
+    The commits call arrives as a `Request` so its headers can be asserted on;
+    the tarball call is a plain url. Both shapes are what `urlopen` takes, so
+    one `full_url` lookup covers them.
+
+    `fails_after` makes every commits call past that many raise 403, which is
+    how a rate-limited GitHub is reproduced without touching the network. None
+    never fails; 0 fails from the very first call.
+    """
+
+    def __init__(self, sha: str, files: dict[str, str],
+                 fails_after: int | None = None):
         self.sha = sha
         self.files = files
+        self.fails_after = fails_after
         self.urls: list[str] = []
+        self.headers: list[dict] = []
 
     def __call__(self, url, timeout=None):
+        request = url if hasattr(url, "full_url") else None
+        url = request.full_url if request is not None else url
         self.urls.append(url)
         if "/commits/" in url:
+            self.headers.append(dict(request.headers) if request else {})
+            if self.fails_after is not None \
+                    and self.commit_calls > self.fails_after:
+                raise urllib.error.HTTPError(
+                    url, 403, "rate limit exceeded", {}, None)
             return FakeResponse(json.dumps({"sha": self.sha}).encode())
         return FakeResponse(_tarball(self.files, prefix=f"cub-kb-{self.sha}"))
 
     @property
     def downloads(self) -> int:
         return len([u for u in self.urls if "/commits/" not in u])
+
+    @property
+    def commit_calls(self) -> int:
+        return len([u for u in self.urls if "/commits/" in u])
 
 
 def test_only_kb_markdown_survives_the_unpack():
@@ -181,6 +207,89 @@ async def test_force_skips_the_ttl():
     # The second commits call is the whole evidence that force bypassed the TTL.
     assert sum("/commits/" in u for u in opener.urls) == 2
     assert opener.downloads == 1, "the sha did not move, so nothing to download"
+
+
+# --- a rate-limited GitHub -----------------------------------------------------
+#
+# GitHub allows 60 REST calls an hour per IP without a token, and a host NATs
+# its outbound traffic, so that budget is shared with strangers. Running out
+# must cost freshness and nothing else: the snapshot in memory still answers
+# every question correctly.
+
+
+async def test_a_failed_freshness_check_still_answers_from_the_old_snapshot():
+    opener = FakeOpener("sha-one", {"kb/a.md": NOTE}, fails_after=1)
+    store = kb_snapshot.SnapshotStore("xoposhiy/cub-kb", 3600, opener=opener,
+                                      clock=_ticks(0.0, 9999.0, 9999.0))
+    first = await store.get()
+
+    again = await store.get()  # past the TTL, and GitHub answers 403
+
+    assert again is first, "a stale note beats no answer at all"
+
+
+async def test_a_failed_check_is_not_retried_on_every_question():
+    """The bug this pairs with: a 403 left the timestamp alone, so every next
+    question asked GitHub again, failed again, and kept the budget at zero."""
+    opener = FakeOpener("sha-one", {"kb/a.md": NOTE}, fails_after=1)
+    store = kb_snapshot.SnapshotStore(
+        "xoposhiy/cub-kb", 3600, opener=opener,
+        clock=_ticks(0.0, 9999.0, 9999.0, 9999.0))
+    await store.get()
+    await store.get()  # the check fails here
+
+    await store.get()  # the next question must not ask GitHub again
+
+    assert opener.commit_calls == 2
+
+
+async def test_a_forced_reload_reports_the_failure_instead_of_hiding_it():
+    """An admin who typed /kb_reload is owed the error, not a silent no-op."""
+    opener = FakeOpener("sha-one", {"kb/a.md": NOTE}, fails_after=1)
+    store = kb_snapshot.SnapshotStore("xoposhiy/cub-kb", 3600, opener=opener,
+                                      clock=lambda: 0.0)
+    await store.get()
+
+    with pytest.raises(urllib.error.HTTPError):
+        await store.get(force=True)
+
+
+async def test_a_first_load_that_fails_has_nothing_to_fall_back_on():
+    opener = FakeOpener("sha-one", {"kb/a.md": NOTE}, fails_after=0)
+    store = kb_snapshot.SnapshotStore("xoposhiy/cub-kb", 3600, opener=opener,
+                                      clock=lambda: 0.0)
+
+    with pytest.raises(urllib.error.HTTPError):
+        await store.get()
+
+
+# --- the token ----------------------------------------------------------------
+
+
+def test_the_token_goes_out_as_a_bearer_header():
+    opener = FakeOpener("sha-one", {})
+
+    kb_snapshot.fetch_head_sha("xoposhiy/cub-kb", opener, token="t0ken")
+
+    assert opener.headers[0]["Authorization"] == "Bearer t0ken"
+
+
+def test_no_token_means_no_authorization_header():
+    opener = FakeOpener("sha-one", {})
+
+    kb_snapshot.fetch_head_sha("xoposhiy/cub-kb", opener)
+
+    assert "Authorization" not in opener.headers[0]
+
+
+async def test_the_store_sends_its_token_on_the_freshness_check():
+    opener = FakeOpener("sha-one", {"kb/a.md": NOTE})
+    store = kb_snapshot.SnapshotStore("xoposhiy/cub-kb", 3600, opener=opener,
+                                      clock=lambda: 0.0, token="t0ken")
+
+    await store.get()
+
+    assert opener.headers[0]["Authorization"] == "Bearer t0ken"
 
 
 # --- provenance ---------------------------------------------------------------

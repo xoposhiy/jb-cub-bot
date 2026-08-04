@@ -80,6 +80,7 @@ def test_kb_settings_default_to_unconfigured(monkeypatch):
     assert s.kb_llm_model == "gpt-5.6-luna"
     assert s.kb_repo == "xoposhiy/cub-kb"
     assert s.kb_ttl_seconds == 3600
+    assert s.kb_github_token == ""  # optional: quota only, never access
     assert s.kb_configured is False
 
 

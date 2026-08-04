@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import logging
 import re
 import tarfile
 import time
@@ -19,9 +20,17 @@ from dataclasses import dataclass
 
 import yaml
 
+logger = logging.getLogger(__name__)
+
 _FRONTMATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
 
 _TIMEOUT = 30
+
+# How long a failed freshness check is left alone. Far below the TTL, because
+# the usual cause is a rate limit that resets within the hour or a blip that is
+# already over, and far above zero, because retrying per question is what turned
+# one 403 into an outage.
+_RETRY_AFTER_FAILURE = 300
 
 
 @dataclass(frozen=True)
@@ -156,10 +165,25 @@ def render_folder_map(notes: dict[str, Note]) -> str:
     return "\n".join(lines)
 
 
-def fetch_head_sha(repo: str, opener=urllib.request.urlopen) -> str:
-    """The commit the default branch points at — one cheap call, no download."""
+def fetch_head_sha(repo: str, opener=urllib.request.urlopen,
+                   token: str = "") -> str:
+    """The commit the default branch points at — one cheap call, no download.
+
+    Cheap in bytes, not in quota: this is the only call the bot makes against
+    GitHub's REST API, and that API allows 60 an hour per IP unauthenticated.
+    A host NATs its outbound traffic, so those 60 are shared with strangers.
+    One header moves us to a 5000-an-hour budget of our own; conditional
+    requests would not help, since a 304 is counted the same as a 200.
+
+    The tarball and the PDFs come from codeload and raw.githubusercontent, which
+    are not part of that budget — the megabytes were never what was rationed.
+    """
     url = f"https://api.github.com/repos/{repo}/commits/HEAD"
-    with opener(url, timeout=_TIMEOUT) as response:
+    headers = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers)
+    with opener(request, timeout=_TIMEOUT) as response:
         return json.loads(response.read())["sha"]
 
 
@@ -180,33 +204,58 @@ class SnapshotStore:
 
     The lock is not decoration — two staff asking at the same moment would
     otherwise both download the repository.
+
+    A freshness check that fails costs freshness and nothing else: the snapshot
+    already in memory answers the question, and the next check waits out
+    `_RETRY_AFTER_FAILURE`. Serving a note a few minutes old is not a
+    compromise worth an outage — and asking again per question is how a single
+    403 used to keep the whole feature down for an hour.
     """
 
     def __init__(self, repo: str, ttl_seconds: int, *,
-                 opener=urllib.request.urlopen, clock=time.monotonic):
+                 opener=urllib.request.urlopen, clock=time.monotonic,
+                 token: str = ""):
         self._repo = repo
         self._ttl = ttl_seconds
         self._opener = opener
         self._clock = clock
+        self._token = token
         self._snapshot: Snapshot | None = None
-        self._checked_at = 0.0
+        self._recheck_at = 0.0
         self._lock = asyncio.Lock()
 
     async def get(self, *, force: bool = False) -> Snapshot:
         async with self._lock:
+            # A cold start has nothing to serve, and an admin who typed the
+            # reload command is owed the error rather than a silent no-op, so
+            # both of these let the failure through to the crash report.
             if self._snapshot is None:
-                sha = await asyncio.to_thread(fetch_head_sha, self._repo,
-                                              self._opener)
-                self._snapshot = await asyncio.to_thread(
-                    load_snapshot, self._repo, sha, self._opener)
-                self._checked_at = self._clock()
+                self._snapshot = await self._fetch()
+                self._recheck_at = self._clock() + self._ttl
                 return self._snapshot
-            if not force and self._clock() - self._checked_at < self._ttl:
+            if force:
+                self._snapshot = await self._fetch()
+                self._recheck_at = self._clock() + self._ttl
                 return self._snapshot
-            sha = await asyncio.to_thread(fetch_head_sha, self._repo,
-                                          self._opener)
-            self._checked_at = self._clock()
-            if sha != self._snapshot.sha:
-                self._snapshot = await asyncio.to_thread(
-                    load_snapshot, self._repo, sha, self._opener)
+            if self._clock() < self._recheck_at:
+                return self._snapshot
+            try:
+                self._snapshot = await self._fetch()
+                self._recheck_at = self._clock() + self._ttl
+            except Exception:  # noqa: BLE001 - any failure keeps the old notes
+                self._recheck_at = self._clock() + _RETRY_AFTER_FAILURE
+                logger.exception(
+                    "kb: could not check %s for a newer commit; answering from "
+                    "the snapshot at %s for the next %d seconds",
+                    self._repo, self._snapshot.sha[:7], _RETRY_AFTER_FAILURE)
             return self._snapshot
+
+    async def _fetch(self) -> Snapshot:
+        """The head snapshot, reusing the one in hand when the sha has not
+        moved — that is the whole point of asking for the sha first."""
+        sha = await asyncio.to_thread(fetch_head_sha, self._repo, self._opener,
+                                      self._token)
+        if self._snapshot is not None and sha == self._snapshot.sha:
+            return self._snapshot
+        return await asyncio.to_thread(load_snapshot, self._repo, sha,
+                                       self._opener)
