@@ -247,8 +247,16 @@ def instructions(ctx: RunContextWrapper[Ask], agent: Agent) -> str:
 
 
 def _model_settings(reasoning_effort: str) -> ModelSettings:
+    """The output cap travels as `max_completion_tokens`, not `max_tokens`.
+
+    ModelSettings.max_tokens is spelled `max_tokens` on the wire, and OpenAI's
+    current models reject that on chat completions -- a 400 on the very first
+    turn, naming the replacement. So the field stays unset and the cap goes
+    through extra_args under the name the endpoint asked for; every
+    OpenAI-compatible gateway worth pointing this at understands it too.
+    """
     return ModelSettings(
-        max_tokens=MAX_OUTPUT_TOKENS,
+        extra_args={"max_completion_tokens": MAX_OUTPUT_TOKENS},
         reasoning=Reasoning(effort=reasoning_effort) if reasoning_effort
         else None,
     )

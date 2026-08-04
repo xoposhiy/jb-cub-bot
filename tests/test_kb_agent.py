@@ -4,10 +4,11 @@ The framework owns the tool loop, so the seam is the model: a stub that returns
 scripted responses proves the wiring without a network call or an API key.
 """
 import pytest
-from agents import ModelResponse, RunContextWrapper
+from agents import ModelResponse, OpenAIChatCompletionsModel, RunContextWrapper
 from agents.items import TResponseOutputItem
-from agents.models.interface import Model
+from agents.models.interface import Model, ModelTracing
 from agents.usage import Usage
+from openai import AsyncOpenAI, Omit
 from openai.types.responses import (
     ResponseFunctionToolCall,
     ResponseOutputMessage,
@@ -531,6 +532,36 @@ def test_an_empty_reasoning_effort_omits_the_parameter():
                                  reasoning_effort="")
 
     assert built.model_settings.reasoning is None
+
+
+class _Captured(Exception):
+    """Stops the request at the wire, once its parameters are recorded."""
+
+
+async def test_the_output_cap_is_sent_as_max_completion_tokens(monkeypatch):
+    """OpenAI's current models answer `max_tokens` on chat completions with a
+    400 and name the replacement, so the cap has to travel under the new name
+    and the old one must not be in the request at all."""
+    sent: dict = {}
+
+    async def capture(**kwargs):
+        sent.update(kwargs)
+        raise _Captured
+
+    client = AsyncOpenAI(api_key="test")
+    monkeypatch.setattr(client.chat.completions, "create", capture)
+    model = OpenAIChatCompletionsModel(model="gpt-5.6-luna",
+                                       openai_client=client)
+
+    with pytest.raises(_Captured):
+        await model.get_response(
+            system_instructions="rules", input="q",
+            model_settings=kb_agent._model_settings("none"),
+            tools=[], output_schema=None, handoffs=[],
+            tracing=ModelTracing.DISABLED)
+
+    assert sent["max_completion_tokens"] == kb_agent.MAX_OUTPUT_TOKENS
+    assert isinstance(sent["max_tokens"], Omit), "the rejected spelling"
 
 
 def test_no_runtime_without_the_llm_api_key():
