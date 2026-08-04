@@ -1,3 +1,24 @@
+"""Google Sheets as a read-only source of truth for the roster.
+
+The bot never writes to a sheet. A roster field is the sheets' to own, and an
+admin editing a sheet is how it changes; anything the bot owns
+(`telegram_id`, `handle_observed`, `status_line`, `*_self`, `visibility`) must
+survive re-import untouched. `matriculation` is the only stable student key.
+
+A field a user can set therefore has **two** columns: `*_sheet`, listed in
+`SHEET_OWNED`, and `*_self`, theirs. Nothing reconciles the two automatically --
+`visibility.field_value` prefers the user's and shows the roster's beside it,
+and `DRIFT_PAIRS` makes `/sync` report the disagreement for an admin to settle.
+
+Which sheet column means which field is itself sheet data, not repo data: on the
+`Cohorts` tab every column past `Cohort`/`Link` is one of our field names and
+the cell beneath it is what that cohort calls it, so two cohorts may name the
+same field differently and a blank cell means that cohort lacks it. The `Rights`
+tab is ours to shape, so it maps to itself (`identity_mapping`). Both headers
+are checked against `KNOWN_FIELDS` and an unknown name aborts `/sync` rather
+than silently dropping a field a typo made unreadable. Adding a syncable field
+means adding it to `SHEET_OWNED` -- there is no config file.
+"""
 import difflib
 import re
 

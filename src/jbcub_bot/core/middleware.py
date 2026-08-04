@@ -1,3 +1,18 @@
+"""Who the caller is, and whether the bot is open to them at all.
+
+Every entry point -- command, intent, callback -- authenticates here, which
+makes this the one place that can close all of them together. So both refusals
+live in `PrincipalMiddleware` before any lookup: a non-private chat, because the
+bot answers where it was addressed and would post one person's profile into a
+group, and a `departed_at` row, because the roster no longer lists them.
+`BOOTSTRAP_ADMIN_IDS` is exempt from the second one deliberately -- a bad
+`/sync` must not lock out the person who can fix it -- and `/as` checks its
+target separately, so that exemption covers an admin's own access and never
+their view of somebody else.
+
+Hiding a departed person from a *listing* is a different question, and an opt-in
+one: see `include_departed` in `features/directory/search.py`.
+"""
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery
 

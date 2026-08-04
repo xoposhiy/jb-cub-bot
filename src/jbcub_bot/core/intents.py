@@ -1,3 +1,12 @@
+"""Plain text nobody addressed to a command, offered around until something
+takes it.
+
+Registration order is precedence: `dispatch` walks the intents whose pattern
+matches and whose `min_role` the caller meets, and stops at the first one that
+does not decline. Declining is `False` and obliges a handler to have answered
+nothing, since the next intent -- or `nl_fallback` in `main.py`, which owns the
+reply when nothing took the message -- is about to answer instead.
+"""
 import re
 from dataclasses import dataclass
 from typing import Callable

@@ -21,11 +21,9 @@ reader. Explain those in conversation instead, where they can be skipped.
 - Alembic (`uv run alembic ...`) **requires a populated `.env`** — `alembic/env.py` loads `get_settings()`.
 - `init_db()` runs `alembic upgrade head` on every start, so a new migration needs no deploy change — but a bad migration takes the bot down at boot.
 
-## Shell: two of them, one heredoc
+## Shell: bash vs PowerShell
 
-This is a Windows box, so both PowerShell and bash are available and their
-quoting is **not** interchangeable. Bind the syntax to the tool you are calling,
-never to the task you are doing:
+Both PowerShell and bash are available and their quoting is **not** interchangeable:
 
 | Tool | Multi-line string | Never |
 |---|---|---|
@@ -35,93 +33,26 @@ never to the task you are doing:
 **For a multi-line commit message, always `git commit -F - <<'EOF'` in bash.**
 One memorized form for the job means there is nothing left to pick wrong.
 
-This matters because the failure is silent. PowerShell's here-string opener is
-not a syntax error in bash — `git commit -m @'…'@` there simply passes the `@`
-along as data, and a commit landed on main with `@` as its entire subject line
-before anyone noticed. Nothing errors, so nothing corrects you; check the result
-with `git log -1 --format=%B` before pushing, and amend rather than push a
-mangled subject.
-
 ## Conventions that aren't obvious
-- **Add a feature** = a package in `src/jbcub_bot/features/<name>/` exporting `router` (aiogram `Router`) + `manifest`. Register commands via `CommandRegistrar(router)`: `@cmd.command("name", "description", min_role=Role.ADMIN, public=False, usage="<args>")` — the decorator enforces `min_role`/`public` (so no in-handler role checks) and collects `CommandSpec`s for `/help`. Build the manifest with `commands=cmd.specs`. Give intents a `description` and `min_role`. The loader auto-discovers the feature and `build_dispatcher` publishes its manifest to `core/registry.py` for `/help`.
-- **Field ownership:** Google Sheets are read-only source of truth for roster fields; the bot **never writes to a sheet**. Bot-owned fields (`telegram_id`, `handle_observed`, `status_line`, `github_self`, `codeforces_self`, `visibility`) must survive re-import. `matriculation` is the only stable student key. An account field a user can set has **two columns** — `*_sheet` (the roster's, listed in `sheets.SHEET_OWNED`) and `*_self` (theirs). `visibility.field_value` prefers the user's and shows the roster's beside it when the two disagree; `sheets.DRIFT_PAIRS` makes `/sync` report the disagreement. Nothing resolves it automatically — an admin edits the sheet.
-- **Column mapping lives in the sheets, not in the repo.** On the `Cohorts` tab, `Cohort` and `Link` describe the cohort and **every other column is a `User` field name**; the cell under it is what that field is called in that cohort's own sheet (so a roster GitHub column is a `github_sheet` column holding `GitHub`). A blank cell means that cohort lacks the field. The `Rights` tab is ours to shape, so its columns *are* our field names and it maps to itself via `sheets.identity_mapping`. Both headers are checked against `sheets.KNOWN_FIELDS` and an unrecognized name aborts `/sync` — a typo in a hand-edited header would otherwise silently drop a whole field. Adding a syncable field means adding it to `SHEET_OWNED`, not editing a config file.
-- **A roster ends at the first row naming nobody** (`sheets._ends_the_roster`): both cohort sheets keep departed students below a blank separator row, so `normalize_rows` stops there and `/sync` reports how many rows it ignored. A row still counts as a person if it has *either* a name or a `matriculation`, so a student awaiting a number doesn't truncate the roster. `sheets.mark_departed` then stamps `departed_at` on that cohort's members the roster no longer names — scoped to `primary_cohort` so Rights-only staff and other cohorts are never touched, and a cohort yielding zero rows aborts the sync instead of marking everyone. `upsert_users` clears `departed_at`, so putting a row back restores the person.
-- **`departed_at` revokes access, not just visibility.** The refusal lives in `PrincipalMiddleware` because that is where every entry point authenticates — one check closes commands, intents and callbacks together. `identity.try_claim_by_handle` and `tokens.verify_link_token` also refuse a marked row, so neither the handle nor an invite is a way back in; `BOOTSTRAP_ADMIN_IDS` is the deliberate exemption. `/as` checks its **target** separately from the caller, so an admin impersonating a departed student sees that student's refusal instead of their profile — the exemption covers an admin's own access, never their view of someone else. Row-level hiding is separate and opt-in: `search.rank_users`/`list_cohort` take
-`include_departed`, and the name search is the only caller that passes it (from
-`handlers.is_admin`). `/cohort` and its CSV list current people only, for every
-role — a roster listing states who is here now, and `search.list_cohort_names`
-skips a cohort whose last member left.
-- **The bot serves private chats only.** A command typed in a group would post
-  whoever it addressed — a profile, a cohort CSV row — into that group, since
-  the bot answers wherever it was addressed rather than DMing the caller. The
-  guard sits in `PrincipalMiddleware` beside the `departed_at` refusal, before
-  any lookup, because that is where every entry point authenticates. A command
-  or button tap gets a one-line refusal; an ordinary group message gets
-  silence, because nobody addressed the bot and answering every line in a busy
-  group is spam Telegram will rate-limit.
-- **Profile reads go through `features/directory/visibility.py`** — never bypass it.
-  A handler that reads a profile column off the model leaks whatever its owner
-  hid (`/cohort` did exactly this until telegram became hideable).
-- **Adding a profile field = one line in `FIELDS`** (`features/directory/visibility.py`):
-  name, label, category (`ALWAYS` / `CONFIGURABLE` / `STAFF` / `ADMIN_ONLY`), and a default
-  level for configurable ones. The visibility service, the profile renderer, and
-  the `/privacy` screen all read that table; nothing else lists profile fields.
-  `ADMIN_ONLY` fields are never shown or hinted at to their owner.
-  `editable=True` plus an `edit_hint` puts the field on the `/edit` screen, and
-  `accounts.NORMALIZERS` must gain an entry for it — a test in `test_edit.py`
-  enforces the pairing.
-  `STAFF` is for a field admins *and teachers* read; a student owner never sees
-  their own, but a staff owner does (`staff` already covers them) --
-  `matriculation` and `telegram_id`, the keys another system matches people on.
-  `features/directory/export.py` derives a cohort CSV's columns from whatever
-  `visible_fields` returned for the people in hand (headers are field names, not
-  labels, and values come back with `merged=False`), so a field hidden on the
-  profile screen cannot appear in the file.
-- **`user.visibility` must be reassigned, not mutated** — it is a plain `JSON`
-  column, so `user.visibility[k] = v` leaves the instance clean and the commit
-  writes nothing. Use `visibility.set_level`.
-- **A feature that waits for free text must own an FSM state.** `nl_fallback` in
-  `main.py` is registered on the `Dispatcher`, whose own handlers run before
-  every sub-router, so plain text reaches a feature only while
-  `StateFilter(None)` fails — that is, only while the sender is in a state.
-  Exclude commands from a state handler (`~F.text.startswith("/")`) so
-  `/cancel` still works.
-- **An intent handler returns `bool`.** `False` means "not mine" — the router
-  offers the message to the next intent, so a declining handler must not have
-  answered. Anything else (including `None`) ends the walk. Below its
-  threshold the name search declines; `nl_fallback` in `main.py` owns the
-  reply when nothing took the message.
-- **Name matching lives in `features/directory/matching.py`** and is pure
-  string work — no aiogram, no sqlalchemy. Every roster name is Latin while
-  queries arrive in Cyrillic, so comparison happens on `fold` (no diacritics,
-  no case, no punctuation) and `skeleton` (one code per name, whatever the
-  transliteration). Thresholds are the constants at the top of that module;
-  the rule tuples `GLIDES` and `RULES` are order-dependent, and
-  `tests/test_matching.py` is the table that keeps a new rule from fixing one
-  name and breaking three.
-- **Gradebook grades live beside the roster, not inside it.**
-  `core/gradebook.py` parses the `Gradebook` tab without aiogram/sqlalchemy;
-  `features/directory/grades.py` resolves folded names within
-  `primary_cohort` and replaces only that cohort's rows. `/sync` runs this
-  after each cohort's roster commit and deliberately catches all grade-pass
-  failures: a bad grades header must not roll back access-changing roster data
-  or stop later cohorts from syncing.
-- **Don't swallow unexpected exceptions in a handler.** Answer only the failures a user can act on (a bad mapping, a missing column); let the rest propagate — `build_dispatcher`'s `dp.errors` handler replies, logs, and sends the full traceback to the ops log chat. Add context by re-raising: `raise RuntimeError("/sync failed reading the Rights tab") from exc`. A bare `except Exception` that answers and returns is how a crash turns into a silent hang.
-- **Operational reports go through `core/oplog.py`.** `OpsLog` sends to
-  `LOG_CHAT_ID` and falls back to `BOOTSTRAP_ADMIN_IDS` in DM when that chat is
-  unset or refuses the message, so a report never depends on one destination
-  working. `core/errors.py` only formats; `build_dispatcher.ops_log(bot)` builds
-  the destination per update, since a `Bot` exists only then. Four call sites
-  use it: the `dp.errors` handler, the two dead ends in `main.py` — a text
-  query no intent took, and a non-text message — and every knowledge base
-  question, logged with the same trace an admin sees so that whoever runs the
-  bot can watch what the team asks and what each answer costs. An unknown
-  command and an access refusal are deliberately *not* logged: the bot answered
-  correctly.
-  Entries are plain text with no `parse_mode`, because a query containing `_`
-  would otherwise break the message.
-- **Blocking I/O in an async handler freezes the whole bot** (one event loop, no threads). Google Sheets reads go through `read_rows()`, which adds a thread hop and a deadline.
+
+Each rule below says only what you would otherwise violate without noticing.
+The reasoning lives in the named module's docstring — read that before changing
+the module, and put new reasoning there rather than here. Keep this list a list
+of tripwires, not a second copy of the code.
+
+- **Add a feature** = a package in `features/<name>/` exporting `router` + `manifest`; the loader discovers it. Register commands through `CommandRegistrar`, which enforces `min_role`/`public` itself — a handler that re-checks a role is a handler that will disagree with `/help`. Copy the smallest existing feature.
+- **Google Sheets are a read-only source of truth; the bot never writes to one.** Which sheet column means which field is itself sheet data, and a user-settable field has a `*_sheet`/`*_self` pair that nothing reconciles automatically. `core/sheets.py`.
+- **Roster shape is load-bearing.** A roster ends at the first row naming nobody, and `/sync` marks the people below it departed, per cohort. Get this wrong and a whole cohort loses access — `core/sheets.py`, `tests/test_sheets_upsert.py`.
+- **Profile reads go through `features/directory/visibility.py`** — read a column off the model and you leak whatever its owner hid. Adding a profile field is one line in `FIELDS`; the CSV export derives its columns from the same call, so it cannot leak separately.
+- **`user.visibility` must be reassigned, not mutated** — it is a plain `JSON` column, so `visibility[k] = v` commits nothing. Use `visibility.set_level`.
+- **Access is refused in `PrincipalMiddleware`, before any lookup** — that is where every entry point authenticates, so it is the only place one check closes all of them. A new global refusal belongs there, not in a handler. `core/middleware.py`.
+- **A feature that waits for free text must own an FSM state**, and must exclude commands (`~F.text.startswith("/")`) so `/cancel` keeps working. Plain text reaches a feature only while its sender is in a state — see `nl_fallback` in `main.py`.
+- **An intent handler returns `bool`.** `False` means "not mine" and obliges it to have answered nothing, because something else is about to answer. `core/intents.py`.
+- **Name matching is pure string work** over a Latin roster and Cyrillic queries. Thresholds and rule order are both load-bearing; `tests/test_matching.py` is the table that stops a new rule fixing one name and breaking three. `features/directory/matching.py`.
+- **Grades are parsed apart from the roster,** and `/sync` deliberately swallows a grade failure so a bad grades header cannot roll back access-changing roster data. `core/gradebook.py`.
+- **Don't swallow unexpected exceptions in a handler.** Answer only the failures a user can act on; let the rest reach the `dp.errors` handler, adding context by re-raising (`raise RuntimeError("...") from exc`). A bare `except Exception` that answers and returns is how a crash becomes a silent hang.
+- **Operational reports go through `core/oplog.py`**, which owns the destination, its fallback, and the judgement of what is worth reporting at all.
+- **Blocking I/O in an async handler freezes the whole bot** — one event loop, no threads. Sheets reads go through `read_rows()`; anything else blocking needs `asyncio.to_thread`.
 
 ## UX Rules
 
