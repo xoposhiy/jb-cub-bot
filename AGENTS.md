@@ -21,6 +21,27 @@ reader. Explain those in conversation instead, where they can be skipped.
 - Alembic (`uv run alembic ...`) **requires a populated `.env`** — `alembic/env.py` loads `get_settings()`.
 - `init_db()` runs `alembic upgrade head` on every start, so a new migration needs no deploy change — but a bad migration takes the bot down at boot.
 
+## Shell: two of them, one heredoc
+
+This is a Windows box, so both PowerShell and bash are available and their
+quoting is **not** interchangeable. Bind the syntax to the tool you are calling,
+never to the task you are doing:
+
+| Tool | Multi-line string | Never |
+|---|---|---|
+| Bash | `<<'EOF'` … `EOF` heredoc | `@'` … `'@` |
+| PowerShell | `@'` … `'@` (closing `'@` at column 0) | `<<'EOF'` |
+
+**For a multi-line commit message, always `git commit -F - <<'EOF'` in bash.**
+One memorized form for the job means there is nothing left to pick wrong.
+
+This matters because the failure is silent. PowerShell's here-string opener is
+not a syntax error in bash — `git commit -m @'…'@` there simply passes the `@`
+along as data, and a commit landed on main with `@` as its entire subject line
+before anyone noticed. Nothing errors, so nothing corrects you; check the result
+with `git log -1 --format=%B` before pushing, and amend rather than push a
+mangled subject.
+
 ## Conventions that aren't obvious
 - **Add a feature** = a package in `src/jbcub_bot/features/<name>/` exporting `router` (aiogram `Router`) + `manifest`. Register commands via `CommandRegistrar(router)`: `@cmd.command("name", "description", min_role=Role.ADMIN, public=False, usage="<args>")` — the decorator enforces `min_role`/`public` (so no in-handler role checks) and collects `CommandSpec`s for `/help`. Build the manifest with `commands=cmd.specs`. Give intents a `description` and `min_role`. The loader auto-discovers the feature and `build_dispatcher` publishes its manifest to `core/registry.py` for `/help`.
 - **Field ownership:** Google Sheets are read-only source of truth for roster fields; the bot **never writes to a sheet**. Bot-owned fields (`telegram_id`, `handle_observed`, `status_line`, `github_self`, `codeforces_self`, `visibility`) must survive re-import. `matriculation` is the only stable student key. An account field a user can set has **two columns** — `*_sheet` (the roster's, listed in `sheets.SHEET_OWNED`) and `*_self` (theirs). `visibility.field_value` prefers the user's and shows the roster's beside it when the two disagree; `sheets.DRIFT_PAIRS` makes `/sync` report the disagreement. Nothing resolves it automatically — an admin edits the sheet.
