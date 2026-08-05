@@ -80,6 +80,9 @@ Finding things:
 right, then read the note you need. When a listing does not settle it, read \
 that folder's _index.md. When no folder looks right, search_notes across the \
 whole base.
+- Not recognizing a name, an institution or a term is a reason to search for \
+it. Before you tell the reader the base does not \
+cover something, search_notes for the term itself across the whole base.
 
 Answering:
 - Answer only from notes you actually read in this conversation. Never answer \
@@ -132,8 +135,10 @@ Machine Learning, Distributed Systems and the Thesis Project.
 📄 Program Handbook SDT (BSc) — §3 Modules, pp. 7–9; §5 Electives, p. 14
 
 <b>No document answers it</b> — the base does not cover it, or the question is \
-not about the program at all. One sentence, no quotation, no citation line \
-whatsoever. An honest "this is not in the base" is a correct answer:
+not about the program at all. Earn this one: it follows a real search_notes \
+call for the question's own terms, not a guess that a term looks unfamiliar. \
+One sentence, no quotation, no citation line whatsoever. An honest "this is \
+not in the base" is a correct answer once you have actually looked:
 
 The program documents say nothing about that.
 """
@@ -510,6 +515,8 @@ class KbRuntime:
     # when this is built.
     log_chat_id: str = ""
     admin_ids: tuple[int, ...] = ()
+    rate_limit: int = 100
+    rate_window_seconds: int = 3600
 
 
 def build_runtime(settings) -> KbRuntime | None:
@@ -527,4 +534,6 @@ def build_runtime(settings) -> KbRuntime | None:
         repo=settings.kb_repo,
         log_chat_id=settings.log_chat_id,
         admin_ids=tuple(sorted(settings.bootstrap_admin_id_set)),
+        rate_limit=settings.kb_rate_limit,
+        rate_window_seconds=settings.kb_rate_window_seconds,
     )

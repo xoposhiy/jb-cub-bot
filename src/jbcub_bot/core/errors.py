@@ -9,6 +9,8 @@ even on an empty DB). Choosing between those is `core.oplog`'s job.
 import logging
 import traceback
 
+from jbcub_bot.core.oplog import admin_mention
+
 logger = logging.getLogger(__name__)
 
 # Telegram rejects any message over 4096 characters, so a deep traceback has to
@@ -58,9 +60,17 @@ async def report_exception(oplog, exc: BaseException, context: str) -> None:
     Never raises: this runs on the failure path, and a bad destination must not
     mask the original error. Delivery -- including the fallback to the bootstrap
     admins -- belongs to `core.oplog`; this function only formats.
+
+    Every question and every crash land in the same chat, but a crash also
+    pings the admins by name: that is the one entry in this feed that someone
+    has to act on, not just skim.
     """
     logger.error("%s — %s: %s", context, type(exc).__name__, exc, exc_info=exc)
     if oplog is None:  # a handler called directly, with nothing to send through
         return
+    ping, entities = admin_mention(getattr(oplog, "admin_ids", ()))
+    prefix = f"{ping}\n" if ping else ""
     header = f"⚠️ {context[:200]}\n\n{summarize(exc)}\n\n"
-    await oplog.send(header + format_traceback(exc, limit=TELEGRAM_LIMIT - len(header)))
+    room = TELEGRAM_LIMIT - len(prefix) - len(header)
+    text = prefix + header + format_traceback(exc, limit=room)
+    await oplog.send(text, entities=entities)

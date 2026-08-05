@@ -1,8 +1,8 @@
 """End-to-end wiring: real dispatcher, real FSM, a fake runtime.
 
 The agent itself is covered in test_kb_agent.py. What needs proving here is
-that a teacher's text reaches it, a student's does not, and that the session
-opens, counts and closes.
+that any recognized user's text reaches it, that an unlinked visitor's does
+not, and that the session opens, counts and closes.
 """
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -50,9 +50,14 @@ class FakeBot:
         self.reject_html = reject_html
         self._last_id = 500
 
-    def _reply(self, chat_id, text="") -> Message:
-        self._last_id += 1
-        return Message(message_id=self._last_id,
+    def _reply(self, chat_id, text="", message_id=None) -> Message:
+        # An edit answers under the id it was given; a send mints a new one --
+        # that distinction is what lets `_reveal_answer`'s edit be told apart
+        # from a message that only looks similar.
+        if message_id is None:
+            self._last_id += 1
+            message_id = self._last_id
+        return Message(message_id=message_id,
                        date=datetime.now(timezone.utc),
                        chat=Chat(id=chat_id or 0, type="private"),
                        from_user=TgUser(id=self.id, is_bot=True,
@@ -64,14 +69,29 @@ class FakeBot:
             raise TelegramBadRequest(method=method,
                                      message="can't parse entities")
         self.sent.append(method)
+        edited_id = getattr(method, "message_id", None)
         sent = self._reply(getattr(method, "chat_id", 0),
-                           getattr(method, "text", "") or "")
-        self.events.append(("send", sent.message_id,
+                           getattr(method, "text", "") or "",
+                           message_id=edited_id)
+        kind = "edit" if edited_id else "send"
+        self.events.append((kind, sent.message_id,
                             getattr(method, "reply_markup", None)))
         return sent
 
-    async def send_message(self, chat_id, text):
+    async def send_message(self, chat_id, text, entities=None):
         self.sent.append(SendMessage(chat_id=chat_id, text=text))
+
+    async def edit_message_text(self, chat_id, message_id, text,
+                                parse_mode=None):
+        if self.reject_html and parse_mode == "HTML":
+            raise TelegramBadRequest(
+                method=SendMessage(chat_id=chat_id, text=text),
+                message="can't parse entities")
+        self.sent.append(SimpleNamespace(chat_id=chat_id, text=text,
+                                         parse_mode=parse_mode))
+        sent = self._reply(chat_id, text, message_id=message_id)
+        self.events.append(("edit", sent.message_id, None))
+        return sent
 
     async def send_document(self, chat_id, document, caption=None):
         self.documents.append(document)
@@ -117,7 +137,8 @@ _ANSWER = ("Retakes once.\n"
 
 
 def _install_runtime(monkeypatch, answer=_ANSWER, pdfs=(_PDF,), complaints=(),
-                     log_chat_id=""):
+                     log_chat_id="", admin_ids=(), rate_limit=100,
+                     rate_window_seconds=3600):
     store = FakeStore()
     asked: list[str] = []
 
@@ -138,7 +159,10 @@ def _install_runtime(monkeypatch, answer=_ANSWER, pdfs=(_PDF,), complaints=(),
     monkeypatch.setattr(kb, "ask", fake_ask)
     kb.set_runtime(kb_agent.KbRuntime(agent=object(), store=store,
                                       repo="xoposhiy/cub-kb",
-                                      log_chat_id=log_chat_id))
+                                      log_chat_id=log_chat_id,
+                                      admin_ids=tuple(admin_ids),
+                                      rate_limit=rate_limit,
+                                      rate_window_seconds=rate_window_seconds))
     return store, asked
 
 
@@ -192,7 +216,7 @@ def _texts(fake_bot) -> list[str]:
 
 def _is_exit(markup) -> bool:
     return isinstance(markup, InlineKeyboardMarkup) and any(
-        button.callback_data == kb.EXIT_CALLBACK
+        button.callback_data in (kb.EXIT_GOOD_CALLBACK, kb.EXIT_BAD_CALLBACK)
         for row in markup.inline_keyboard for button in row)
 
 
@@ -205,6 +229,20 @@ def _exit_buttons(fake_bot) -> list[int]:
     shown: dict[int, bool] = {}
     for _, message_id, markup in fake_bot.events:
         shown[message_id] = _is_exit(markup)
+    return [message_id for message_id, has in shown.items() if has]
+
+
+def _is_thinking_exit(markup) -> bool:
+    return isinstance(markup, InlineKeyboardMarkup) and any(
+        button.callback_data == kb.EXIT_THINKING_CALLBACK
+        for row in markup.inline_keyboard for button in row)
+
+
+def _thinking_buttons(fake_bot) -> list[int]:
+    """Which messages show the "Exit AI chat" button right now."""
+    shown: dict[int, bool] = {}
+    for _, message_id, markup in fake_bot.events:
+        shown[message_id] = _is_thinking_exit(markup)
     return [message_id for message_id, has in shown.items() if has]
 
 
@@ -244,15 +282,26 @@ async def test_the_reader_gets_the_agents_words_unedited(monkeypatch):
     assert "steps" not in answer, "cost is an admin's business, not a teacher's"
 
 
-async def test_a_student_is_refused_and_still_gets_the_name_search(monkeypatch):
+async def test_a_student_can_ask_too(monkeypatch):
+    """Ask AI is open to every recognized user, students included."""
     dp, bot, _, asked = _setup(monkeypatch)
 
     await dp.feed_update(bot, _message(bot, STUDENT_ID, "/ask"), dispatcher=dp)
-    await dp.feed_update(bot, _message(bot, STUDENT_ID, "zzzz qqqq",
+    await dp.feed_update(bot, _message(bot, STUDENT_ID, "how many retakes?",
                                        update_id=2), dispatcher=dp)
 
-    assert asked == []
-    assert "No one found." in _texts(bot)
+    assert asked == ["how many retakes?"]
+    assert "Policies for Bachelor Studies" in _texts(bot)[-1]
+
+
+async def test_a_students_unmatched_text_gets_the_offer_too(monkeypatch):
+    dp, bot, _, asked = _setup(monkeypatch)
+
+    await dp.feed_update(bot, _message(bot, STUDENT_ID, "zzzz qqqq"),
+                         dispatcher=dp)
+
+    assert asked == [], "tokens are spent only after the tap"
+    assert any(getattr(m, "reply_markup", None) is not None for m in bot.sent)
 
 
 async def test_unmatched_teacher_text_gets_the_offer_button(monkeypatch):
@@ -276,6 +325,18 @@ async def test_tapping_the_offer_opens_the_session(monkeypatch):
     assert asked == ["retakes?"]
 
 
+async def test_tapping_the_offer_hides_it(monkeypatch):
+    """Nothing left to tap a second time for a question already spent."""
+    dp, bot, _, _ = _setup(monkeypatch)
+
+    cb_update = _callback(bot, TEACHER_ID, kb.START_CALLBACK)
+    offer_id = cb_update.callback_query.message.message_id
+    await dp.feed_update(bot, cb_update, dispatcher=dp)
+
+    cleared = [markup for kind, mid, markup in bot.events if mid == offer_id]
+    assert cleared[-1] is None
+
+
 async def test_the_tap_answers_the_question_that_earned_the_button(monkeypatch):
     """The whole point of the button: not to have to retype the question."""
     dp, bot, _, asked = _setup(monkeypatch)
@@ -288,6 +349,19 @@ async def test_the_tap_answers_the_question_that_earned_the_button(monkeypatch):
 
     assert asked == ["how many retakes?"]
     assert "Policies for Bachelor Studies" in _texts(bot)[-1]
+
+
+async def test_the_tap_with_a_pending_question_skips_the_greeting(monkeypatch):
+    """Already said what they wanted -- repeating "ask me anything" is noise."""
+    dp, bot, _, asked = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "how many retakes?"),
+                         dispatcher=dp)
+
+    await dp.feed_update(bot, _callback(bot, TEACHER_ID, kb.START_CALLBACK),
+                         dispatcher=dp)
+
+    assert asked == ["how many retakes?"]
+    assert not any("Ask me anything" in t for t in _texts(bot))
 
 
 async def test_the_tap_uses_the_most_recent_unanswered_question(monkeypatch):
@@ -348,7 +422,7 @@ async def test_exit_closes_the_session(monkeypatch):
     dp, bot, _, asked = _setup(monkeypatch)
     await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
 
-    await dp.feed_update(bot, _callback(bot, TEACHER_ID, kb.EXIT_CALLBACK,
+    await dp.feed_update(bot, _callback(bot, TEACHER_ID, kb.EXIT_GOOD_CALLBACK,
                                         update_id=2), dispatcher=dp)
     await dp.feed_update(bot, _message(bot, TEACHER_ID, "retakes?", update_id=3),
                          dispatcher=dp)
@@ -393,17 +467,93 @@ async def test_a_students_text_never_reaches_the_ops_chat(monkeypatch):
     assert _logged(bot) == []
 
 
-async def test_closing_a_session_reports_nothing(monkeypatch):
+async def test_closing_a_session_logs_the_rating_not_a_cost_tally(monkeypatch):
     dp, bot, _, _ = _setup(monkeypatch, log_chat_id=LOG_CHAT)
     await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
     await dp.feed_update(bot, _message(bot, TEACHER_ID, "how many retakes?",
                                        update_id=2), dispatcher=dp)
     before = len(_logged(bot))
 
-    await dp.feed_update(bot, _callback(bot, TEACHER_ID, kb.EXIT_CALLBACK,
+    await dp.feed_update(bot, _callback(bot, TEACHER_ID, kb.EXIT_GOOD_CALLBACK,
                                         update_id=3), dispatcher=dp)
 
-    assert len(_logged(bot)) == before, "the closing tally is gone"
+    entries = _logged(bot)
+    assert len(entries) == before + 1, "one feedback entry, not a cost recap"
+    assert "👍" in entries[-1]
+    assert "tool call" not in entries[-1], "feedback is not the admin trace"
+
+
+async def test_a_bad_rating_logs_the_thumbs_down_icon(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch, log_chat_id=LOG_CHAT)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+
+    await dp.feed_update(bot, _callback(bot, TEACHER_ID, kb.EXIT_BAD_CALLBACK,
+                                        update_id=2), dispatcher=dp)
+
+    assert "👎" in _logged(bot)[-1]
+
+
+# --- the global rate limit, configured on the runtime --------------------------
+
+async def test_a_question_past_the_budget_is_turned_away(monkeypatch):
+    dp, bot, _, asked = _setup(monkeypatch, rate_limit=1)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "first", update_id=2),
+                         dispatcher=dp)
+    assert asked == ["first"]
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "second", update_id=3),
+                         dispatcher=dp)
+
+    assert asked == ["first"], "the shared budget is spent, not theirs"
+    assert kb._RATE_LIMITED in _texts(bot)
+
+
+async def test_the_budget_frees_up_once_the_window_passes(monkeypatch):
+    dp, bot, _, asked = _setup(monkeypatch, rate_limit=1,
+                               rate_window_seconds=5)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "first", update_id=2),
+                         dispatcher=dp)
+
+    real_now = kb.now
+    monkeypatch.setattr(kb, "now", lambda: real_now() + 6)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "second", update_id=3),
+                         dispatcher=dp)
+
+    assert asked == ["first", "second"]
+
+
+async def test_a_turned_away_question_pings_the_admins(monkeypatch):
+    dp, bot, _, asked = _setup(monkeypatch, rate_limit=1, log_chat_id=LOG_CHAT,
+                               admin_ids=(ADMIN_ID,))
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "first", update_id=2),
+                         dispatcher=dp)
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "second", update_id=3),
+                         dispatcher=dp)
+
+    entries = _logged(bot)
+    assert any("hourly limit" in entry for entry in entries)
+    assert asked == ["first"]
+
+
+async def test_a_turned_away_question_closes_the_session(monkeypatch):
+    """Nothing here draws a fresh Exit button, so a session left open would
+    strand the asker in it with no way out until the budget frees up."""
+    dp, bot, _, asked = _setup(monkeypatch, rate_limit=1)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "first", update_id=2),
+                         dispatcher=dp)
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "second", update_id=3),
+                         dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "third", update_id=4),
+                         dispatcher=dp)
+
+    assert asked == ["first"], "the session closed, so 'third' is not the agent's"
+    assert _exit_buttons(bot) == []
 
 
 # --- one Exit button, always under the newest message -------------------------
@@ -492,10 +642,48 @@ async def test_exiting_takes_the_button_down(monkeypatch):
     await dp.feed_update(bot, _message(bot, TEACHER_ID, "q", update_id=2),
                          dispatcher=dp)
 
-    await dp.feed_update(bot, _callback(bot, TEACHER_ID, kb.EXIT_CALLBACK,
+    await dp.feed_update(bot, _callback(bot, TEACHER_ID, kb.EXIT_GOOD_CALLBACK,
                                         update_id=3), dispatcher=dp)
 
     assert _exit_buttons(bot) == []
+
+
+# --- "Exit AI chat", the button on the thinking placeholder --------------------
+
+async def test_the_thinking_message_offers_its_own_exit(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "retakes?", update_id=2),
+                         dispatcher=dp)
+
+    thinking_sends = [m for m in bot.sent
+                      if getattr(m, "text", "") == kb._THINKING]
+    assert len(thinking_sends) == 1
+    assert _is_thinking_exit(thinking_sends[0].reply_markup)
+
+
+async def test_the_thinking_button_is_gone_once_the_answer_lands(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "retakes?", update_id=2),
+                         dispatcher=dp)
+
+    assert _thinking_buttons(bot) == [], \
+        "a PDF or the admin trace may have taken the rating buttons elsewhere"
+
+
+async def test_exiting_while_thinking_closes_without_a_rating(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch, log_chat_id=LOG_CHAT)
+    await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
+
+    await dp.feed_update(bot, _callback(bot, TEACHER_ID,
+                                        kb.EXIT_THINKING_CALLBACK,
+                                        update_id=2), dispatcher=dp)
+
+    assert kb._CLOSED in _texts(bot)
+    assert _logged(bot) == [], "nothing was answered yet, so nothing to rate"
 
 
 async def test_an_idle_session_takes_the_button_down(monkeypatch):

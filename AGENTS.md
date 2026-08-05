@@ -35,21 +35,12 @@ One memorized form for the job means there is nothing left to pick wrong.
 
 ## Conventions that aren't obvious
 
-Each rule below says only what you would otherwise violate without noticing.
-The reasoning lives in the named module's docstring — read that before changing
-the module, and put new reasoning there rather than here. Keep this list a list
-of tripwires, not a second copy of the code.
-
-- **Add a feature** = a package in `features/<name>/` exporting `router` + `manifest`; the loader discovers it. Register commands through `CommandRegistrar`, which enforces `min_role`/`public` itself — a handler that re-checks a role is a handler that will disagree with `/help`. Copy the smallest existing feature.
-- **Google Sheets are a read-only source of truth; the bot never writes to one.** Which sheet column means which field is itself sheet data, and a user-settable field has a `*_sheet`/`*_self` pair that nothing reconciles automatically. `core/sheets.py`.
-- **Roster shape is load-bearing.** A roster ends at the first row naming nobody, and `/sync` marks the people below it departed, per cohort. Get this wrong and a whole cohort loses access — `core/sheets.py`, `tests/test_sheets_upsert.py`.
-- **Profile reads go through `features/directory/visibility.py`** — read a column off the model and you leak whatever its owner hid. Adding a profile field is one line in `FIELDS`; the CSV export derives its columns from the same call, so it cannot leak separately.
-- **`user.visibility` must be reassigned, not mutated** — it is a plain `JSON` column, so `visibility[k] = v` commits nothing. Use `visibility.set_level`.
-- **Access is refused in `PrincipalMiddleware`, before any lookup** — that is where every entry point authenticates, so it is the only place one check closes all of them. A new global refusal belongs there, not in a handler. `core/middleware.py`.
-- **A feature that waits for free text must own an FSM state**, and must exclude commands (`~F.text.startswith("/")`) so `/cancel` keeps working. Plain text reaches a feature only while its sender is in a state — see `nl_fallback` in `main.py`.
+- **Add a feature** = a package in `features/<name>/` exporting `router` + `manifest`; the loader discovers it. Register commands through `CommandRegistrar`.
+- **Google Sheets are a read-only source of truth; the bot never writes to one.**
+- **Profile reads go through `features/directory/visibility.py`** — read a column off the model and you leak whatever its owner hid.
+- **Access is refused in `PrincipalMiddleware`, before any lookup** `core/middleware.py`.
+- **Use FSM for multi stage dialogs**.
 - **An intent handler returns `bool`.** `False` means "not mine" and obliges it to have answered nothing, because something else is about to answer. `core/intents.py`.
-- **Name matching is pure string work** over a Latin roster and Cyrillic queries. Thresholds and rule order are both load-bearing; `tests/test_matching.py` is the table that stops a new rule fixing one name and breaking three. `features/directory/matching.py`.
-- **Grades are parsed apart from the roster,** and `/sync` deliberately swallows a grade failure so a bad grades header cannot roll back access-changing roster data. `core/gradebook.py`.
 - **Don't swallow unexpected exceptions in a handler.** Answer only the failures a user can act on; let the rest reach the `dp.errors` handler, adding context by re-raising (`raise RuntimeError("...") from exc`). A bare `except Exception` that answers and returns is how a crash becomes a silent hang.
 - **Operational reports go through `core/oplog.py`**, which owns the destination, its fallback, and the judgement of what is worth reporting at all.
 - **Blocking I/O in an async handler freezes the whole bot** — one event loop, no threads. Sheets reads go through `read_rows()`; anything else blocking needs `asyncio.to_thread`.

@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     kb_llm_reasoning_effort: str = "none"
     kb_repo: str = "xoposhiy/cub-kb"
     kb_ttl_seconds: int = 3600
+    # A brake on the agent as a whole, not on any one asker -- see
+    # kb.handlers._budget_spent. 100 an hour is far above what normal use
+    # should ever reach, so tripping it is itself the signal something is off.
+    kb_rate_limit: int = 100
+    kb_rate_window_seconds: int = 3600
     # Optional, and only about quota: GitHub's REST API allows 60 calls an hour
     # per IP unauthenticated, and a host shares one outbound address between
     # tenants. Any token raises that to 5000 in a bucket of our own; a public

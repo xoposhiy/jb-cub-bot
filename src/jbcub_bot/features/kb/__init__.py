@@ -1,12 +1,10 @@
 from jbcub_bot.core.loader import Manifest
-from jbcub_bot.core.models import Role
 from jbcub_bot.features.kb.handlers import cmd, kb_offer_intent, router
 
 manifest = Manifest(
     name="kb",
     commands=cmd.specs,
     intents=[kb_offer_intent],
-    min_role=Role.TEACHER,
     help_text="Ask the program's knowledge base a question.",
     emoji="📚",
 )

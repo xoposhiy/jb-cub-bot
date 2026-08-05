@@ -81,6 +81,8 @@ def test_kb_settings_default_to_unconfigured(monkeypatch):
     assert s.kb_repo == "xoposhiy/cub-kb"
     assert s.kb_ttl_seconds == 3600
     assert s.kb_github_token == ""  # optional: quota only, never access
+    assert s.kb_rate_limit == 100
+    assert s.kb_rate_window_seconds == 3600
     assert s.kb_configured is False
 
 
@@ -98,3 +100,12 @@ def test_kb_endpoint_and_model_are_overridable(monkeypatch):
     s = Settings(_env_file=None)
     assert s.kb_llm_base_url == "http://localhost:4000"
     assert s.kb_llm_model == "kb-agent"
+
+
+def test_kb_rate_limit_is_overridable(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("KB_RATE_LIMIT", "5")
+    monkeypatch.setenv("KB_RATE_WINDOW_SECONDS", "60")
+    s = Settings(_env_file=None)
+    assert s.kb_rate_limit == 5
+    assert s.kb_rate_window_seconds == 60

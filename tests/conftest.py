@@ -22,12 +22,19 @@ def _reset_feature_routers():
 def _reset_kb_runtime():
     from jbcub_bot.features.kb import handlers as kb_handlers
     from jbcub_bot.features.kb import pdf as kb_pdf
-    kb_handlers.reset_runtime()
+    # Off by default rather than `reset_runtime()`'s lazy rebuild: that would
+    # read the real settings, and a developer's own .env carrying a real
+    # KB_LLM_API_KEY would silently turn the knowledge base on for every test
+    # that never asked for it. A test that wants it installs its own with
+    # `set_runtime`.
+    kb_handlers.set_runtime(None)
     kb_handlers.reset_pending()
+    kb_handlers.reset_rate_limit()
     kb_pdf.reset_cache()
     yield
-    kb_handlers.reset_runtime()
+    kb_handlers.set_runtime(None)
     kb_handlers.reset_pending()
+    kb_handlers.reset_rate_limit()
     kb_pdf.reset_cache()
 
 

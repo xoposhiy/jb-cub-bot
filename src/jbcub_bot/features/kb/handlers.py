@@ -5,21 +5,23 @@ nl_fallback runs before every sub-router and only steps aside while the sender
 is in a state.
 
 Leaving that state is the one thing a reader has to be able to find, so there is
-always exactly one Exit button in the chat and it is always under the newest
-thing the bot said. It is not redrawn on every message -- that would pepper the
-chat with buttons -- but moved: after each exchange it is attached to the last
-message sent and stripped from wherever it was before. `button_at` in the FSM
-data remembers where that is.
+always exactly one pair of exit buttons in the chat -- rating the last answer
+doubles as leaving -- and it is always under the newest thing the bot said. It
+is not redrawn on every message -- that would pepper the chat with buttons --
+but moved: after each exchange it is attached to the last message sent and
+stripped from wherever it was before. `button_at` in the FSM data remembers
+where that is.
 
 Note what is *not* here: /cancel. `directory.edit` already registers it and
 `directory` precedes `kb` in the loader's alphabetical walk, so that name is
-taken. A session ends with the Exit button, with a fresh /ask, or on the last
-allowed answer.
+taken. A session ends with a rating, with a fresh /ask, or on the last allowed
+answer.
 """
 from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
@@ -52,19 +54,26 @@ MAX_QUESTIONS = 12
 IDLE_SECONDS = 900
 
 START_CALLBACK = "kb:start"
-EXIT_CALLBACK = "kb:exit"
-EXIT_TEXT = "🚪 Exit knowledge base"
+EXIT_GOOD_CALLBACK = "kb:exit:good"
+EXIT_BAD_CALLBACK = "kb:exit:bad"
+EXIT_THINKING_CALLBACK = "kb:exit:thinking"
+GOOD_TEXT = "✅ Good answer, exit"
+BAD_TEXT = "❌ Bad answer, exit"
+THINKING_EXIT_TEXT = "🚪 Exit AI chat"
 
 _NOT_CONFIGURED = ("Knowledge base search is not configured on this bot. "
                    "An admin needs to set KB_LLM_API_KEY.")
 _OPENED = ("Ask me anything about the program and I'll answer from the "
-           f"knowledge base. Tap {EXIT_TEXT} when you're done.")
+           "knowledge base. Rate an answer when you're done to end the "
+           "session.")
 _CLOSED = "Knowledge base session closed."
 _EXHAUSTED = ("That was the last question in this session — send /ask to start "
               "a fresh one.")
 _IDLE = "That knowledge base session went idle. Send /ask to start a new one."
-_OFFER = "I didn't find anyone by that name. Search the knowledge base instead?"
-_THINKING = "Searching the knowledge base…"
+_OFFER = "I didn't find anyone by that name. Ask AI instead?"
+_THINKING = "AI is thinking…"
+_RATE_LIMITED = ("The knowledge base is getting a lot of questions right now — "
+                 "try again in a few minutes.")
 
 
 logger = logging.getLogger(__name__)
@@ -87,6 +96,34 @@ async def _answer_html(message: Message, text: str):
     except TelegramBadRequest:
         logger.warning("Telegram rejected an HTML answer; retrying as plain")
         return await message.answer(render_mod.plain(text))
+
+
+async def _reveal_answer(bot: Bot, target: Message, thinking: Message,
+                         text: str):
+    """Turn the "AI is thinking" placeholder into the answer, in place.
+
+    Editing it rather than sending a second message keeps the "thinking" line
+    from lingering in the chat once there is something to read. Bad markup
+    gets the same plain-text retry `_answer_html` uses; if the edit itself
+    fails -- the placeholder was deleted, say -- a fresh message still gets
+    the answer through.
+    """
+    chat_id, message_id = target.chat.id, thinking.message_id
+    try:
+        return await bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                           text=text, parse_mode="HTML")
+    except TelegramBadRequest:
+        logger.warning("Telegram rejected an HTML edit; retrying as plain")
+    except TelegramAPIError:
+        logger.warning("could not edit the thinking placeholder", exc_info=True)
+        return await _answer_html(target, text)
+    try:
+        return await bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                           text=render_mod.plain(text))
+    except TelegramAPIError:
+        logger.warning("could not edit the thinking placeholder as plain text",
+                       exc_info=True)
+        return await _answer_html(target, text)
 
 
 async def _send_trace(target: Message, principal, stats, complaints=()):
@@ -193,6 +230,33 @@ def reset_pending() -> None:
     _PENDING.clear()
 
 
+# When each of the last window's questions went to the agent. Process-wide
+# like `_PENDING` above, and for the same reason: there is one bot, so one
+# clock is enough. A deque rather than a count that resets on the hour, so the
+# window always looks back from now instead of resetting on a schedule nobody
+# chose. `limit`/`window_seconds` come from the runtime -- see
+# `KbRuntime.rate_limit` -- so they live in settings with the rest of the
+# feature's configuration rather than as constants here.
+_ASK_TIMES: deque[float] = deque()
+
+
+def _budget_spent(limit: int, window_seconds: int) -> bool:
+    """True once `limit` questions have already gone to the agent within the
+    last `window_seconds` -- the caller is the one that still gets to decide
+    what to do about it."""
+    cutoff = now() - window_seconds
+    while _ASK_TIMES and _ASK_TIMES[0] < cutoff:
+        _ASK_TIMES.popleft()
+    if len(_ASK_TIMES) >= limit:
+        return True
+    _ASK_TIMES.append(now())
+    return False
+
+
+def reset_rate_limit() -> None:
+    _ASK_TIMES.clear()
+
+
 def describe_asker(principal) -> str:
     """The one line about the caller that the agent gets.
 
@@ -214,14 +278,21 @@ class KbChat(StatesGroup):
 
 def _session_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=EXIT_TEXT, callback_data=EXIT_CALLBACK)
+        InlineKeyboardButton(text=GOOD_TEXT, callback_data=EXIT_GOOD_CALLBACK),
+        InlineKeyboardButton(text=BAD_TEXT, callback_data=EXIT_BAD_CALLBACK),
     ]])
 
 
 def _offer_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Search the knowledge base",
-                             callback_data=START_CALLBACK)
+        InlineKeyboardButton(text="Ask AI", callback_data=START_CALLBACK)
+    ]])
+
+
+def _thinking_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=THINKING_EXIT_TEXT,
+                             callback_data=EXIT_THINKING_CALLBACK)
     ]])
 
 
@@ -314,8 +385,22 @@ async def _log_question(bot, live, principal, tg_user, question,
     await log.send(f"{head}\n{trace}")
 
 
-@cmd.command("ask", "Ask the knowledge base a question.",
-             min_role=Role.TEACHER)
+async def _log_rate_limit(bot, live, principal, tg_user) -> None:
+    """Ping the admins by name: the hourly AI budget just ran out.
+
+    Nobody is meant to hit this in normal use, so it gets the same treatment
+    as a crash -- a mention, not just another line in the question feed --
+    because someone should go find out why rather than let it pass.
+    """
+    ping, entities = oplog_mod.admin_mention(live.admin_ids)
+    prefix = f"{ping}\n" if ping else ""
+    text = prefix + oplog_mod.format_kb_rate_limited(live.rate_limit, principal,
+                                                      tg_user)
+    log = oplog_mod.OpsLog(bot, live.log_chat_id, live.admin_ids)
+    await log.send(text, entities=entities)
+
+
+@cmd.command("ask", "Ask the knowledge base a question.")
 async def cmd_ask(message: Message, principal: User, session, bot: Bot,
                   state: FSMContext | None = None):
     # `state` is optional for the same reason as in directory/edit.py: /as
@@ -363,15 +448,15 @@ kb_offer_intent = Intent(
     pattern=r".+",
     handler=kb_offer,
     description="ask the knowledge base a question",
-    min_role=Role.TEACHER,
 )
 
 
 @router.callback_query(F.data == START_CALLBACK)
 async def cb_start(cb: CallbackQuery, principal: User, session,
                    state: FSMContext, bot: Bot):
-    if principal is None or principal.role is Role.STUDENT:
-        await cb.answer("Staff only.", show_alert=True)
+    if principal is None:
+        await cb.answer("You are not linked yet. Contact an admin.",
+                        show_alert=True)
         return
     if runtime() is None:
         await cb.answer(_NOT_CONFIGURED, show_alert=True)
@@ -380,9 +465,14 @@ async def cb_start(cb: CallbackQuery, principal: User, session,
         await _open(state, bot, cb.from_user.id)
         await cb.answer()
         return
+    # Tapped once, its job is done -- leaving it up invites a second, empty tap.
+    await _set_markup(bot, cb.message.chat.id, cb.message.message_id, None)
     await _open(state, bot, cb.message.chat.id)
     pending = take_question(cb.message.chat.id)
-    await _greet(cb.message, state)
+    if not pending:
+        # A question is already on its way to the agent -- greeting the person
+        # again would just repeat what the offer already told them.
+        await _greet(cb.message, state)
     # Answered before the agent runs: the button would otherwise spin for the
     # whole search.
     await cb.answer()
@@ -391,18 +481,43 @@ async def cb_start(cb: CallbackQuery, principal: User, session,
                                cb.from_user)
 
 
-@router.callback_query(F.data == EXIT_CALLBACK)
+async def _log_feedback(bot, good: bool, principal, tg_user) -> None:
+    """Put the reader's rating of the last answer in the ops chat.
+
+    A rating is worth nothing without a chat to read it in, so this shares the
+    same destination as every question -- one feed, not a second inbox to
+    remember to check.
+    """
+    live = runtime()
+    if live is None:
+        return
+    log = oplog_mod.OpsLog(bot, live.log_chat_id, live.admin_ids)
+    await log.send(oplog_mod.format_kb_feedback(good, principal, tg_user))
+
+
+_RATING = {EXIT_GOOD_CALLBACK: True, EXIT_BAD_CALLBACK: False}
+
+
+@router.callback_query(F.data.in_({EXIT_GOOD_CALLBACK, EXIT_BAD_CALLBACK,
+                                   EXIT_THINKING_CALLBACK}))
 async def cb_exit(cb: CallbackQuery, principal: User, session,
                   state: FSMContext, bot: Bot):
+    # None while the agent hasn't answered yet -- "Exit AI chat" leaves without
+    # rating anything, because there is nothing yet to rate.
+    rating = _RATING.get(cb.data)
     data = await state.get_data()
     if not isinstance(cb.message, Message):
         await _close(state, bot, cb.from_user.id, data)
+        if rating is not None:
+            await _log_feedback(bot, rating, principal, cb.from_user)
         await cb.answer()
         return
     # The tapped button is the one the session was tracking, so taking the
     # markup off that very message is what `_close` is about to do anyway.
     await _close(state, bot, cb.message.chat.id, data)
     await cb.message.answer(_CLOSED)
+    if rating is not None:
+        await _log_feedback(bot, rating, principal, cb.from_user)
     await cb.answer()
 
 
@@ -420,8 +535,16 @@ async def _answer_question(target: Message, principal: User, state: FSMContext,
         await _close(state, bot, target.chat.id, data)
         await target.answer(_NOT_CONFIGURED)
         return
+    if _budget_spent(live.rate_limit, live.rate_window_seconds):
+        # Closed rather than left open: nothing here draws a fresh Exit
+        # button, and leaving the session active would strand the asker in it
+        # with no way out until the budget frees up.
+        await _close(state, bot, target.chat.id, data)
+        await target.answer(_RATE_LIMITED)
+        await _log_rate_limit(bot, live, principal, tg_user)
+        return
 
-    await target.answer(_THINKING)
+    thinking = await target.answer(_THINKING, reply_markup=_thinking_keyboard())
     snapshot = await live.store.get()
     result = await ask(live.agent, snapshot, question, data.get("history", []),
                        about=describe_asker(principal))
@@ -429,7 +552,11 @@ async def _answer_question(target: Message, principal: User, state: FSMContext,
     # The agent's own words, clipped only if it wrote past what Telegram takes.
     # Each of these may or may not be the last word of the exchange; the Exit
     # button goes under whichever one actually was.
-    last = await _answer_html(target, render_mod.clip(result.text))
+    last = await _reveal_answer(bot, target, thinking, render_mod.clip(result.text))
+    # "Exit AI chat" was only ever meant for the wait -- an attachment or the
+    # admin trace may yet become the message the rating buttons land on below,
+    # so this message must not be left carrying a button of its own.
+    await _set_markup(bot, target.chat.id, thinking.message_id, None)
     sent_pdfs, attached = await _attach_sources(bot, target, live, snapshot,
                                                 result.sources,
                                                 data.get("sent_pdfs", []))
