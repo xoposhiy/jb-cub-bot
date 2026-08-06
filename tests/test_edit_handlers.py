@@ -374,10 +374,9 @@ async def test_plain_text_still_searches_when_nobody_is_editing():
 
 
 async def test_a_search_under_impersonation_still_reaches_the_fallback():
-    # StateFilter(None) resolves raw_state from the handler data, and /as
-    # propagates a message event straight to dp.message -- past the outer
-    # middleware that would have put raw_state there. Absent must read as
-    # "no state", or /as stops finding anyone.
+    # A plain-text message inside the mode still has no edit state of its
+    # own, so it must fall through to the name search same as it would
+    # outside the mode.
     factory = _session_factory()
     _seed_admin_and_student(factory)
     dp = build_dispatcher(session_factory=factory)
