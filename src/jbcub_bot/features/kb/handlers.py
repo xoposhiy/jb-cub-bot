@@ -25,6 +25,7 @@ from collections import deque
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.filters import CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -74,6 +75,8 @@ _OFFER = "I didn't find anyone by that name. Ask AI instead?"
 _THINKING = "AI is thinking…"
 _RATE_LIMITED = ("The knowledge base is getting a lot of questions right now — "
                  "try again in a few minutes.")
+_NEEDS_A_QUESTION = ('Add the question after the command, e.g. '
+                     '"/ask when is the deadline?".')
 
 
 logger = logging.getLogger(__name__)
@@ -400,19 +403,31 @@ async def _log_rate_limit(bot, live, principal, tg_user) -> None:
     await log.send(text, entities=entities)
 
 
-@cmd.command("ask", "Ask the knowledge base a question.")
+@cmd.command("ask", "Ask the knowledge base a question.", usage="[question]")
 async def cmd_ask(message: Message, principal: User, session, bot: Bot,
+                  command: CommandObject,
                   state: FSMContext | None = None):
     # `state` is optional for the same reason as in directory/edit.py: /as
-    # propagates through the Dispatcher without its outer middlewares.
+    # propagates through the Dispatcher without its outer middlewares --
+    # FSMContext among them -- so a multi-turn session has nowhere to live.
+    # /as can still ask, just one question at a time; see _answer_one_shot.
     if runtime() is None:
         await message.answer(_NOT_CONFIGURED)
         return
+    question = (command.args or "").strip()
     if state is None:
-        await message.answer("Open a direct chat with me and send /ask there.")
+        if not question:
+            await message.answer(_NEEDS_A_QUESTION)
+            return
+        await _answer_one_shot(message, principal, bot, question,
+                               message.from_user)
         return
     await _open(state, bot, message.chat.id)
-    await _greet(message, state)
+    if question:
+        await _answer_question(message, principal, state, bot, question,
+                               message.from_user)
+    else:
+        await _greet(message, state)
 
 
 @cmd.command("kb_reload", "Re-download the knowledge base now.",
@@ -519,6 +534,35 @@ async def cb_exit(cb: CallbackQuery, principal: User, session,
     if rating is not None:
         await _log_feedback(bot, rating, principal, cb.from_user)
     await cb.answer()
+
+
+async def _answer_one_shot(target: Message, principal: User, bot: Bot,
+                           question: str, tg_user) -> None:
+    """Answer one question with no session behind it.
+
+    /as reaches /ask with no FSMContext to hold a multi-turn session in (see
+    the note in `cmd_ask`), so there is nowhere to keep history, an
+    asked-count, or an Exit button between messages. This does exactly what a
+    session would for a single exchange -- budget check, the answer, its
+    sources, the admin trace, the ops log -- and stops there.
+    """
+    live = runtime()
+    if live is None:
+        await target.answer(_NOT_CONFIGURED)
+        return
+    if _budget_spent(live.rate_limit, live.rate_window_seconds):
+        await target.answer(_RATE_LIMITED)
+        await _log_rate_limit(bot, live, principal, tg_user)
+        return
+
+    thinking = await target.answer(_THINKING)
+    snapshot = await live.store.get()
+    result = await ask(live.agent, snapshot, question, [],
+                       about=describe_asker(principal))
+    await _reveal_answer(bot, target, thinking, render_mod.clip(result.text))
+    await _attach_sources(bot, target, live, snapshot, result.sources, [])
+    await _send_trace(target, principal, result.stats, result.complaints)
+    await _log_question(bot, live, principal, tg_user, question, result)
 
 
 async def _answer_question(target: Message, principal: User, state: FSMContext,
