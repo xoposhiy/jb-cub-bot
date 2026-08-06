@@ -32,11 +32,16 @@ the real update takes the normal path and those screens work for the first time.
   data, a `callback_data` marker, FSM data). Everything else there is unchanged,
   including the separate departed check on the target — what a departed student
   sees is the refusal.
+- `/unas` is never impersonated: the middleware skips the swap for it. Without
+  that, a departed target — refused before any handler runs — would trap the
+  admin in the refusal until a restart.
 - A separate `message`-only middleware prints `👤 Viewing as <name> · /unas to
-  return` before each answer, skipping `/as` and `/unas` themselves. Separate
-  from `PrincipalMiddleware` because that file is about who is refused, and says
-  so in its docstring. Not on callbacks: a button usually edits its own message
-  in place, and a banner per tap would scroll the screen away.
+  return` before each answer. It needs no exceptions: `/unas` arrives with no
+  impersonation to announce, and a `/as` refused inside the mode is refused
+  *because* of the mode, so saying so is right. Separate from
+  `PrincipalMiddleware` because that file is about who is refused, and says so
+  in its docstring. Not on callbacks: a button usually edits its own message in
+  place, and a banner per tap would scroll the screen away.
 - `/unas` is registered straight on the router, not through `CommandRegistrar`,
   so it appears in nobody's `/help` — the student's view stays the student's
   view, and the way out is printed in every banner instead.
