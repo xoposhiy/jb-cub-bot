@@ -96,6 +96,47 @@ async def test_middleware_impersonation_ignored_for_non_admin(session):
     assert captured["principal_tid"] == 777  # not swapped
 
 
+async def test_middleware_swaps_the_principal_for_an_admin_in_the_mode(session):
+    from jbcub_bot.core.models import User
+    session.add(User(last_name="Admin", telegram_id=777, role=Role.ADMIN))
+    session.add(User(last_name="Stud", matriculation="30000001",
+                     telegram_id=111, role=Role.STUDENT))
+    session.commit()
+    mw = PrincipalMiddleware(lambda: session)
+    captured = {}
+
+    async def handler(event, data):
+        captured["principal_tid"] = data["principal"].telegram_id
+        captured["impersonator_tid"] = data["impersonator"].telegram_id
+
+    impersonation.begin(777, "30000001")
+    event = SimpleNamespace(from_user=SimpleNamespace(id=777, username="a"))
+    await mw(handler, event, {})
+
+    assert captured == {"principal_tid": 111, "impersonator_tid": 777}
+
+
+async def test_a_students_own_mode_entry_is_ignored(session):
+    # Belt and braces: only /as writes the map and only an admin may run it,
+    # but the swap must not depend on that being true.
+    from jbcub_bot.core.models import User
+    session.add(User(last_name="Stud", telegram_id=777, role=Role.STUDENT))
+    session.add(User(last_name="Other", matriculation="30000001",
+                     telegram_id=111, role=Role.STUDENT))
+    session.commit()
+    mw = PrincipalMiddleware(lambda: session)
+    captured = {}
+
+    async def handler(event, data):
+        captured["principal_tid"] = data["principal"].telegram_id
+
+    impersonation.begin(777, "30000001")
+    event = SimpleNamespace(from_user=SimpleNamespace(id=777, username="s"))
+    await mw(handler, event, {})
+
+    assert captured["principal_tid"] == 777  # not swapped
+
+
 async def test_middleware_reads_impersonation_from_admin_callback(session):
     session.add(User(last_name="Admin", telegram_id=777, role=Role.ADMIN))
     session.add(User(last_name="Stud", matriculation="30000001",

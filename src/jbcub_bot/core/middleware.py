@@ -134,6 +134,9 @@ class PrincipalMiddleware(BaseMiddleware):
                     await refuse_departed(event)
                     return None
             ref = data.get("impersonate_ref")
+            if ref is None and principal is not None \
+                    and principal.role is Role.ADMIN:
+                ref = impersonation.ref_for(user.id)
             if ref is None and isinstance(event, CallbackQuery):
                 _, ref = impersonation.split_callback(event.data)
             if ref is None and principal is not None \
