@@ -20,8 +20,9 @@ async def cmd_as(message: Message, principal: User, session,
                  state: FSMContext, command: CommandObject):
     """Enter the mode. Every later update from this admin belongs to the target.
 
-    Inside the mode the principal is the target, so this command refuses like
-    any other admin command -- switching target is /unas, then /as again.
+    Inside the mode the principal is the target, so this command runs with the
+    target's role like every other: from a student it refuses, and switching
+    away is /unas then /as again; from a staff target it goes straight through.
     """
     ref = (command.args or "").strip()
     if not ref:
@@ -47,10 +48,10 @@ async def cmd_unas(message: Message, state: FSMContext):
     """Leave the mode.
 
     Registered straight on the router rather than through CommandRegistrar for
-    two reasons: inside the mode the principal is a student, so a role-guarded
-    command would refuse the one command that gets you out; and listing it in
-    /help would put a command in the student's view that no student has. Every
-    banner prints it instead.
+    two reasons: inside the mode the principal is the target, so a role-guarded
+    command would refuse the one command that gets you out of a student's view;
+    and listing it in /help would put a command in that view no student has.
+    Every banner prints it instead.
 
     It reads the map rather than `impersonator` because the middleware
     deliberately does not impersonate this command -- see `is_exit_command`.
