@@ -134,14 +134,6 @@ def test_render_leads_with_the_departed_marker_for_an_admin():
         "⚠️ Departed: 2026-07-28\nName: Eve Expelled")
 
 
-def test_me_keyboard_offers_editing_and_privacy():
-    kb = me_keyboard(User(first_name="S", last_name="Student",
-                          role=Role.STUDENT))
-    assert [b.callback_data for row in kb.inline_keyboard for b in row] == [
-        EDIT_CALLBACK, PRIVACY_CALLBACK,
-    ]
-
-
 def test_me_keyboard_offers_the_self_service_buttons():
     kb = me_keyboard(
         User(first_name="S", last_name="Student", role=Role.STUDENT),

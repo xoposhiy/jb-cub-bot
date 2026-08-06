@@ -153,8 +153,22 @@ async def test_impersonating_a_departed_student_shows_their_block():
     await dp.feed_update(bot, _message_update(bot, 999, f"/as {DEPARTED_TID}"))
     await dp.feed_update(bot, _message_update(bot, 999, "/me"))
     said = _texts(bot)
-    assert DEPARTED_NOTICE in said
+    assert any(DEPARTED_NOTICE in text for text in said)
     assert not any("Cohort: 2024" in text for text in said)
+
+
+async def test_impersonating_a_departed_student_points_to_unas():
+    # Finding: the refusal runs before any handler, so BannerMiddleware never
+    # gets to say who the admin is viewing as. Without a pointer here, the
+    # admin sees a bare refusal with no sign /unas is still the way out.
+    factory = _session_factory()
+    _seed(factory)
+    await _admin(factory)
+    bot, dp = FakeBot(), build_dispatcher(factory)
+    await dp.feed_update(bot, _message_update(bot, 999, f"/as {DEPARTED_TID}"))
+    await dp.feed_update(bot, _message_update(bot, 999, "/me"))
+    said = _texts(bot)
+    assert any("Eve Expelled" in text and "/unas" in text for text in said)
 
 
 async def test_impersonating_a_student_still_on_the_roster_works():

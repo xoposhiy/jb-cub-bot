@@ -40,9 +40,15 @@ One memorized form for the job means there is nothing left to pick wrong.
 - **Profile reads go through `features/directory/visibility.py`** — read a column off the model and you leak whatever its owner hid.
 - **Access is refused in `PrincipalMiddleware`, before any lookup** `core/middleware.py`.
 - **`/as` is a sticky mode, not a wrapper.** While an admin is in it,
-  `principal` *is* the student and every admin command refuses; the real
-  admin is `impersonator`. The map lives in memory in `core/impersonation.py`,
-  so `/unas` must never be impersonated or a departed target traps its viewer.
+  `principal` *is* the target, so commands run with *their* role — a student
+  target refuses admin commands, a staff target doesn't. The real admin is
+  `impersonator`. `/unas` is deliberately **not** registered through
+  `CommandRegistrar`: that would list it in a student's `/help` and, with any
+  `min_role`, refuse the one command that exits the mode. It is also exempt
+  from the departed refusal in `PrincipalMiddleware`, which runs before any
+  handler — without that exemption `/as <departed student>` would trap the
+  admin until a restart (the mode lives only in memory, `core/impersonation.py`,
+  so a restart is the other way out).
 - **Use FSM for multi stage dialogs**.
 - **An intent handler returns `bool`.** `False` means "not mine" and obliges it to have answered nothing, because something else is about to answer. `core/intents.py`.
 - **Don't swallow unexpected exceptions in a handler.** Answer only the failures a user can act on; let the rest reach the `dp.errors` handler, adding context by re-raising (`raise RuntimeError("...") from exc`). A bare `except Exception` that answers and returns is how a crash becomes a silent hang.

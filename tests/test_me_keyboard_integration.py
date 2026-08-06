@@ -1,4 +1,5 @@
-"""/me keeps its self-service buttons under interactive impersonation."""
+"""The sticky mode carries through /me: it renders the target's own
+self-service buttons."""
 
 from datetime import datetime, timezone
 
@@ -74,7 +75,7 @@ async def test_me_offers_the_privacy_screen():
     assert PRIVACY_CALLBACK in _callbacks(fake_bot.sent[0])
 
 
-async def test_me_under_impersonation_has_targeted_privacy_button():
+async def test_me_under_impersonation_has_the_targets_privacy_button():
     factory = _session_factory()
     _seed(factory)
     dp = build_dispatcher(session_factory=factory)
@@ -87,6 +88,8 @@ async def test_me_under_impersonation_has_targeted_privacy_button():
                          _message_update(fake_bot, 777, "/me", update_id=2),
                          dispatcher=dp)
 
+    # reply_markup narrows this to the profile render: the banner sent just
+    # before it also carries the target's name, but no keyboard.
     shown = next(m for m in fake_bot.sent
                  if "Zakhar Zhukovsky" in getattr(m, "text", "")
                  and getattr(m, "reply_markup", None) is not None)
@@ -105,7 +108,7 @@ async def test_me_offers_the_edit_screen():
     assert EDIT_CALLBACK in _callbacks(fake_bot.sent[0])
 
 
-async def test_me_under_impersonation_has_targeted_edit_button():
+async def test_me_under_impersonation_has_the_targets_edit_button():
     factory = _session_factory()
     _seed(factory)
     dp = build_dispatcher(session_factory=factory)
@@ -118,6 +121,8 @@ async def test_me_under_impersonation_has_targeted_edit_button():
                          _message_update(fake_bot, 777, "/me", update_id=2),
                          dispatcher=dp)
 
+    # reply_markup narrows this to the profile render: the banner sent just
+    # before it also carries the target's name, but no keyboard.
     shown = next(m for m in fake_bot.sent
                  if "Zakhar Zhukovsky" in getattr(m, "text", "")
                  and getattr(m, "reply_markup", None) is not None)

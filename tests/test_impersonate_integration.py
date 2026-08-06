@@ -127,6 +127,32 @@ async def test_an_admin_command_is_refused_inside_the_mode():
     assert "/sync" not in help_text       # the student's /help, not the admin's
 
 
+async def test_impersonating_an_admin_still_reaches_an_admin_only_command():
+    # Finding: `principal` *is* the target, so commands run with *their*
+    # role -- a staff target does not refuse admin commands the way a
+    # student target does. /kb_reload is admin-only and needs no external
+    # service to prove the guard passed: with no runtime configured (the
+    # default in tests) it answers "not configured", never "Admins only.".
+    session_factory = _build_session_factory()
+    setup = session_factory()
+    setup.add(User(last_name="Adminova", first_name="Anna",
+                   telegram_id=777, role=Role.ADMIN))
+    setup.add(User(last_name="Petrov", first_name="Petr",
+                   telegram_id=888, role=Role.ADMIN))
+    setup.commit()
+    setup.close()
+
+    dp = build_dispatcher(session_factory=session_factory)
+    fake_bot = FakeBot()
+
+    await _feed(dp, fake_bot, 777, "/as 888", 1)
+    await _feed(dp, fake_bot, 777, "/kb_reload", 2)
+
+    texts = [m.text for m in fake_bot.sent]
+    assert "Admins only." not in texts
+    assert any("not configured" in t for t in texts)
+
+
 async def test_every_answer_inside_the_mode_is_announced():
     session_factory = _build_session_factory()
     setup = session_factory()

@@ -36,20 +36,25 @@ the real update takes the normal path and those screens work for the first time.
   that, a departed target — refused before any handler runs — would trap the
   admin in the refusal until a restart.
 - A separate `message`-only middleware prints `👤 Viewing as <name> · /unas to
-  return` before each answer. It needs no exceptions: `/unas` arrives with no
-  impersonation to announce, and a `/as` refused inside the mode is refused
-  *because* of the mode, so saying so is right. Separate from
+  return`, sent before the handler runs. That lands before most answers, but
+  not `edit.on_value` or `_reprompt`: both go through `_redraw`, which edits a
+  message sent earlier, so the banner — sent after that message already
+  existed — lands below it instead of above. It needs no exceptions: `/unas`
+  arrives with no impersonation to announce, and a `/as` refused inside the
+  mode is refused *because* of the mode, so saying so is right. Separate from
   `PrincipalMiddleware` because that file is about who is refused, and says so
   in its docstring. Not on callbacks: a button usually edits its own message in
   place, and a banner per tap would scroll the screen away.
 - `/unas` is registered straight on the router, not through `CommandRegistrar`,
   so it appears in nobody's `/help` — the student's view stays the student's
   view, and the way out is printed in every banner instead.
-- Every other admin command is refused inside the mode, because the principal is
-  the student. That includes `/as`, so switching target is `/unas` then `/as`.
-  Rejected: authorizing `/as` on the real caller — one admin command working
-  inside the mode while the rest do not costs more to explain than two commands
-  cost to type.
+- Commands inside the mode run with the target's role, because `principal`
+  *is* the target — a student target refuses `/as` same as any other admin
+  command, so switching away from a student is `/unas` then `/as`. A staff
+  target does not refuse it, so retargeting there works without `/unas` too.
+  Rejected: authorizing `/as` unconditionally on the real caller — one admin
+  command working inside the mode while the rest follow the target's role
+  costs more to explain than the two-command path costs to type.
 - Both commands clear the FSM, so an unfinished dialog does not leak from your
   view into the student's, or back.
 

@@ -67,6 +67,29 @@ async def refuse_departed(event) -> None:
     await _refuse(event, DEPARTED_NOTICE)
 
 
+IMPERSONATED_DEPARTED_HINT = (
+    "You are still viewing as {name}. Send /unas to return to your own view."
+)
+
+
+async def refuse_impersonated_departed(event, target) -> None:
+    """The departed refusal for an `/as` target, plus the way out of the mode.
+
+    One `_refuse` call, not `refuse_departed` followed by a second one: a
+    `CallbackQuery` can only be answered once, and this refusal fires on a
+    button tap as often as on a command. The hint is appended to the same
+    text rather than folded into `DEPARTED_NOTICE` itself, so a real departed
+    student -- who has no mode to leave -- never sees wording that mentions
+    /unas; the caller's own refusal above still sends `DEPARTED_NOTICE`
+    verbatim.
+    """
+    await _refuse(
+        event,
+        DEPARTED_NOTICE + "\n\n" +
+        IMPERSONATED_DEPARTED_HINT.format(name=target.full_name),
+    )
+
+
 async def refuse_group_chat(event) -> None:
     """See `_refuse`: the group-chat wording."""
     await _refuse(event, GROUP_NOTICE)
@@ -137,15 +160,14 @@ class PrincipalMiddleware(BaseMiddleware):
             if principal is not None and principal.role is Role.ADMIN \
                     and not impersonation.is_exit_command(event):
                 ref = impersonation.ref_for(user.id)
-            if ref is not None and principal is not None \
-                    and principal.role is Role.ADMIN:
+            if ref is not None:
                 target = identity.find_impersonation_target(session, ref)
                 # /as shows the bot as its target sees it, and what a departed
                 # target sees is the refusal. Kept separate from the caller's
                 # own check above so the bootstrap exemption covers only the
                 # admin's own access, never their view of somebody else.
                 if target is not None and target.departed_at:
-                    await refuse_departed(event)
+                    await refuse_impersonated_departed(event, target)
                     return None
                 data["principal"] = target
                 data["impersonator"] = principal

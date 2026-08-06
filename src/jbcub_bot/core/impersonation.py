@@ -60,10 +60,16 @@ def is_exit_command(event) -> bool:
 
 
 class BannerMiddleware(BaseMiddleware):
-    """Say whose eyes these are, before the answer they belong to.
+    """Say whose eyes these are, sent before the handler runs.
 
     Messages only. A button usually edits its own message in place, so a
     banner per tap would push the screen it just redrew off the top.
+
+    That puts it before most answers, since most handlers reply with a fresh
+    message. It is not before `edit.on_value` or `_reprompt`, though: both go
+    through `_redraw`, which edits a message sent earlier in the chat -- the
+    banner, sent after that message already existed, lands below it instead
+    of above.
 
     It needs no exceptions: /unas arrives unimpersonated (see
     `is_exit_command`) and so announces nothing, and a /as refused inside the

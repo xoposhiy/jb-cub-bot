@@ -282,6 +282,8 @@ async def test_privacy_under_impersonation_updates_the_target():
                          dispatcher=dp)
 
     # Start where the reported bug starts: the target's own profile.
+    # reply_markup narrows this to the profile render: the banner sent just
+    # before it also carries the target's name, but no keyboard.
     shown = next(m for m in fake_bot.sent
                  if "Zakhar Zhukovsky" in getattr(m, "text", "")
                  and getattr(m, "reply_markup", None) is not None)
