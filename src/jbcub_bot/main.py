@@ -8,7 +8,7 @@ from aiogram.filters import StateFilter
 from aiogram.types import ErrorEvent, Message, Update
 
 import jbcub_bot.features as features_pkg
-from jbcub_bot.core import registry
+from jbcub_bot.core import registry, impersonation
 from jbcub_bot.core.config import get_settings
 from jbcub_bot.core.db import get_session, init_db
 from jbcub_bot.core import oplog as oplog_mod
@@ -61,6 +61,11 @@ def build_dispatcher(session_factory, bootstrap_ids: set | None = None,
     dp = Dispatcher()
     dp.message.middleware(PrincipalMiddleware(session_factory, bootstrap_ids))
     dp.callback_query.middleware(PrincipalMiddleware(session_factory, bootstrap_ids))
+    # After PrincipalMiddleware, which is what puts the impersonator in `data`.
+    # Inner middleware, like the one above: aiogram resolves the parent chain's
+    # inner middlewares for a sub-router's handler, and runs them once, for the
+    # handler that actually matched.
+    dp.message.middleware(impersonation.BannerMiddleware())
 
     def ops_log(bot):
         """One per update: the Bot instance only exists per-update."""

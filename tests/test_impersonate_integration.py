@@ -125,3 +125,38 @@ async def test_an_admin_command_is_refused_inside_the_mode():
     assert "Admins only." in texts        # /as itself, inside the mode
     help_text = next(t for t in texts if "/me" in t)
     assert "/sync" not in help_text       # the student's /help, not the admin's
+
+
+async def test_every_answer_inside_the_mode_is_announced():
+    session_factory = _build_session_factory()
+    setup = session_factory()
+    setup.add(User(last_name="Adminova", first_name="Anna",
+                   telegram_id=777, role=Role.ADMIN))
+    setup.add(User(last_name="Zhukovsky", first_name="Zakhar",
+                   matriculation="30009999", telegram_id=222,
+                   role=Role.STUDENT))
+    setup.commit()
+    setup.close()
+
+    dp = build_dispatcher(session_factory=session_factory)
+    fake_bot = FakeBot()
+    banner = "\U0001f464 Viewing as Zakhar Zhukovsky · /unas to return"
+
+    await _feed(dp, fake_bot, 777, "/as 30009999", 1)
+    # Entering is not itself impersonated, so it gets no banner -- the
+    # confirmation already says who you have become.
+    assert banner not in [m.text for m in fake_bot.sent]
+
+    await _feed(dp, fake_bot, 777, "/me", 2)
+    await _feed(dp, fake_bot, 777, "/me", 3)
+    texts = [m.text for m in fake_bot.sent]
+    assert texts.count(banner) == 2
+    # It comes first, so the answer below it is already labelled. Match the
+    # profile by a line only it has: the banner and the /as confirmation both
+    # carry the student's name.
+    assert texts.index(banner) < texts.index(
+        next(t for t in texts if "Role: Student" in t))
+
+    await _feed(dp, fake_bot, 777, "/unas", 4)
+    await _feed(dp, fake_bot, 777, "/me", 5)
+    assert [m.text for m in fake_bot.sent].count(banner) == 2  # no more

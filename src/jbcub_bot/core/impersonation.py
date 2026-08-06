@@ -7,6 +7,8 @@ direction, and the banner going missing says so. One process and one event
 loop, so the map needs no locking.
 """
 
+from aiogram import BaseMiddleware
+
 from jbcub_bot.core.models import User
 
 _active: dict[int, str] = {}
@@ -59,6 +61,8 @@ def split_callback(value: str | None) -> tuple[str, str | None]:
 
 _EXIT_COMMAND = "/unas"
 
+BANNER = "\U0001f464 Viewing as {name} · /unas to return"
+
 
 def is_exit_command(event) -> bool:
     """True for the message that leaves the mode, which is never impersonated.
@@ -70,3 +74,21 @@ def is_exit_command(event) -> bool:
     text = getattr(event, "text", None) or ""
     head = text.split(maxsplit=1)[0] if text.split() else ""
     return head.split("@")[0] == _EXIT_COMMAND
+
+
+class BannerMiddleware(BaseMiddleware):
+    """Say whose eyes these are, before the answer they belong to.
+
+    Messages only. A button usually edits its own message in place, so a
+    banner per tap would push the screen it just redrew off the top.
+
+    It needs no exceptions: /unas arrives unimpersonated (see
+    `is_exit_command`) and so announces nothing, and a /as refused inside the
+    mode is refused *because* of the mode, which is worth saying.
+    """
+
+    async def __call__(self, handler, event, data):
+        target = data.get("principal")
+        if data.get("impersonator") is not None and target is not None:
+            await event.answer(BANNER.format(name=target.full_name))
+        return await handler(event, data)
