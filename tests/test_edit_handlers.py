@@ -451,6 +451,36 @@ async def test_edit_under_impersonation_updates_the_target():
     ]
 
 
+async def test_cancel_inside_the_mode_cancels_the_targets_edit():
+    # The one-shot /as had no FSMContext, so /cancel could only ever answer
+    # "Nothing to cancel." Inside the mode there is a real dialog to cancel.
+    factory = _session_factory()
+    _seed_admin_and_student(factory)
+    dp = build_dispatcher(session_factory=factory)
+    fake_bot = FakeBot()
+
+    await dp.feed_update(fake_bot,
+                         _message_update(fake_bot, 777, "/as 30009999"),
+                         dispatcher=dp)
+    await dp.feed_update(fake_bot,
+                         _callback_update(fake_bot, 777, "dir:edit",
+                                          update_id=2),
+                         dispatcher=dp)
+    await dp.feed_update(
+        fake_bot,
+        _callback_update(fake_bot, 777,
+                         f"{edit.FIELD_CALLBACK_PREFIX}status_line",
+                         update_id=3),
+        dispatcher=dp)
+    await dp.feed_update(fake_bot,
+                         _message_update(fake_bot, 777, "/cancel",
+                                         update_id=4),
+                         dispatcher=dp)
+
+    assert "Editing cancelled." in _edits(fake_bot)[-1].text
+    assert _stored(factory, "status_line") == "target status"  # untouched
+
+
 async def test_opening_the_screen_from_a_callback():
     factory = _session_factory()
     _seed_student(factory)

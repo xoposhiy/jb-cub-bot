@@ -39,6 +39,10 @@ One memorized form for the job means there is nothing left to pick wrong.
 - **Google Sheets are a read-only source of truth; the bot never writes to one.**
 - **Profile reads go through `features/directory/visibility.py`** — read a column off the model and you leak whatever its owner hid.
 - **Access is refused in `PrincipalMiddleware`, before any lookup** `core/middleware.py`.
+- **`/as` is a sticky mode, not a wrapper.** While an admin is in it,
+  `principal` *is* the student and every admin command refuses; the real
+  admin is `impersonator`. The map lives in memory in `core/impersonation.py`,
+  so `/unas` must never be impersonated or a departed target traps its viewer.
 - **Use FSM for multi stage dialogs**.
 - **An intent handler returns `bool`.** `False` means "not mine" and obliges it to have answered nothing, because something else is about to answer. `core/intents.py`.
 - **Don't swallow unexpected exceptions in a handler.** Answer only the failures a user can act on; let the rest reach the `dp.errors` handler, adding context by re-raising (`raise RuntimeError("...") from exc`). A bare `except Exception` that answers and returns is how a crash becomes a silent hang.

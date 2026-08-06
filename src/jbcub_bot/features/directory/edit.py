@@ -156,14 +156,8 @@ async def _redraw(message: Message, data: dict, text: str, keyboard) -> None:
 
 @cmd.command("edit", "Edit your status, GitHub or Codeforces.")
 async def cmd_edit(message: Message, principal: User, session,
-                   state: FSMContext | None = None):
-    # `state` is optional because /as reaches this handler through
-    # dispatcher.propagate_event("message", ...), which skips the Dispatcher's
-    # outer middlewares -- FSMContextMiddleware among them. A required `state`
-    # would make every `/as <ref> /edit` a TypeError.
-    #
-    if state is not None:
-        await state.clear()
+                   state: FSMContext):
+    await state.clear()
     await message.answer(
         render_edit(principal),
         reply_markup=edit_keyboard(principal),
@@ -172,10 +166,7 @@ async def cmd_edit(message: Message, principal: User, session,
 
 @cmd.command("cancel", "Stop editing a profile field.")
 async def cmd_cancel(message: Message, principal: User, session,
-                     state: FSMContext | None = None):
-    if state is None:  # propagated by /as, where no state exists -- see cmd_edit
-        await message.answer(_NOTHING_TO_CANCEL)
-        return
+                     state: FSMContext):
     data = await state.get_data()
     # Only this feature's own state: another feature may be waiting for text,
     # and clearing that would end its session while showing an edit screen.
