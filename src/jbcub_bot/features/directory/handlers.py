@@ -204,12 +204,11 @@ async def _send_cohort_report(
 
 
 @cmd.command("me", "Show your own profile.")
-async def cmd_me(message: Message, principal: User, session,
-                 impersonate_ref: str | None = None):
+async def cmd_me(message: Message, principal: User, session):
     text = render_profile(principal, principal)
     await message.answer(
         text,
-        reply_markup=me_keyboard(principal, impersonate_ref=impersonate_ref),
+        reply_markup=me_keyboard(principal),
         entities=profile_entities(principal, principal, text),
     )
 

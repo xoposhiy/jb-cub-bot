@@ -16,7 +16,6 @@ from sqlalchemy.pool import StaticPool
 
 import jbcub_bot.features.directory as directory
 from jbcub_bot.core.db import Base
-from jbcub_bot.core import impersonation
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.directory.screens import EXPIRED, NO_ROW, NOT_LINKED
 from jbcub_bot.features.directory.visibility import COHORT, EVERYONE, STAFF_ONLY
@@ -286,7 +285,7 @@ async def test_privacy_under_impersonation_updates_the_target():
     shown = next(m for m in fake_bot.sent
                  if "Zakhar Zhukovsky" in getattr(m, "text", "")
                  and getattr(m, "reply_markup", None) is not None)
-    privacy_button = impersonation.callback_data("dir:privacy", "30009999")
+    privacy_button = "dir:privacy"
     assert privacy_button in [
         button.callback_data
         for row in shown.reply_markup.inline_keyboard
@@ -300,7 +299,7 @@ async def test_privacy_under_impersonation_updates_the_target():
     )
     privacy_screen = _edits(fake_bot)[-1]
     assert "student@gmail.com" in privacy_screen.text
-    gmail = impersonation.callback_data("dir:vis:gmail", "30009999")
+    gmail = "dir:vis:gmail"
     assert gmail in [
         button.callback_data
         for row in privacy_screen.reply_markup.inline_keyboard
@@ -313,9 +312,7 @@ async def test_privacy_under_impersonation_updates_the_target():
 
     assert _stored_level(factory, "gmail") == EVERYONE
     redraw = _edits(fake_bot)[-1]
-    assert impersonation.callback_data(
-        "dir:profile", "30009999"
-    ) in [
+    assert "dir:profile" in [
         button.callback_data
         for row in redraw.reply_markup.inline_keyboard
         for button in row

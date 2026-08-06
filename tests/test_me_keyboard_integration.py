@@ -9,7 +9,6 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from jbcub_bot.core.db import Base
-from jbcub_bot.core import impersonation
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.directory.render import EDIT_CALLBACK, PRIVACY_CALLBACK
 from jbcub_bot.main import build_dispatcher
@@ -91,9 +90,7 @@ async def test_me_under_impersonation_has_targeted_privacy_button():
     shown = next(m for m in fake_bot.sent
                  if "Zakhar Zhukovsky" in getattr(m, "text", "")
                  and getattr(m, "reply_markup", None) is not None)
-    assert impersonation.callback_data(
-        PRIVACY_CALLBACK, "30009999"
-    ) in _callbacks(shown)
+    assert PRIVACY_CALLBACK in _callbacks(shown)
 
 
 async def test_me_offers_the_edit_screen():
@@ -124,6 +121,4 @@ async def test_me_under_impersonation_has_targeted_edit_button():
     shown = next(m for m in fake_bot.sent
                  if "Zakhar Zhukovsky" in getattr(m, "text", "")
                  and getattr(m, "reply_markup", None) is not None)
-    assert impersonation.callback_data(
-        EDIT_CALLBACK, "30009999"
-    ) in _callbacks(shown)
+    assert EDIT_CALLBACK in _callbacks(shown)

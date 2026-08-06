@@ -1,5 +1,9 @@
 """Who each admin is currently viewing the bot as."""
 
+from types import SimpleNamespace
+
+from aiogram.types import CallbackQuery, User as TgUser
+
 from jbcub_bot.core import impersonation
 
 
@@ -33,3 +37,20 @@ def test_reset_clears_every_admin():
     impersonation.reset()
     assert impersonation.ref_for(777) is None
     assert impersonation.ref_for(778) is None
+
+
+def test_is_exit_command_is_false_for_a_callback_query():
+    # A CallbackQuery has no .text at all -- getattr's default must carry the
+    # guard through rather than raising, or every button inside the mode
+    # would break with nothing to catch it.
+    cb = CallbackQuery(
+        id="cb-1",
+        from_user=TgUser(id=777, is_bot=False, first_name="Admin"),
+        chat_instance="chat",
+        data="dir:privacy",
+    )
+    assert impersonation.is_exit_command(cb) is False
+
+
+def test_is_exit_command_is_true_for_unas():
+    assert impersonation.is_exit_command(SimpleNamespace(text="/unas")) is True

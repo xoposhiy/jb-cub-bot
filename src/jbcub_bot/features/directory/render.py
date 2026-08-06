@@ -1,6 +1,6 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity
 
-from jbcub_bot.core import impersonation, sheets
+from jbcub_bot.core import sheets
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.directory.visibility import (
     BY_NAME,
@@ -146,27 +146,14 @@ def admin_actions_keyboard(target: User) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def me_keyboard(user: User, *,
-                impersonate_ref: str | None = None) -> InlineKeyboardMarkup | None:
-    """Keyboard for a user's own profile.
-
-    Impersonated buttons carry their target so every follow-up resolves the
-    same student instead of falling back to the admin who tapped them.
-    """
+def me_keyboard(user: User) -> InlineKeyboardMarkup | None:
+    """Keyboard for a user's own profile."""
     rows = []
     rows.append([
-        InlineKeyboardButton(
-            text="✏️ Edit my profile",
-            callback_data=impersonation.callback_data(
-                EDIT_CALLBACK, impersonate_ref
-            ),
-        ),
-        InlineKeyboardButton(
-            text="\U0001f512 Who sees my data",
-            callback_data=impersonation.callback_data(
-                PRIVACY_CALLBACK, impersonate_ref
-            ),
-        ),
+        InlineKeyboardButton(text="✏️ Edit my profile",
+                             callback_data=EDIT_CALLBACK),
+        InlineKeyboardButton(text="\U0001f512 Who sees my data",
+                             callback_data=PRIVACY_CALLBACK),
     ])
     if user.role is Role.ADMIN:
         admin = admin_keyboard(user)

@@ -1,5 +1,4 @@
 from jbcub_bot.core.models import Role, User
-from jbcub_bot.core import impersonation
 from jbcub_bot.features.directory.render import (
     EDIT_CALLBACK,
     PRIVACY_CALLBACK,
@@ -143,14 +142,13 @@ def test_me_keyboard_offers_editing_and_privacy():
     ]
 
 
-def test_me_keyboard_targets_self_service_during_impersonation():
+def test_me_keyboard_offers_the_self_service_buttons():
     kb = me_keyboard(
         User(first_name="S", last_name="Student", role=Role.STUDENT),
-        impersonate_ref="30000001",
     )
     assert [b.callback_data for row in kb.inline_keyboard for b in row] == [
-        impersonation.callback_data(EDIT_CALLBACK, "30000001"),
-        impersonation.callback_data(PRIVACY_CALLBACK, "30000001"),
+        EDIT_CALLBACK,
+        PRIVACY_CALLBACK,
     ]
 
 

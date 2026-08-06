@@ -17,7 +17,6 @@ from sqlalchemy.pool import StaticPool
 
 import jbcub_bot.features.directory as directory
 from jbcub_bot.core.db import Base
-from jbcub_bot.core import impersonation
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.directory import accounts, edit
 from jbcub_bot.features.directory.accounts import Verdict
@@ -410,7 +409,7 @@ async def test_edit_under_impersonation_updates_the_target():
     shown = next(m for m in fake_bot.sent
                  if "target status" in getattr(m, "text", ""))
     assert "target status" in shown.text   # the target's row, not the admin's
-    edit_button = impersonation.callback_data("dir:edit", "30009999")
+    edit_button = "dir:edit"
     assert edit_button in [
         button.callback_data
         for row in shown.reply_markup.inline_keyboard
@@ -424,9 +423,7 @@ async def test_edit_under_impersonation_updates_the_target():
     )
     edit_screen = _edits(fake_bot)[-1]
     assert "target status" in edit_screen.text
-    status_button = impersonation.callback_data(
-        f"{edit.FIELD_CALLBACK_PREFIX}status_line", "30009999"
-    )
+    status_button = f"{edit.FIELD_CALLBACK_PREFIX}status_line"
     assert status_button in [
         button.callback_data
         for row in edit_screen.reply_markup.inline_keyboard
@@ -447,9 +444,7 @@ async def test_edit_under_impersonation_updates_the_target():
     assert _stored(factory, "status_line") == "admin changed this"
     assert _stored(factory, "status_line", telegram_id=777) is None
     redraw = _edits(fake_bot)[-1]
-    assert impersonation.callback_data(
-        f"{edit.FIELD_CALLBACK_PREFIX}github", "30009999"
-    ) in [
+    assert f"{edit.FIELD_CALLBACK_PREFIX}github" in [
         button.callback_data
         for row in redraw.reply_markup.inline_keyboard
         for button in row

@@ -21,7 +21,6 @@ from aiogram.types import (
     Message,
 )
 
-from jbcub_bot.core import impersonation
 from jbcub_bot.core.commands import CommandRegistrar
 from jbcub_bot.core.models import User
 from jbcub_bot.features.directory import accounts
@@ -67,15 +66,11 @@ def render_edit(user: User, notice: str = "") -> str:
     return "\n".join(lines)
 
 
-def edit_keyboard(
-    user: User, impersonate_ref: str | None = None
-) -> InlineKeyboardMarkup:
+def edit_keyboard(user: User) -> InlineKeyboardMarkup:
     buttons = [
         InlineKeyboardButton(
             text=f"{spec.label} ✏️",
-            callback_data=impersonation.callback_data(
-                f"{FIELD_CALLBACK_PREFIX}{spec.name}", impersonate_ref
-            ),
+            callback_data=f"{FIELD_CALLBACK_PREFIX}{spec.name}",
         )
         for spec in EDITABLE_FIELDS
     ]
@@ -83,9 +78,7 @@ def edit_keyboard(
             for i in range(0, len(buttons), _BUTTONS_PER_ROW)]
     rows.append([InlineKeyboardButton(
         text=_BACK,
-        callback_data=impersonation.callback_data(
-            PROFILE_CALLBACK, impersonate_ref
-        ),
+        callback_data=PROFILE_CALLBACK,
     )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -102,21 +95,11 @@ def render_prompt(user: User, spec: FieldSpec) -> str:
     return f"{spec.edit_hint}\n\nNow: {current}"
 
 
-def prompt_keyboard(
-    spec: FieldSpec, impersonate_ref: str | None = None
-) -> InlineKeyboardMarkup:
+def prompt_keyboard(spec: FieldSpec) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="\U0001f5d1 Clear",
-                             callback_data=impersonation.callback_data(
-                                 f"{CLEAR_CALLBACK_PREFIX}{spec.name}",
-                                 impersonate_ref,
-                             )),
-        InlineKeyboardButton(
-            text="Cancel",
-            callback_data=impersonation.callback_data(
-                CANCEL_CALLBACK, impersonate_ref
-            ),
-        ),
+                             callback_data=f"{CLEAR_CALLBACK_PREFIX}{spec.name}"),
+        InlineKeyboardButton(text="Cancel", callback_data=CANCEL_CALLBACK),
     ]])
 
 
@@ -125,21 +108,12 @@ def render_clear_confirm(spec: FieldSpec) -> str:
             "roster's value, if there is one, stays.")
 
 
-def clear_confirm_keyboard(
-    spec: FieldSpec, impersonate_ref: str | None = None
-) -> InlineKeyboardMarkup:
+def clear_confirm_keyboard(spec: FieldSpec) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
             text=f"Yes, clear {spec.label}",
-            callback_data=impersonation.callback_data(
-                f"{CLEAR_DO_CALLBACK_PREFIX}{spec.name}", impersonate_ref
-            )),
-        InlineKeyboardButton(
-            text="Cancel",
-            callback_data=impersonation.callback_data(
-                CANCEL_CALLBACK, impersonate_ref
-            ),
-        ),
+            callback_data=f"{CLEAR_DO_CALLBACK_PREFIX}{spec.name}"),
+        InlineKeyboardButton(text="Cancel", callback_data=CANCEL_CALLBACK),
     ]])
 
 
@@ -182,8 +156,7 @@ async def _redraw(message: Message, data: dict, text: str, keyboard) -> None:
 
 @cmd.command("edit", "Edit your status, GitHub or Codeforces.")
 async def cmd_edit(message: Message, principal: User, session,
-                   state: FSMContext | None = None,
-                   impersonate_ref: str | None = None):
+                   state: FSMContext | None = None):
     # `state` is optional because /as reaches this handler through
     # dispatcher.propagate_event("message", ...), which skips the Dispatcher's
     # outer middlewares -- FSMContextMiddleware among them. A required `state`
@@ -193,14 +166,13 @@ async def cmd_edit(message: Message, principal: User, session,
         await state.clear()
     await message.answer(
         render_edit(principal),
-        reply_markup=edit_keyboard(principal, impersonate_ref),
+        reply_markup=edit_keyboard(principal),
     )
 
 
 @cmd.command("cancel", "Stop editing a profile field.")
 async def cmd_cancel(message: Message, principal: User, session,
-                     state: FSMContext | None = None,
-                     impersonate_ref: str | None = None):
+                     state: FSMContext | None = None):
     if state is None:  # propagated by /as, where no state exists -- see cmd_edit
         await message.answer(_NOTHING_TO_CANCEL)
         return
@@ -212,56 +184,39 @@ async def cmd_cancel(message: Message, principal: User, session,
         return
     await state.clear()
     await _redraw(message, data, render_edit(principal, _CANCELLED),
-                  edit_keyboard(principal, impersonate_ref))
+                  edit_keyboard(principal))
 
 
-async def _show_screen(
-    cb: CallbackQuery,
-    user: User,
-    notice: str = "",
-    impersonate_ref: str | None = None,
-) -> None:
+async def _show_screen(cb: CallbackQuery, user: User, notice: str = "") -> None:
     if not isinstance(cb.message, Message):
         await cb.answer(EXPIRED, show_alert=True)
         return
     await cb.message.edit_text(render_edit(user, notice),
-                               reply_markup=edit_keyboard(
-                                   user, impersonate_ref
-                               ))
+                               reply_markup=edit_keyboard(user))
     await cb.answer()
 
 
-@router.callback_query(
-    lambda cb: impersonation.split_callback(cb.data)[0] == EDIT_CALLBACK
-)
+@router.callback_query(F.data == EDIT_CALLBACK)
 @require_linked
 async def cb_open(cb: CallbackQuery, principal: User, session,
-                  state: FSMContext, impersonate_ref: str | None = None):
+                  state: FSMContext):
     await state.clear()
-    await _show_screen(cb, principal, impersonate_ref=impersonate_ref)
+    await _show_screen(cb, principal)
 
 
-@router.callback_query(
-    lambda cb: impersonation.split_callback(cb.data)[0] == CANCEL_CALLBACK
-)
+@router.callback_query(F.data == CANCEL_CALLBACK)
 @require_linked
 async def cb_cancel(cb: CallbackQuery, principal: User, session,
-                    state: FSMContext, impersonate_ref: str | None = None):
+                    state: FSMContext):
     await state.clear()
-    await _show_screen(cb, principal, impersonate_ref=impersonate_ref)
+    await _show_screen(cb, principal)
 
 
-@router.callback_query(
-    lambda cb: impersonation.split_callback(cb.data)[0].startswith(
-        FIELD_CALLBACK_PREFIX
-    )
-)
+@router.callback_query(F.data.startswith(FIELD_CALLBACK_PREFIX))
 @require_linked
 async def cb_field(cb: CallbackQuery, principal: User, session,
-                   state: FSMContext,
-                   impersonate_ref: str | None = None):
-    payload, _ = impersonation.split_callback(cb.data)
-    spec = editable_spec(payload[len(FIELD_CALLBACK_PREFIX):])
+                   state: FSMContext):
+    spec = editable_spec(cb.data[len(FIELD_CALLBACK_PREFIX):])
     if spec is None:
         # A keyboard left over from an older deploy, or a hand-crafted payload.
         await cb.answer(UNKNOWN_FIELD, show_alert=True)
@@ -271,12 +226,9 @@ async def cb_field(cb: CallbackQuery, principal: User, session,
         return
     await state.set_state(EditProfile.value)
     await state.update_data(field=spec.name, chat_id=cb.message.chat.id,
-                            message_id=cb.message.message_id,
-                            impersonate_ref=impersonate_ref)
+                            message_id=cb.message.message_id)
     await cb.message.edit_text(render_prompt(principal, spec),
-                               reply_markup=prompt_keyboard(
-                                   spec, impersonate_ref
-                               ))
+                               reply_markup=prompt_keyboard(spec))
     await cb.answer()
 
 
@@ -315,7 +267,7 @@ async def on_value(message: Message, principal: User, session,
               f"⚠️ Saved. {spec.label} didn't answer, so I couldn't "
               f"verify {value}.")
     await _redraw(message, data, render_edit(principal, notice),
-                  edit_keyboard(principal, data.get("impersonate_ref")))
+                  edit_keyboard(principal))
 
 
 async def _reprompt(message: Message, data: dict, user: User, spec: FieldSpec,
@@ -323,21 +275,15 @@ async def _reprompt(message: Message, data: dict, user: User, spec: FieldSpec,
     """Say what was wrong and keep asking -- the state stays open."""
     await _redraw(message, data,
                   f"{problem}\n\n{render_prompt(user, spec)}",
-                  prompt_keyboard(spec, data.get("impersonate_ref")))
+                  prompt_keyboard(spec))
 
 
-@router.callback_query(
-    lambda cb: impersonation.split_callback(cb.data)[0].startswith(
-        CLEAR_CALLBACK_PREFIX
-    )
-)
+@router.callback_query(F.data.startswith(CLEAR_CALLBACK_PREFIX))
 @require_linked
 async def cb_clear(cb: CallbackQuery, principal: User, session,
-                   state: FSMContext,
-                   impersonate_ref: str | None = None):
+                   state: FSMContext):
     """Ask first: removing a value is destructive, however small."""
-    payload, _ = impersonation.split_callback(cb.data)
-    spec = editable_spec(payload[len(CLEAR_CALLBACK_PREFIX):])
+    spec = editable_spec(cb.data[len(CLEAR_CALLBACK_PREFIX):])
     if spec is None:
         await cb.answer(UNKNOWN_FIELD, show_alert=True)
         return
@@ -345,29 +291,19 @@ async def cb_clear(cb: CallbackQuery, principal: User, session,
         await cb.answer(EXPIRED, show_alert=True)
         return
     await cb.message.edit_text(render_clear_confirm(spec),
-                               reply_markup=clear_confirm_keyboard(
-                                   spec, impersonate_ref
-                               ))
+                               reply_markup=clear_confirm_keyboard(spec))
     await cb.answer()
 
 
-@router.callback_query(
-    lambda cb: impersonation.split_callback(cb.data)[0].startswith(
-        CLEAR_DO_CALLBACK_PREFIX
-    )
-)
+@router.callback_query(F.data.startswith(CLEAR_DO_CALLBACK_PREFIX))
 @require_linked
 async def cb_clear_do(cb: CallbackQuery, principal: User, session,
-                      state: FSMContext,
-                      impersonate_ref: str | None = None):
-    payload, _ = impersonation.split_callback(cb.data)
-    spec = editable_spec(payload[len(CLEAR_DO_CALLBACK_PREFIX):])
+                      state: FSMContext):
+    spec = editable_spec(cb.data[len(CLEAR_DO_CALLBACK_PREFIX):])
     if spec is None:
         await cb.answer(UNKNOWN_FIELD, show_alert=True)
         return
     setattr(principal, editable_column(spec), None)
     session.commit()
     await state.clear()
-    await _show_screen(
-        cb, principal, f"✅ {spec.label} cleared.", impersonate_ref
-    )
+    await _show_screen(cb, principal, f"✅ {spec.label} cleared.")

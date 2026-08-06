@@ -133,18 +133,10 @@ class PrincipalMiddleware(BaseMiddleware):
                         and user.id not in self.bootstrap_ids:
                     await refuse_departed(event)
                     return None
-            ref = data.get("impersonate_ref")
-            if ref is None and principal is not None \
-                    and principal.role is Role.ADMIN \
+            ref = None
+            if principal is not None and principal.role is Role.ADMIN \
                     and not impersonation.is_exit_command(event):
                 ref = impersonation.ref_for(user.id)
-            if ref is None and isinstance(event, CallbackQuery):
-                _, ref = impersonation.split_callback(event.data)
-            if ref is None and principal is not None \
-                    and principal.role is Role.ADMIN:
-                state = data.get("state")
-                if state is not None:
-                    ref = (await state.get_data()).get("impersonate_ref")
             if ref is not None and principal is not None \
                     and principal.role is Role.ADMIN:
                 target = identity.find_impersonation_target(session, ref)
@@ -157,8 +149,6 @@ class PrincipalMiddleware(BaseMiddleware):
                     return None
                 data["principal"] = target
                 data["impersonator"] = principal
-                if target is not None:
-                    data["impersonate_ref"] = impersonation.canonical_ref(target)
             else:
                 data["principal"] = principal
             return await handler(event, data)
