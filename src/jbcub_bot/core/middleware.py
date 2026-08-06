@@ -71,18 +71,45 @@ IMPERSONATED_DEPARTED_HINT = (
     "You are still viewing as {name}. Send /unas to return to your own view."
 )
 
+# A callback alert is capped by Telegram at 200 characters, and aiogram 3.30
+# does not check that client-side -- go over and answerCallbackQuery comes
+# back a TelegramBadRequest instead of showing anything, which is worse than
+# the bare refusal this replaces. DEPARTED_NOTICE alone is 131 of those, so
+# the callback path gets its own short wording instead of that plus a hint.
+CALLBACK_IMPERSONATED_DEPARTED_HINT = (
+    "Still viewing as {name}, who is now departed. Send /unas to return."
+)
+
+# Keeps CALLBACK_IMPERSONATED_DEPARTED_HINT's worst case (a maximally long
+# name) at 121 characters -- comfortably under the 200-character cap rather
+# than merely under it for names seen in tests.
+_MAX_ALERT_NAME = 59
+
+
+def _alert_name(name: str) -> str:
+    if len(name) <= _MAX_ALERT_NAME:
+        return name
+    return name[:_MAX_ALERT_NAME] + "…"
+
 
 async def refuse_impersonated_departed(event, target) -> None:
     """The departed refusal for an `/as` target, plus the way out of the mode.
 
-    One `_refuse` call, not `refuse_departed` followed by a second one: a
-    `CallbackQuery` can only be answered once, and this refusal fires on a
-    button tap as often as on a command. The hint is appended to the same
-    text rather than folded into `DEPARTED_NOTICE` itself, so a real departed
-    student -- who has no mode to leave -- never sees wording that mentions
-    /unas; the caller's own refusal above still sends `DEPARTED_NOTICE`
-    verbatim.
+    A callback gets `CALLBACK_IMPERSONATED_DEPARTED_HINT` -- short, and with
+    the name capped -- rather than `DEPARTED_NOTICE` plus a hint: this fires
+    on a button tap as often as on a command, and the alert cap above leaves
+    no room for the full notice. A message has no such cap, so it keeps
+    `DEPARTED_NOTICE` verbatim, as the caller's own refusal above does: what
+    a departed student sees is the refusal, and that's the point of `/as`.
     """
+    if isinstance(event, CallbackQuery):
+        await _refuse(
+            event,
+            CALLBACK_IMPERSONATED_DEPARTED_HINT.format(
+                name=_alert_name(target.full_name)
+            ),
+        )
+        return
     await _refuse(
         event,
         DEPARTED_NOTICE + "\n\n" +

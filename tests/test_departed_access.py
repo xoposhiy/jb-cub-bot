@@ -171,6 +171,37 @@ async def test_impersonating_a_departed_student_points_to_unas():
     assert any("Eve Expelled" in text and "/unas" in text for text in said)
 
 
+async def test_the_impersonated_callback_alert_stays_under_telegrams_cap():
+    # Regression: the combined DEPARTED_NOTICE + hint used to run 198 +
+    # len(name) chars -- past Telegram's 200-char cap on
+    # answerCallbackQuery.text for any name longer than "Ann Li". aiogram
+    # 3.30 does not validate that client-side, so it would have reached the
+    # API as a TelegramBadRequest and the tap would look dead instead of
+    # refusing. Assert length, not just content: content-only assertions
+    # let this exact bug through 722 times.
+    factory = _session_factory()
+    _seed(factory)
+    await _admin(factory)
+    long_name_tid = 444
+    setup = factory()
+    setup.add(User(
+        last_name="Verylastnamethatislongenoughtobreachthetelegramcap",
+        first_name="Averylongfirstname",
+        matriculation="30000099", telegram_id=long_name_tid,
+        role=Role.STUDENT, primary_cohort="2024",
+        handle_sheet="long", handle_observed="long",
+        departed_at="2026-07-28",
+    ))
+    setup.commit()
+    setup.close()
+    bot, dp = FakeBot(), build_dispatcher(factory)
+    await dp.feed_update(bot, _message_update(bot, 999, f"/as {long_name_tid}"))
+    await dp.feed_update(bot, _callback_update(bot, 999, "dir:privacy"))
+    alerts = [m for m in bot.sent if isinstance(m, AnswerCallbackQuery)]
+    assert len(alerts) == 1
+    assert len(alerts[0].text) <= 200
+
+
 async def test_impersonating_a_student_still_on_the_roster_works():
     # The guard above must not break /as for everyone else.
     factory = _session_factory()
