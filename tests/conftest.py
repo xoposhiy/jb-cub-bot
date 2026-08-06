@@ -38,6 +38,14 @@ def _reset_kb_runtime():
     kb_pdf.reset_cache()
 
 
+@pytest.fixture(autouse=True)
+def _reset_impersonation():
+    from jbcub_bot.core import impersonation
+    impersonation.reset()
+    yield
+    impersonation.reset()
+
+
 @pytest.fixture
 def session():
     engine = create_engine("sqlite:///:memory:")
