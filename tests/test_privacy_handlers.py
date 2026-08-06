@@ -98,15 +98,15 @@ def _stale_callback_update(fake_bot, telegram_id: int, data: str) -> Update:
     return Update(update_id=1, callback_query=cb).as_(fake_bot)
 
 
-def _message_update(fake_bot, telegram_id: int, text: str) -> Update:
+def _message_update(fake_bot, telegram_id: int, text: str, update_id=2) -> Update:
     msg = Message(
-        message_id=1,
+        message_id=100 + update_id,
         date=datetime.now(timezone.utc),
         chat=Chat(id=telegram_id, type="private"),
         from_user=TgUser(id=telegram_id, is_bot=False, first_name="tg"),
         text=text,
     ).as_(fake_bot)
-    return Update(update_id=2, message=msg).as_(fake_bot)
+    return Update(update_id=update_id, message=msg).as_(fake_bot)
 
 
 def _stored_level(factory, field: str):
@@ -275,11 +275,17 @@ async def test_privacy_under_impersonation_updates_the_target():
     fake_bot = FakeBot()
 
     await dp.feed_update(fake_bot,
-                         _message_update(fake_bot, 777, "/as 30009999 /me"),
+                         _message_update(fake_bot, 777, "/as 30009999",
+                                         update_id=1),
+                         dispatcher=dp)
+    await dp.feed_update(fake_bot,
+                         _message_update(fake_bot, 777, "/me", update_id=2),
                          dispatcher=dp)
 
     # Start where the reported bug starts: the target's own profile.
-    shown = fake_bot.sent[1]
+    shown = next(m for m in fake_bot.sent
+                 if "Zakhar Zhukovsky" in getattr(m, "text", "")
+                 and getattr(m, "reply_markup", None) is not None)
     privacy_button = impersonation.callback_data("dir:privacy", "30009999")
     assert privacy_button in [
         button.callback_data

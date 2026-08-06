@@ -7,7 +7,7 @@ manifest = Manifest(
     commands=cmd.specs,
     intents=[],
     min_role=Role.ADMIN,
-    help_text="Admin: see the bot as a given user (/as <ref> <query>).",
+    help_text="Admin: see the bot as a given user (/as <ref>, /unas to return).",
     emoji="🕵️",
 )
 

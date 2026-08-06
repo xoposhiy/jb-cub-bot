@@ -383,26 +383,15 @@ async def test_a_search_under_impersonation_still_reaches_the_fallback():
     dp = build_dispatcher(session_factory=factory)
     fake_bot = FakeBot()
 
-    await dp.feed_update(fake_bot,
-                         _message_update(fake_bot, 777, "/as 30009999 Zhukovsky"),
+    await dp.feed_update(fake_bot, _message_update(fake_bot, 777,
+                                                   "/as 30009999"),
+                         dispatcher=dp)
+    await dp.feed_update(fake_bot, _message_update(fake_bot, 777, "Zhukovsky",
+                                                   update_id=2),
                          dispatcher=dp)
 
     assert any("Zakhar Zhukovsky" in getattr(m, "text", "")
                for m in fake_bot.sent)
-
-
-async def test_cancel_under_impersonation_does_not_crash():
-    # Same missing-state path, reached by a command that needs the state.
-    factory = _session_factory()
-    _seed_admin_and_student(factory)
-    dp = build_dispatcher(session_factory=factory)
-    fake_bot = FakeBot()
-
-    await dp.feed_update(fake_bot,
-                         _message_update(fake_bot, 777, "/as 30009999 /cancel"),
-                         dispatcher=dp)
-
-    assert "Nothing to cancel." in fake_bot.sent[1].text
 
 
 async def test_edit_under_impersonation_updates_the_target():
@@ -411,12 +400,16 @@ async def test_edit_under_impersonation_updates_the_target():
     dp = build_dispatcher(session_factory=factory)
     fake_bot = FakeBot()
 
-    await dp.feed_update(fake_bot,
-                         _message_update(fake_bot, 777, "/as 30009999 /me"),
+    await dp.feed_update(fake_bot, _message_update(fake_bot, 777,
+                                                   "/as 30009999"),
+                         dispatcher=dp)
+    await dp.feed_update(fake_bot, _message_update(fake_bot, 777, "/me",
+                                                   update_id=2),
                          dispatcher=dp)
 
     # Start where the reported bug starts: the target's own profile.
-    shown = fake_bot.sent[1]
+    shown = next(m for m in fake_bot.sent
+                 if "target status" in getattr(m, "text", ""))
     assert "target status" in shown.text   # the target's row, not the admin's
     edit_button = impersonation.callback_data("dir:edit", "30009999")
     assert edit_button in [
@@ -427,7 +420,7 @@ async def test_edit_under_impersonation_updates_the_target():
 
     await dp.feed_update(
         fake_bot,
-        _callback_update(fake_bot, 777, edit_button, update_id=2),
+        _callback_update(fake_bot, 777, edit_button, update_id=3),
         dispatcher=dp,
     )
     edit_screen = _edits(fake_bot)[-1]
@@ -443,12 +436,12 @@ async def test_edit_under_impersonation_updates_the_target():
 
     await dp.feed_update(
         fake_bot,
-        _callback_update(fake_bot, 777, status_button, update_id=3),
+        _callback_update(fake_bot, 777, status_button, update_id=4),
         dispatcher=dp,
     )
     await dp.feed_update(
         fake_bot,
-        _message_update(fake_bot, 777, "admin changed this", update_id=4),
+        _message_update(fake_bot, 777, "admin changed this", update_id=5),
         dispatcher=dp,
     )
 

@@ -55,3 +55,18 @@ def split_callback(value: str | None) -> tuple[str, str | None]:
     if not marker or not payload or not ref:
         return value, None
     return payload, ref
+
+
+_EXIT_COMMAND = "/unas"
+
+
+def is_exit_command(event) -> bool:
+    """True for the message that leaves the mode, which is never impersonated.
+
+    A departed target is refused before any handler runs, so if that refusal
+    covered /unas as well, `/as <departed student>` would be a trap with no way
+    out short of a restart.
+    """
+    text = getattr(event, "text", None) or ""
+    head = text.split(maxsplit=1)[0] if text.split() else ""
+    return head.split("@")[0] == _EXIT_COMMAND

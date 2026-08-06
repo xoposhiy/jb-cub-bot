@@ -1,12 +1,12 @@
-"""End-to-end coverage for /as: real dispatcher, real Message, real handlers.
+"""End-to-end coverage for the mode: real dispatcher, real Message, real
+handlers.
 
-Every other impersonate test mocks model_copy/.as_/propagate_event, so none
-of them prove the re-fed message actually reaches a real handler through a
-real aiogram dispatcher and renders the *target's* view. This test builds a
-real Dispatcher (jbcub_bot.main.build_dispatcher), feeds it a real aiogram
-Message for "/as <matriculation> /me" from an admin, and asserts on the
-handler's real side effect: the student's own /me profile text coming back
-out, proving cmd_me ran with principal swapped to the student.
+Every other impersonate test mocks the handler directly, so none of them prove
+a real aiogram dispatcher carries the mode across separate updates and renders
+the *target's* view. This test builds a real Dispatcher
+(jbcub_bot.main.build_dispatcher), feeds it real aiogram Messages for /as,
+/me and /unas from an admin across several updates, and asserts on each
+handler's real side effect.
 """
 
 from datetime import datetime, timezone
@@ -52,11 +52,12 @@ def _build_session_factory():
     return sessionmaker(bind=engine)
 
 
-def _make_message(fake_bot, telegram_id: int, text: str) -> Message:
+def _make_message(fake_bot, telegram_id: int, text: str,
+                  message_id: int = 1) -> Message:
     chat = Chat(id=telegram_id, type="private")
     tg_user = TgUser(id=telegram_id, is_bot=False, first_name="tg")
     return Message(
-        message_id=1,
+        message_id=message_id,
         date=datetime.now(timezone.utc),
         chat=chat,
         from_user=tg_user,
@@ -64,9 +65,14 @@ def _make_message(fake_bot, telegram_id: int, text: str) -> Message:
     ).as_(fake_bot)
 
 
-async def test_as_command_reaches_real_handler_as_target_student():
-    session_factory = _build_session_factory()
+def _feed(dp, fake_bot, telegram_id, text, update_id):
+    msg = _make_message(fake_bot, telegram_id, text, message_id=update_id)
+    return dp.feed_update(fake_bot, Update(update_id=update_id,
+                                           message=msg).as_(fake_bot))
 
+
+async def test_the_mode_lasts_across_messages_and_then_ends():
+    session_factory = _build_session_factory()
     setup = session_factory()
     setup.add(User(last_name="Adminova", first_name="Anna",
                    telegram_id=777, role=Role.ADMIN))
@@ -77,19 +83,45 @@ async def test_as_command_reaches_real_handler_as_target_student():
     setup.close()
 
     dp = build_dispatcher(session_factory=session_factory)
-
     fake_bot = FakeBot()
-    msg = _make_message(fake_bot, telegram_id=777, text="/as 30009999 /me")
-    update = Update(update_id=1, message=msg).as_(fake_bot)
 
-    await dp.feed_update(fake_bot, update, dispatcher=dp)
+    await _feed(dp, fake_bot, 777, "/as 30009999", 1)
+    await _feed(dp, fake_bot, 777, "/me", 2)
+    texts = [m.text for m in fake_bot.sent]
+    # The key assertion: cmd_me really ran with the principal swapped, one
+    # whole update after the command that swapped it.
+    assert any("Zakhar Zhukovsky" in t and "Cohort: cohort-x" in t
+               for t in texts)
+
+    # Still in the mode two updates later -- this is what "sticky" means.
+    await _feed(dp, fake_bot, 777, "/me", 3)
+    assert sum("Cohort: cohort-x" in t for t in
+               [m.text for m in fake_bot.sent]) == 2
+
+    await _feed(dp, fake_bot, 777, "/unas", 4)
+    await _feed(dp, fake_bot, 777, "/me", 5)
+    assert "Anna Adminova" in [m.text for m in fake_bot.sent][-1]
+
+
+async def test_an_admin_command_is_refused_inside_the_mode():
+    session_factory = _build_session_factory()
+    setup = session_factory()
+    setup.add(User(last_name="Adminova", first_name="Anna",
+                   telegram_id=777, role=Role.ADMIN))
+    setup.add(User(last_name="Zhukovsky", first_name="Zakhar",
+                   matriculation="30009999", telegram_id=222,
+                   role=Role.STUDENT))
+    setup.commit()
+    setup.close()
+
+    dp = build_dispatcher(session_factory=session_factory)
+    fake_bot = FakeBot()
+
+    await _feed(dp, fake_bot, 777, "/as 30009999", 1)
+    await _feed(dp, fake_bot, 777, "/help", 2)
+    await _feed(dp, fake_bot, 777, "/as 30009999", 3)
 
     texts = [m.text for m in fake_bot.sent]
-    assert len(texts) == 2
-    assert texts[0] == "\U0001f464 Showing as Zakhar Zhukovsky:"
-    # This is the key assertion: the *target* handler (cmd_me) really ran
-    # with the swapped principal and rendered the student's own profile --
-    # not just that propagate_event was awaited.
-    assert "Zakhar Zhukovsky" in texts[1]
-    assert "Cohort: cohort-x" in texts[1]
-    assert "Role: Student" in texts[1]
+    assert "Admins only." in texts        # /as itself, inside the mode
+    help_text = next(t for t in texts if "/me" in t)
+    assert "/sync" not in help_text       # the student's /help, not the admin's

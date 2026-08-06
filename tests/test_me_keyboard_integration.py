@@ -45,15 +45,15 @@ def _seed(factory):
     setup.close()
 
 
-def _message_update(fake_bot, telegram_id: int, text: str) -> Update:
+def _message_update(fake_bot, telegram_id: int, text: str, update_id=1) -> Update:
     msg = Message(
-        message_id=1,
+        message_id=100 + update_id,
         date=datetime.now(timezone.utc),
         chat=Chat(id=telegram_id, type="private"),
         from_user=TgUser(id=telegram_id, is_bot=False, first_name="tg"),
         text=text,
     ).as_(fake_bot)
-    return Update(update_id=1, message=msg).as_(fake_bot)
+    return Update(update_id=update_id, message=msg).as_(fake_bot)
 
 
 def _callbacks(method):
@@ -82,13 +82,18 @@ async def test_me_under_impersonation_has_targeted_privacy_button():
     fake_bot = FakeBot()
 
     await dp.feed_update(fake_bot,
-                         _message_update(fake_bot, 777, "/as 30009999 /me"),
+                         _message_update(fake_bot, 777, "/as 30009999"),
+                         dispatcher=dp)
+    await dp.feed_update(fake_bot,
+                         _message_update(fake_bot, 777, "/me", update_id=2),
                          dispatcher=dp)
 
-    assert "Zakhar Zhukovsky" in fake_bot.sent[1].text  # the target's profile
+    shown = next(m for m in fake_bot.sent
+                 if "Zakhar Zhukovsky" in getattr(m, "text", "")
+                 and getattr(m, "reply_markup", None) is not None)
     assert impersonation.callback_data(
         PRIVACY_CALLBACK, "30009999"
-    ) in _callbacks(fake_bot.sent[1])
+    ) in _callbacks(shown)
 
 
 async def test_me_offers_the_edit_screen():
@@ -110,9 +115,15 @@ async def test_me_under_impersonation_has_targeted_edit_button():
     fake_bot = FakeBot()
 
     await dp.feed_update(fake_bot,
-                         _message_update(fake_bot, 777, "/as 30009999 /me"),
+                         _message_update(fake_bot, 777, "/as 30009999"),
+                         dispatcher=dp)
+    await dp.feed_update(fake_bot,
+                         _message_update(fake_bot, 777, "/me", update_id=2),
                          dispatcher=dp)
 
+    shown = next(m for m in fake_bot.sent
+                 if "Zakhar Zhukovsky" in getattr(m, "text", "")
+                 and getattr(m, "reply_markup", None) is not None)
     assert impersonation.callback_data(
         EDIT_CALLBACK, "30009999"
-    ) in _callbacks(fake_bot.sent[1])
+    ) in _callbacks(shown)

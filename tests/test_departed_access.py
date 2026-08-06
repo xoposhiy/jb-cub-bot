@@ -144,17 +144,15 @@ async def _admin(factory, telegram_id=999):
 
 async def test_impersonating_a_departed_student_shows_their_block():
     # /as exists to see the bot as someone else sees it, and what a departed
-    # student sees is the refusal. Rendering their profile instead would tell an
-    # admin their access still works.
+    # student sees is the refusal. Rendering their profile instead would tell
+    # an admin their access still works.
     factory = _session_factory()
     _seed(factory)
     await _admin(factory)
     bot, dp = FakeBot(), build_dispatcher(factory)
-    await dp.feed_update(bot, _message_update(bot, 999, f"/as {DEPARTED_TID} /me"),
-                         dispatcher=dp)
+    await dp.feed_update(bot, _message_update(bot, 999, f"/as {DEPARTED_TID}"))
+    await dp.feed_update(bot, _message_update(bot, 999, "/me"))
     said = _texts(bot)
-    # "Showing as Eve Expelled:" is fine -- cmd_as names the target before
-    # handing over. What must not come back is her profile.
     assert DEPARTED_NOTICE in said
     assert not any("Cohort: 2024" in text for text in said)
 
@@ -165,11 +163,23 @@ async def test_impersonating_a_student_still_on_the_roster_works():
     _seed(factory)
     await _admin(factory)
     bot, dp = FakeBot(), build_dispatcher(factory)
-    await dp.feed_update(bot, _message_update(bot, 999, f"/as {ACTIVE_TID} /me"),
-                         dispatcher=dp)
+    await dp.feed_update(bot, _message_update(bot, 999, f"/as {ACTIVE_TID}"))
+    await dp.feed_update(bot, _message_update(bot, 999, "/me"))
     said = _texts(bot)
     assert DEPARTED_NOTICE not in said
     assert any("Ivan" in text for text in said)
+
+
+async def test_the_exit_is_not_swallowed_by_a_departed_targets_refusal():
+    # Regression: the refusal runs before any handler, so without an exemption
+    # /unas would be refused too and the admin would be stuck until a restart.
+    factory = _session_factory()
+    _seed(factory)
+    await _admin(factory)
+    bot, dp = FakeBot(), build_dispatcher(factory)
+    await dp.feed_update(bot, _message_update(bot, 999, f"/as {DEPARTED_TID}"))
+    await dp.feed_update(bot, _message_update(bot, 999, "/unas"))
+    assert "Back to your own view." in _texts(bot)[-1]
 
 
 async def test_a_bootstrap_admin_is_never_locked_out_by_the_mark():

@@ -135,7 +135,8 @@ class PrincipalMiddleware(BaseMiddleware):
                     return None
             ref = data.get("impersonate_ref")
             if ref is None and principal is not None \
-                    and principal.role is Role.ADMIN:
+                    and principal.role is Role.ADMIN \
+                    and not impersonation.is_exit_command(event):
                 ref = impersonation.ref_for(user.id)
             if ref is None and isinstance(event, CallbackQuery):
                 _, ref = impersonation.split_callback(event.data)

@@ -280,29 +280,31 @@ async def test_ask_with_an_inline_question_answers_immediately(monkeypatch):
     assert not any("Ask me anything" in t for t in _texts(bot))
 
 
-async def test_as_can_ask_the_knowledge_base_one_shot(monkeypatch):
-    """/as propagates with no FSMContext to hold a session in, so /ask must
-    answer inline instead of telling the admin to open a direct chat -- the
-    bug this guards against."""
+async def test_the_knowledge_base_answers_inside_the_mode(monkeypatch):
     dp, bot, _, asked = _setup(monkeypatch)
 
+    await dp.feed_update(bot, _message(bot, ADMIN_ID, f"/as {STUDENT_ID}"),
+                         dispatcher=dp)
     await dp.feed_update(
-        bot, _message(bot, ADMIN_ID, f"/as {STUDENT_ID} /ask how many retakes?"),
+        bot, _message(bot, ADMIN_ID, "/ask how many retakes?", update_id=2),
         dispatcher=dp)
 
     assert asked == ["how many retakes?"]
-    assert "Policies for Bachelor Studies" in _texts(bot)[-1]
-    assert not any("direct chat" in t for t in _texts(bot))
+    assert any("Policies for Bachelor Studies" in t for t in _texts(bot))
 
 
-async def test_as_with_ask_but_no_question_asks_for_one(monkeypatch):
+async def test_a_session_inside_the_mode_survives_the_next_message(monkeypatch):
+    # The one-shot /as had no FSMContext, so a second question was impossible.
     dp, bot, _, asked = _setup(monkeypatch)
 
-    await dp.feed_update(
-        bot, _message(bot, ADMIN_ID, f"/as {STUDENT_ID} /ask"), dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, ADMIN_ID, f"/as {STUDENT_ID}"),
+                         dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, ADMIN_ID, "/ask", update_id=2),
+                         dispatcher=dp)
+    await dp.feed_update(bot, _message(bot, ADMIN_ID, "how many retakes?",
+                                       update_id=3), dispatcher=dp)
 
-    assert asked == []
-    assert any("Add the question" in t for t in _texts(bot))
+    assert asked == ["how many retakes?"]
 
 
 async def test_the_reader_gets_the_agents_words_unedited(monkeypatch):
