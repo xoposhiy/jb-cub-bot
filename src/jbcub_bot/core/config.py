@@ -31,10 +31,13 @@ class Settings(BaseSettings):
     kb_llm_api_key: str = ""
     kb_llm_base_url: str = ""
     kb_llm_model: str = "gpt-5.6-luna"
-    # OpenAI's small models refuse function tools on chat completions unless
-    # reasoning is off, and this agent is nothing but function tools. Empty
-    # omits the parameter for a gateway whose model does not understand it.
-    kb_llm_reasoning_effort: str = "none"
+    # The lowest setting this model actually accepts. The API's scale has
+    # "minimal" between "none" and this, and our endpoint rejects it -- do not
+    # step down to it. Anything above "none" is also why the agent talks to the
+    # Responses API: on chat completions this endpoint refuses function tools
+    # with reasoning on at all. Empty omits the parameter for a gateway whose
+    # model has no such notion.
+    kb_llm_reasoning_effort: str = "low"
     kb_repo: str = "xoposhiy/cub-kb"
     kb_ttl_seconds: int = 3600
     # A brake on the agent as a whole, not on any one asker -- see

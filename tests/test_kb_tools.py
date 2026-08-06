@@ -1,5 +1,7 @@
 """Three functions over a dict. The point of the design is that a bad path is a
 missing key rather than a filesystem call, so that is what these prove."""
+from datetime import UTC, datetime
+
 from jbcub_bot.core.kb_snapshot import Note, Snapshot, Source
 from jbcub_bot.features.kb import tools
 
@@ -132,6 +134,22 @@ def test_a_folder_listing_survives_past_a_notes_clip_limit():
     assert len(listing) > tools.MAX_CHARS
     assert "kb/big/note-059.md" in listing, "the tail is still there"
     assert not listing.endswith(tools.TRUNCATION_MARK)
+
+
+# --- the clock ----------------------------------------------------------------
+
+def test_the_clock_names_the_weekday_the_date_and_the_zone():
+    """The weekday because "this semester" is answered from the date, and a
+    model that has to derive the day of the week gets it wrong."""
+    text = tools.current_datetime(datetime(2026, 8, 6, 15, 17, tzinfo=UTC))
+
+    assert text == "Thursday, 06 August 2026, 15:17 UTC"
+
+
+def test_the_trace_prints_the_clock_rather_than_counting_its_lines():
+    text = tools.current_datetime(datetime(2026, 8, 6, 15, 17, tzinfo=UTC))
+
+    assert tools.summarize_result("current_datetime", text) == text
 
 
 # --- what a call came back with -----------------------------------------------

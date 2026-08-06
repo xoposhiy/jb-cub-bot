@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 
 from jbcub_bot.core.kb_snapshot import Note, Snapshot
 
@@ -36,6 +37,20 @@ _UNKNOWN = (_NO_NOTE + " {path}. Call list_notes to see which notes exist.")
 
 def clip(text: str, limit: int = MAX_CHARS) -> str:
     return text if len(text) <= limit else text[:limit] + TRUNCATION_MARK
+
+
+def current_datetime(now: datetime) -> str:
+    """The clock, as a tool result rather than a line in the prompt.
+
+    A tool because the prompt is what the provider caches, and a prompt that
+    says what time it is stops matching itself a minute later -- a session's
+    second question would then pay to write the whole history again. Asked for
+    instead of given, the clock lands in the conversation, where it is written
+    once and never changes.
+
+    `now` is the caller's to supply, the way `sheets` takes `today`.
+    """
+    return f"{now:%A, %d %B %Y}, {now:%H:%M} UTC"
 
 
 def list_notes(snapshot: Snapshot, path_prefix: str = "") -> str:
@@ -213,6 +228,8 @@ def summarize_result(name: str, output: str) -> str:
     """
     text = output.strip()
     clipped = text.endswith(TRUNCATION_MARK.strip())
+    if name == "current_datetime":
+        return text  # already three words, and the one worth reading back
     if name == "read_note":
         if text.startswith(_NO_NOTE):
             return "no such note"

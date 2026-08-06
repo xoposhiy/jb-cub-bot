@@ -48,13 +48,21 @@ class OpsLog:
 
 
 def describe_sender(principal, tg_user) -> str:
-    """Who asked, from both sides: the roster row and Telegram itself."""
+    """Who asked, from both sides: the roster row and Telegram itself.
+
+    The handle goes in bare, without its `@`. Written with one, Telegram reads
+    it as a mention and notifies that person -- so an admin watching this chat
+    was pinged by their own every question. A ping in this feed is reserved for
+    the entries someone has to act on, which are crashes and the rate limit,
+    and those are `admin_mention`'s doing rather than a side effect of naming
+    the sender.
+    """
     parts: list[str] = []
     if principal is not None:
         parts.append(principal.full_name or "(no name)")
     if tg_user is not None:
         if tg_user.username:
-            parts.append(f"@{tg_user.username}")
+            parts.append(tg_user.username)
         parts.append(str(tg_user.id))
     if principal is not None:
         parts.append(principal.role.value)

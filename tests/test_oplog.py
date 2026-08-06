@@ -71,7 +71,7 @@ def test_a_miss_names_the_person_the_query_and_the_answer():
                        principal=_student(),
                        tg_user=SimpleNamespace(id=777, username="ivan_i"))
     assert "Ivan Ivanov" in text
-    assert "@ivan_i" in text
+    assert "ivan_i" in text
     assert "777" in text
     assert "Student" in text
     assert "Иванов Пётр" in text
@@ -109,8 +109,17 @@ def test_a_knowledge_base_entry_names_the_asker_and_quotes_the_question():
                               tg_user=SimpleNamespace(id=777,
                                                       username="ivan_i"))
     assert "Ivan Ivanov" in text
-    assert "@ivan_i" in text
+    assert "ivan_i" in text
     assert "«how many retakes?»" in text
+
+
+def test_a_handle_is_written_without_the_at_that_would_ping_its_owner():
+    """An admin reading this chat used to be notified by their own questions:
+    `@handle` is a mention, and every entry names the sender."""
+    text = format_kb_question("how many retakes?", principal=_student(),
+                              tg_user=SimpleNamespace(id=777,
+                                                      username="ivan_i"))
+    assert "@" not in text
 
 
 def test_a_pasted_wall_of_a_question_is_clipped_too():

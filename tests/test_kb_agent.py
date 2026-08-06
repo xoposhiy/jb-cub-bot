@@ -3,12 +3,14 @@
 The framework owns the tool loop, so the seam is the model: a stub that returns
 scripted responses proves the wiring without a network call or an API key.
 """
+import re
+
 import pytest
-from agents import ModelResponse, OpenAIChatCompletionsModel, RunContextWrapper
+from agents import ModelResponse, OpenAIResponsesModel, RunContextWrapper
 from agents.items import TResponseOutputItem
 from agents.models.interface import Model, ModelTracing
 from agents.usage import Usage
-from openai import AsyncOpenAI, Omit
+from openai import AsyncOpenAI
 from openai.types.responses import (
     ResponseFunctionToolCall,
     ResponseOutputMessage,
@@ -289,6 +291,36 @@ async def test_the_prompt_maps_folders_and_never_filenames():
     assert "list_notes" in text, "and it says how to get the filenames"
 
 
+async def test_the_clock_is_a_tool_the_agent_can_actually_call():
+    """It takes no arguments, which is the one shape of tool this agent did not
+    have -- worth driving end to end rather than trusting the schema."""
+    model = StubModel([
+        [_call("current_datetime", "{}")],
+        [_text("The spring semester runs to 30 June.")],
+    ])
+
+    out = await kb_agent.ask(_agent(model), _snapshot(),
+                             "What courses do I have this semester?", [])
+
+    assert out.text == "The spring semester runs to 30 June."
+    clock = out.stats.calls[0]
+    assert clock.name == "current_datetime"
+    assert re.match(r"^\w+, \d\d \w+ \d{4}, \d\d:\d\d UTC$", clock.result), \
+        clock.result
+
+
+async def test_the_prompt_carries_no_clock_and_says_where_to_get_one():
+    """The prompt is the cached prefix. A date in it stops matching itself the
+    next day -- and a time, within the same session -- so the whole history
+    behind it has to be written again. The clock is a tool for that reason."""
+    ctx = RunContextWrapper(kb_agent.Ask(snapshot=_snapshot()))
+
+    text = kb_agent.instructions(ctx, None)
+
+    assert not re.search(r"\b20\d\d\b|\b\d\d:\d\d\b", text), "no date, no time"
+    assert "current_datetime" in text
+
+
 async def test_an_anonymous_run_says_nothing_about_the_asker():
     ctx = RunContextWrapper(kb_agent.Ask(snapshot=_snapshot()))
 
@@ -517,12 +549,21 @@ def test_the_numbered_list_names_the_document_and_where_in_it():
     ]
 
 
-def test_reasoning_is_off_by_default():
-    """Function tools plus reasoning is a 400 from OpenAI's small models on
-    chat completions, and this agent is nothing but function tools."""
+def test_reasoning_defaults_to_the_lowest_setting_the_model_accepts():
+    """Not "minimal", which sits below this on the API's scale and comes back
+    rejected from our endpoint."""
     built = kb_agent.build_agent("m", client=None, model=StubModel([]))
 
-    assert built.model_settings.reasoning.effort == "none"
+    assert built.model_settings.reasoning.effort == "low"
+
+
+def test_the_agent_talks_to_the_responses_api():
+    """Chat completions is the surface every gateway has, but ours refuses
+    function tools there with reasoning on, and this agent is nothing but
+    function tools. Reasoning is worth more than the portability."""
+    built = kb_agent.build_agent("m", client=AsyncOpenAI(api_key="test"))
+
+    assert isinstance(built.model, OpenAIResponsesModel)
 
 
 def test_an_empty_reasoning_effort_omits_the_parameter():
@@ -538,10 +579,13 @@ class _Captured(Exception):
     """Stops the request at the wire, once its parameters are recorded."""
 
 
-async def test_the_output_cap_is_sent_as_max_completion_tokens(monkeypatch):
-    """OpenAI's current models answer `max_tokens` on chat completions with a
-    400 and name the replacement, so the cap has to travel under the new name
-    and the old one must not be in the request at all."""
+async def test_the_output_cap_is_sent_as_max_output_tokens(monkeypatch):
+    """The cap has to reach the wire under the name this endpoint knows.
+
+    `max_completion_tokens` is the chat-completions spelling; here it would be
+    merged into the call verbatim as an argument `responses.create` has never
+    heard of, so getting this wrong is a TypeError rather than an ignored
+    field."""
     sent: dict = {}
 
     async def capture(**kwargs):
@@ -549,19 +593,19 @@ async def test_the_output_cap_is_sent_as_max_completion_tokens(monkeypatch):
         raise _Captured
 
     client = AsyncOpenAI(api_key="test")
-    monkeypatch.setattr(client.chat.completions, "create", capture)
-    model = OpenAIChatCompletionsModel(model="gpt-5.6-luna",
-                                       openai_client=client)
+    monkeypatch.setattr(client.responses, "create", capture)
+    model = OpenAIResponsesModel(model="gpt-5.6-luna", openai_client=client)
 
     with pytest.raises(_Captured):
         await model.get_response(
             system_instructions="rules", input="q",
-            model_settings=kb_agent._model_settings("none"),
+            model_settings=kb_agent._model_settings("low"),
             tools=[], output_schema=None, handoffs=[],
             tracing=ModelTracing.DISABLED)
 
-    assert sent["max_completion_tokens"] == kb_agent.MAX_OUTPUT_TOKENS
-    assert isinstance(sent["max_tokens"], Omit), "the rejected spelling"
+    assert sent["max_output_tokens"] == kb_agent.MAX_OUTPUT_TOKENS
+    assert "max_completion_tokens" not in sent, "the chat-completions spelling"
+    assert sent["reasoning"].effort == "low"
 
 
 def test_no_runtime_without_the_llm_api_key():

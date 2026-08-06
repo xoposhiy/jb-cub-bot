@@ -1,4 +1,4 @@
-"""The agent: three tools, a map of the base, and a hard turn budget.
+"""The agent: four tools, a map of the base, and a hard turn budget.
 
 The framework owns the tool cycle and the schemas it derives from these
 functions' signatures, so this module holds the tools, the prompts and the two
@@ -22,21 +22,25 @@ makes the extra turns nearly free; a leaner prompt for the last one would save
 a couple of thousand tokens and forfeit the discount on the whole history.
 
 Two of the framework's defaults are deliberately not used. The model is pinned
-to the chat-completions class over our own client rather than the Responses API,
-because chat completions is the surface every OpenAI-compatible gateway has. And
-tracing is switched off: otherwise every run is exported to OpenAI, which is
-both a leak and an error when the key belongs to a proxy.
+to the Responses class over our own client rather than left to the framework's
+own default plumbing. Chat completions would be the more portable choice --
+it is the surface every OpenAI-compatible gateway has -- but our endpoint
+refuses function tools there unless reasoning is switched off entirely, and this
+agent is nothing but function tools. Reasoning is worth more than the
+portability. And tracing is switched off: otherwise every run is exported to
+OpenAI, which is both a leak and an error when the key belongs to a proxy.
 """
 from __future__ import annotations
 
 import json
 import logging
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from agents import (
     Agent,
     ModelSettings,
-    OpenAIChatCompletionsModel,
+    OpenAIResponsesModel,
     RunContextWrapper,
     Runner,
     ToolCallItem,
@@ -57,8 +61,10 @@ set_tracing_disabled(True)
 
 # Eight rather than six because the prompt carries folders, not filenames: a
 # grounded answer now costs a list_notes hop before the read, and a first guess
-# at the wrong folder costs another.
-MAX_TURNS = 8
+# at the wrong folder costs another. Nine because the clock is asked for rather
+# than given, so a question about this semester spends a turn before the search
+# even starts. A ceiling costs nothing until it is reached.
+MAX_TURNS = 9
 # One call to choose_sources and one closing word. A picker that wants more
 # than that has misunderstood the question, and its answer is already recorded.
 PICK_TURNS = 3
@@ -71,9 +77,10 @@ CUT_SHORT = ("I had to stop searching before I found a grounded answer — the "
 # rules that are about *this* caller rather than about the base.
 SYSTEM_RULES = """\
 You answer questions about the university programs from a knowledge base you \
-read through three tools: list_notes, search_notes and read_note. A fourth, \
-choose_sources, belongs to a question that comes after your answer — leave it \
-alone until you are asked.
+read through three tools: list_notes, search_notes and read_note. Two more are \
+not about the base: current_datetime, for when the answer turns on what day it \
+is, and choose_sources, which belongs to a question that comes after your \
+answer — leave that one alone until you are asked.
 
 Finding things:
 - You are given the base's folders. Call list_notes on the one that looks \
@@ -83,6 +90,11 @@ whole base.
 - Not recognizing a name, an institution or a term is a reason to search for \
 it. Before you tell the reader the base does not \
 cover something, search_notes for the term itself across the whole base.
+- You are not told what day it is. When the question leaves the dates implied \
+— "this semester", "next year", "has the deadline passed" — call \
+current_datetime first. Then work out which term or academic year that falls \
+in from the calendar in the notes rather than assuming one, and say which one \
+you took it to mean.
 
 Answering:
 - Answer only from notes you actually read in this conversation. Never answer \
@@ -200,6 +212,15 @@ def read_note(ctx: RunContextWrapper[Ask], path: str) -> str:
 
 
 @function_tool(strict_mode=False)
+def current_datetime() -> str:
+    """Today's date and the time, in UTC. Call it when the answer depends on
+    what day it is — "this semester", "next year", a deadline that may have
+    passed. It says nothing about the knowledge base.
+    """
+    return tools.current_datetime(datetime.now(UTC))
+
+
+@function_tool(strict_mode=False)
 def choose_sources(ctx: RunContextWrapper[Ask], numbers: list[int]) -> str:
     """Name the sources your answer rests on, by number. Only when asked.
 
@@ -237,7 +258,11 @@ def instructions(ctx: RunContextWrapper[Ask], agent: Agent) -> str:
     """Rules, who is asking, and a map of the base's folders.
 
     Dynamic because /kb_reload can move the snapshot between two questions and
-    because the asker changes every run; the agent itself is built once.
+    because the asker changes every run; the agent itself is built once. What
+    is deliberately *not* here is the clock: this text is the prefix every
+    request re-sends and the provider caches, and anything in it that moves on
+    its own invalidates the cache for everything behind it. The date is a tool
+    instead -- see `tools.current_datetime`.
     """
     parts = [SYSTEM_RULES]
     if ctx.context.about:
@@ -245,7 +270,8 @@ def instructions(ctx: RunContextWrapper[Ask], agent: Agent) -> str:
             f"The person asking — {ctx.context.about}.\nUse this to pick the "
             "right programme handbook and calendar year instead of asking them "
             "which one they mean. Ignore it when the question is plainly about "
-            "something else."
+            "something else. Example: 2025-2028 means that by default the user is interested in the handbook of year 2025; "
+            "but Role=Admin means that the user might be interested in any handbook versions."
         )
     parts.append("Folders in the base — one per source document:\n\n"
                  f"{ctx.context.snapshot.map_text}")
@@ -253,30 +279,31 @@ def instructions(ctx: RunContextWrapper[Ask], agent: Agent) -> str:
 
 
 def _model_settings(reasoning_effort: str) -> ModelSettings:
-    """The output cap travels as `max_completion_tokens`, not `max_tokens`.
+    """`max_tokens` here reaches the Responses API as `max_output_tokens`.
 
-    ModelSettings.max_tokens is spelled `max_tokens` on the wire, and OpenAI's
-    current models reject that on chat completions -- a 400 on the very first
-    turn, naming the replacement. So the field stays unset and the cap goes
-    through extra_args under the name the endpoint asked for; every
-    OpenAI-compatible gateway worth pointing this at understands it too.
+    Which is the name that endpoint knows, so the field carries the cap plainly.
+    On chat completions the same field went out under its own name and came back
+    a 400, and the cap had to be smuggled through extra_args as
+    `max_completion_tokens` instead. Nothing is left of that: extra_args is
+    merged into the request verbatim, so the old spelling would now be an
+    argument `responses.create` has never heard of.
     """
     return ModelSettings(
-        extra_args={"max_completion_tokens": MAX_OUTPUT_TOKENS},
+        max_tokens=MAX_OUTPUT_TOKENS,
         reasoning=Reasoning(effort=reasoning_effort) if reasoning_effort
         else None,
     )
 
 
 def build_agent(model_name: str, client, model=None,
-                reasoning_effort: str = "none") -> Agent:
+                reasoning_effort: str = "low") -> Agent:
     """`model` is the test seam: pass a stub and `client` is ignored.
 
-    `reasoning_effort` is sent as the request's `reasoning_effort`. It defaults
-    to "none" because OpenAI's small models reject function tools on chat
-    completions with reasoning on -- and tools are the only thing this agent
-    does. An empty string leaves the parameter out of the request entirely,
-    which is what a gateway fronting a model with no such notion needs.
+    `reasoning_effort` is the effort on the request's `reasoning` object. "low"
+    is the lowest value this model takes: the API's scale puts "minimal" below
+    it, and the endpoint rejects that one. An empty string leaves the parameter
+    out of the request entirely, which is what a gateway fronting a model with
+    no such notion needs.
 
 
     choose_sources is on the list from the first turn even though it is no use
@@ -287,9 +314,10 @@ def build_agent(model_name: str, client, model=None,
     return Agent(
         name="kb-search",
         instructions=instructions,
-        tools=[list_notes, search_notes, read_note, choose_sources],
-        model=model or OpenAIChatCompletionsModel(model=model_name,
-                                                  openai_client=client),
+        tools=[list_notes, search_notes, read_note, current_datetime,
+               choose_sources],
+        model=model or OpenAIResponsesModel(model=model_name,
+                                            openai_client=client),
         model_settings=_model_settings(reasoning_effort),
     )
 
