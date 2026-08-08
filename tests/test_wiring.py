@@ -251,7 +251,7 @@ async def test_text_in_a_legacy_state_is_answered_once_by_the_legacy_handler(
         User.telegram_id == STUDENT_ID)).one().github_self
     read.close()
     assert saved == "Ivanov"
-    assert _edits(bot) == [text for text in _edits(bot) if "GitHub: Ivanov" in text]
+    assert all("GitHub: Ivanov" in text for text in _edits(bot))
     assert len(_edits(bot)) == 1
     assert not any("No one found." in text or "Several people match" in text
                    for text in _replies(bot))
@@ -327,6 +327,51 @@ async def test_a_command_registered_after_the_mount_is_dispatched(probe):
     # is built from the FSMContext aiogram resolved, and `oplog` from the
     # per-update Bot.
     assert isinstance(dialog, Dialog) and isinstance(oplog, OpsLog)
+
+
+@pytest.mark.parametrize("written, arg", [
+    ("/probe tail", "tail"),
+    # Telegram appends the bot's name to every command tapped in a group.
+    ("/probe@jbcub_bot tail", "tail"),
+    # Any whitespace splits, so a command pasted off a wiki still arrives.
+    ("/probe\ntail", "tail"),
+    ("/probe\n", ""),
+])
+async def test_the_filter_and_the_dispatcher_read_a_command_the_same_way(
+        probe, written, arg):
+    """Both sides call `pipeline.command_of`, and this is why they must.
+
+    The filter answering True is a promise that `_run_command` will find the
+    same name. Two readings that drifted apart would fail silently and only on
+    the awkward forms: the entry point takes the update off the legacy router
+    that owned it, finds nothing under its own name for it, and answers
+    "I don't know /probe." So the handler running *at all* here is the
+    assertion -- it means both readings agreed -- and `arg` is the second one.
+    """
+    dp = _build()
+    probe.install(dp)
+    bot = FakeBot()
+
+    await dp.feed_update(bot, _message(bot, written))
+
+    assert _replies(bot) == ["probe command"]
+    assert [(kind, seen_arg) for kind, _, _, seen_arg in probe.seen] == \
+        [("command", arg)]
+
+
+async def test_a_command_in_a_caption_reads_the_same_way_too(probe):
+    """The one form that is not text at all. `nl_fallback` never saw it; both
+    the filter and the pipeline read `message.caption` when `text` is None."""
+    dp = _build()
+    probe.install(dp)
+    bot = FakeBot()
+    photo = [PhotoSize(file_id="f", file_unique_id="u", width=1, height=1)]
+
+    await dp.feed_update(bot, _message(bot, None, caption="/probe tail",
+                                       photo=photo))
+
+    assert _replies(bot) == ["probe command"]
+    assert probe.seen[0][3] == "tail"
 
 
 async def test_a_button_registered_after_the_mount_is_dispatched(probe):

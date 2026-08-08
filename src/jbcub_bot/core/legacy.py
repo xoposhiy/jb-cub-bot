@@ -40,7 +40,7 @@ from jbcub_bot.core.buttons import match
 from jbcub_bot.core.contract import CANCEL_COMMAND, TEXT, Registry
 from jbcub_bot.core.intents import Intent, intent_allowed
 from jbcub_bot.core.loader import LoadedFeature
-from jbcub_bot.core.pipeline import LEGACY
+from jbcub_bot.core.pipeline import LEGACY, command_of
 
 logger = logging.getLogger(__name__)
 
@@ -126,16 +126,26 @@ def core_owns_message(registry: Registry,
     # never appear in `registry.commands()`, and the core answers it itself.
     # `directory` still owns one until task 10, and only its answer can redraw
     # the edit screen the sender is looking at.
+    #
+    # The constraint that buys, which task 10 lifts: while `directory` is
+    # legacy, `/cancel` never reaches the core, so **a migrated feature's
+    # dialog cannot be cancelled** -- `features/directory/edit.py`'s handler is
+    # not state-filtered and answers "Nothing to cancel." to everyone. Nothing
+    # in the planned order trips over it (`help` and `impersonate` declare no
+    # dialog), but task 8 must not add one and ship a dead `/cancel`.
     claimed_cancel = any(spec.name == CANCEL_COMMAND
                          for feature in loaded if feature.legacy
                          for spec in feature.manifest.commands)
 
     async def owned(message: Message, raw_state: str | None = None) -> bool:
-        # The same reading as `pipeline.take_message`: a command in a caption is
-        # just as deliberate an address as a command typed on its own.
-        text = message.text or message.caption or ""
-        if text.startswith("/"):
-            name = text.split(maxsplit=1)[0][1:].split("@")[0]
+        # `pipeline`'s own parse, not a second one: this returning True is a
+        # promise that `_run_command` will look up the same name, and two
+        # readings that drifted apart would decline the update to a router
+        # that no longer owns it. A caption counts, because a command in a
+        # caption is as deliberate an address as one typed on its own.
+        command = command_of(message)
+        if command is not None:
+            name, _ = command
             if name == CANCEL_COMMAND:
                 return not claimed_cancel
             # A command the registry does not know is declined rather than
@@ -153,6 +163,14 @@ def core_owns_message(registry: Registry,
         # `raw_state` is aiogram's own, defaulted the way `StateFilter` defaults
         # it: a message with no sender -- which only a group can produce --
         # resolves no FSM context, so `data` carries no state at all.
+        #
+        # Note what this takes that `nl_fallback` did not: it had `F.text`, so
+        # a photo or a document went straight to the sub-routers, and here the
+        # core takes those too. Safe only because every non-command
+        # `@router.message` left in `features/` is state-gated
+        # (`features/kb/handlers.py`, `features/directory/edit.py`) and so is
+        # already declined by the line below -- a legacy router that wanted a
+        # bare upload would starve. Nothing may add one; migrate it instead.
         return raw_state is None or raw_state in registry.dialogs()
 
     return owned

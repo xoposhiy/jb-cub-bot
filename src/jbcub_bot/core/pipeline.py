@@ -50,6 +50,30 @@ NOTHING_TO_CANCEL = "Nothing to cancel."
 CANCELLED = "Cancelled."
 
 
+def command_of(message: Message) -> tuple[str, str] | None:
+    """The command a message addresses and its tail, or None for a non-command.
+
+    One reading, in one place, because two would be a silent routing hole:
+    `core/legacy.py`'s filter returning True is a promise that `_run_command`
+    will find the same name, and a divergence between them would take the
+    update off the legacy router that owned it only to answer "I don't know
+    /x." The pair comes back together so neither caller parses twice.
+    """
+    # aiogram's Command filter matches text *or* caption, so a photo posted
+    # with "/sync 2024" as its caption is just as deliberate an address as
+    # typing the command -- see the same reading in `core/middleware.py`.
+    text = message.text or message.caption or ""
+    if not text.startswith("/"):
+        return None
+    # Split on any whitespace, the way aiogram's own Command filter does, so a
+    # command pasted with a trailing newline is still that command. `text`
+    # starts with "/", so there is always a first word.
+    head, *rest = text.split(maxsplit=1)
+    # "/me@jbcub_bot" is the same command: Telegram appends the bot's name to
+    # every command tapped in a group.
+    return head[1:].split("@")[0], rest[0].strip() if rest else ""
+
+
 async def handle_message(registry: Registry, message: Message, *, principal,
                          session, bot, impersonator, dialog, oplog) -> None:
     """The whole order for one message: a command, the sender's own dialog, the
@@ -77,14 +101,11 @@ async def take_message(registry: Registry, message: Message, *, principal,
     # crashes mid-walk leaves None as well, which is the truth -- nothing took
     # the message.
     registry.record_taker(message.chat.id, None)
-    # aiogram's Command filter matches text *or* caption, so a photo posted
-    # with "/sync 2024" as its caption is just as deliberate an address as
-    # typing the command -- see the same reading in `core/middleware.py`.
-    text = message.text or message.caption or ""
-    if text.startswith("/"):
+    command = command_of(message)
+    if command is not None:
         # An unknown command falls to the last word rather than into the chain:
         # the sender addressed the bot, not the room.
-        return await _run_command(registry, message, text, **given)
+        return await _run_command(registry, message, *command, **given)
     if TEXT(message) and await _run_dialog(registry, message, **given):
         return True
     return await dispatch(registry, message, **given) is not None
@@ -149,16 +170,13 @@ async def last_word(message: Message, *, principal, impersonator,
     ))
 
 
-async def _run_command(registry: Registry, message: Message, text: str,
-                       **given) -> bool:
-    """Step 1. False leaves an unknown command to the last word."""
-    # Split on any whitespace, the way aiogram's own Command filter does, so a
-    # command pasted with a trailing newline is still that command. `text`
-    # starts with "/", so there is always a first word.
-    head, *rest = text.split(maxsplit=1)
-    # "/me@jbcub_bot" is the same command: Telegram appends the bot's name to
-    # every command tapped in a group.
-    name = head[1:].split("@")[0]
+async def _run_command(registry: Registry, message: Message, name: str,
+                       arg: str, **given) -> bool:
+    """Step 1. False leaves an unknown command to the last word.
+
+    Takes the name and the tail `command_of` already parsed rather than the
+    raw text, so there is nowhere left for a second reading to appear.
+    """
     if name == CANCEL_COMMAND:
         await _cancel(registry, message, **given)
         return True
@@ -169,8 +187,7 @@ async def _run_command(registry: Registry, message: Message, text: str,
     if refused is not None:
         await message.answer(refused)
         return True
-    await call_handler(spec.handler, message, **given,
-                       arg=rest[0].strip() if rest else "")
+    await call_handler(spec.handler, message, **given, arg=arg)
     return True
 
 
