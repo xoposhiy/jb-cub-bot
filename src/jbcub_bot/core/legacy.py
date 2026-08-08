@@ -12,6 +12,14 @@ always gets first refusal -- and inside it the intents keep their registration
 order, which is what keeps `directory`'s name search ahead of `kb`'s offer
 exactly as `main.py` did.
 
+**A legacy feature must still appear in /help.** `core/help.py` renders what the
+`Registry` holds and deliberately knows nothing about legacy, so `adopt` also
+republishes every `Manifest` through a real `BotApi` -- see `_declare`. Without
+it, the first migrated `help` would list itself and the rest of the bot would
+vanish from /help; with it, a feature's block reads the same before and after
+its own migration, which is the only way tasks 8 and 10 can be judged
+behaviour-preserving.
+
 **The core's entry points must decline whatever a legacy router still owns.** A
 `Dispatcher` runs its own handlers before its sub-routers, so an entry point
 that answered everything would swallow every legacy command -- which is the
@@ -37,9 +45,15 @@ from typing import Callable
 from aiogram.types import CallbackQuery, Message
 
 from jbcub_bot.core.buttons import match
-from jbcub_bot.core.contract import CANCEL_COMMAND, TEXT, Registry
+from jbcub_bot.core.contract import (
+    CANCEL_COMMAND,
+    TEXT,
+    ContractError,
+    Registry,
+)
 from jbcub_bot.core.intents import Intent, intent_allowed
 from jbcub_bot.core.loader import LoadedFeature
+from jbcub_bot.core.models import Role
 from jbcub_bot.core.pipeline import LEGACY, command_of
 
 logger = logging.getLogger(__name__)
@@ -60,11 +74,12 @@ class LegacyIntents:
     dataclass and `intent_allowed` this reads.
     """
 
-    def __init__(self):
+    def __init__(self, registry: Registry):
+        self._registry = registry
         self._intents: list[Intent] = []
 
     def adopt(self, loaded: list[LoadedFeature]) -> None:
-        """Host every legacy feature's intents, in discovery order.
+        """Host every legacy feature's intents, and declare its manifest.
 
         Called after `load_features`, since that is when the manifests exist.
         Discovery order is the order `main.py` registered them in, and for
@@ -78,6 +93,7 @@ class LegacyIntents:
         logger.info("legacy shim at=%s hosts %s intents: %s", LEGACY,
                     len(self._intents),
                     ", ".join(intent.name for intent in self._intents))
+        _declare(self._registry, loaded)
 
     async def offer(self, message: Message, principal, session) -> bool:
         """Offer the text to each matching intent until one takes it.
@@ -106,7 +122,7 @@ def install(registry: Registry) -> LegacyIntents:
     collides loudly at boot instead of quietly sharing the position with the
     shim.
     """
-    shim = LegacyIntents()
+    shim = LegacyIntents(registry)
     bot = registry.api_for(FEATURE)
     bot.describe("🧩", "Legacy", "Features that still route themselves.")
     # public=True because `main.py`'s `nl_fallback` ran the intent router for an
@@ -114,6 +130,87 @@ def install(registry: Registry) -> LegacyIntents:
     # walk. A guard here would filter the whole slot instead.
     bot.message(at=LEGACY, when=TEXT, public=True)(shim.offer)
     return shim
+
+
+# --- the bridge ----------------------------------------------------------------
+
+async def _owned_by_a_legacy_router(message: Message) -> None:
+    """The handler a bridged command carries, and never runs.
+
+    A legacy `CommandSpec` records no handler at all -- the real one is on the
+    feature's own `Router` -- so the bridge registers this in its place and
+    `core_owns_message` declines any command carrying it. Loud rather than
+    silent if those two ever disagree: a bridged command reaching the core's
+    dispatcher would otherwise answer nothing.
+    """
+    raise RuntimeError(
+        "A bridged legacy command reached the core's dispatcher. "
+        "core_owns_message should have left it to its own router."
+    )
+
+
+def _declare(registry: Registry, loaded: list[LoadedFeature]) -> None:
+    """Republish every legacy `Manifest` as a real declaration.
+
+    `core/help.py` renders `FeatureRegistration`s and must not learn that legacy
+    exists, so the manifest is translated here instead -- once, at boot. The
+    shape is the same one a migrated feature produces, which is what makes a
+    feature's /help block read the same on both sides of its own migration.
+    """
+    for feature in loaded:
+        if not feature.legacy:
+            continue
+        # Everything the manifest holds except `Manifest.min_role`, which is
+        # read nowhere in `src/` and has no counterpart in a contract that
+        # guards declarations rather than whole features.
+        manifest = feature.manifest
+        bot = registry.api_for(feature.name)
+        # `name.capitalize()` is exactly what the old renderer built the heading
+        # from; a title only becomes something a feature says about itself once
+        # it declares one.
+        bot.describe(manifest.emoji, manifest.name.capitalize(),
+                     manifest.help_text)
+        for spec in manifest.commands:
+            _refuse_duplicate(registry, feature.name, spec.name)
+            bot.command(spec.name, spec.description, usage=spec.usage,
+                        public=spec.public,
+                        role=_role(spec.min_role))(_owned_by_a_legacy_router)
+        for intent in manifest.intents:
+            # A note, not a `message`: the shim above already routes these, and
+            # a second chain entry would offer the same text twice -- besides
+            # needing a unique `at=` per intent. A note renders `  💬 {text}`,
+            # which is the old `_intent_line` character for character.
+            #
+            # Never public, whatever the role: the old `_intent_visible` hid
+            # every intent line from an unlinked caller, where `_command_visible`
+            # showed a public command.
+            bot.note(f"💬 {intent.description}", role=_role(intent.min_role))
+
+
+def _role(min_role: Role) -> Role | None:
+    """`min_role=STUDENT` refuses nobody, and the contract spells that as no
+    role at all; anything else is the rank the guard asks for."""
+    return None if min_role is Role.STUDENT else min_role
+
+
+def _refuse_duplicate(registry: Registry, feature: str, name: str) -> None:
+    """The one thing the bridge checks for itself.
+
+    `registry.validate()` runs inside `load_features`, before these declarations
+    exist, and re-running it over them would refuse the bridge rather than
+    verify it: a legacy `directory` really does own a `/cancel`, which rule 9
+    forbids a *feature* to declare, and a bridged command's handler is a
+    placeholder. So the bridge validates the one thing it could get wrong on its
+    own -- a name a migrated feature already took, which `Registry.commands()`
+    would otherwise resolve to whichever came last.
+    """
+    first = registry.commands().get(name)
+    if first is not None:
+        raise ContractError(
+            f"Command '/{name}' is declared by '{first.feature}' and by the "
+            f"legacy manifest of '{feature}'. A feature is either migrated or "
+            f"legacy: drop whichever declaration it no longer needs."
+        )
 
 
 def core_owns_message(registry: Registry,
@@ -152,7 +249,15 @@ def core_owns_message(registry: Registry,
             # taken, because a legacy router may own one its manifest never
             # listed -- `/unas` is exactly that. What nothing owns still reaches
             # the fallback router, so an unknown command is answered either way.
-            return name in registry.commands()
+            #
+            # A command the registry knows only because `_declare` bridged it
+            # is declined too. Being in the registry means /help can list it,
+            # not that the core can run it: the handler is still on the
+            # feature's own router, and the spec carries the placeholder above
+            # in its place.
+            spec = registry.commands().get(name)
+            return spec is not None \
+                and spec.handler is not _owned_by_a_legacy_router
         # An open state no registered dialog claims belongs to a legacy router:
         # `directory`'s `EditProfile.value` and `kb`'s `KbChat.active` today.
         # This is the transitional stand-in for `StateFilter(None)`, and it is

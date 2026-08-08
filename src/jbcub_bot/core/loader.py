@@ -9,7 +9,7 @@ is logged once its order is resolved, so reading the deploy log beats opening
 five files.
 
 `Manifest` is the pre-contract shape and lives here only until phase F retires
-it; `core/registry.py`, `features/help/render.py` and every unmigrated feature
+it; `core/registry.py`, `core/legacy.py`'s bridge and every unmigrated feature
 still import it from here.
 """
 import importlib

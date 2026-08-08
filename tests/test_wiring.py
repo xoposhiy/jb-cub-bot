@@ -28,9 +28,10 @@ from sqlalchemy.pool import StaticPool
 import jbcub_bot.features as features_pkg
 from jbcub_bot.core import legacy
 from jbcub_bot.core.commands import CommandSpec as LegacyCommandSpec
-from jbcub_bot.core.contract import Registry, TEXT
+from jbcub_bot.core.contract import ContractError, Registry, TEXT
 from jbcub_bot.core.db import Base
 from jbcub_bot.core.dialogs import Dialog
+from jbcub_bot.core.intents import Intent
 from jbcub_bot.core.loader import LoadedFeature, Manifest, load_features
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.core.oplog import OpsLog
@@ -454,12 +455,12 @@ async def test_an_unmatched_callback_is_left_to_the_legacy_routers(probe):
 # and 10 -- which is the claim that `main.py` needs no edit then, and the one
 # claim a green suite today cannot make on its own.
 
-def _legacy(name: str, *command_names: str) -> LoadedFeature:
+def _legacy(name: str, *command_names: str, intents=()) -> LoadedFeature:
     return LoadedFeature(
         name=name, module=object(), router=Router(name=name),
         manifest=Manifest(name=name, commands=[
             LegacyCommandSpec(command, "Whatever.") for command in command_names
-        ]),
+        ], intents=list(intents)),
     )
 
 
@@ -506,3 +507,54 @@ async def test_the_last_legacy_router_leaving_gives_the_core_every_tap():
 
     assert await legacy.core_owns_callback(registry, [_legacy("d")])(tap) is False
     assert await legacy.core_owns_callback(registry, [])(tap) is True
+
+
+# --- the bridge: a legacy manifest, declared like a real feature --------------
+# `core/help.py` reads the registry and knows nothing about legacy, so `adopt`
+# republishes every manifest through a real `BotApi`. What that must not do is
+# take the update off the router that still owns the handler.
+
+def _adopted(*loaded: LoadedFeature) -> Registry:
+    registry = Registry()
+    shim = legacy.install(registry)
+    shim.adopt(list(loaded))
+    return registry
+
+
+async def test_a_bridged_command_is_declared_but_still_left_to_its_router():
+    loaded = [_legacy("directory", "me")]
+    registry = _adopted(*loaded)
+    bot = FakeBot()
+
+    # Declared, so /help lists it under directory's own heading...
+    assert registry.commands()["me"].feature == "directory"
+    # ...and declined, because the handler is on the router, not in the spec.
+    owned = legacy.core_owns_message(registry, loaded)
+    assert await owned(_message(bot, "/me").message) is False
+
+
+async def test_a_legacy_intent_is_bridged_as_a_note_not_a_second_chain_entry():
+    """A `bot.message` would be offered the text a second time, on top of the
+    shim that already routes it -- so an intent becomes a bare `💬` line."""
+    intent = Intent("d.search", r".+", handler=None, description="type a name")
+    registry = _adopted(_legacy("directory", intents=[intent]))
+
+    assert len(registry.chain()) == 1  # the shim's slot, and only it
+    notes = [note.text for reg in registry.features() for note in reg.notes]
+    assert notes == ["💬 type a name"]
+
+
+async def test_the_bridge_refuses_a_name_a_migrated_feature_already_declared():
+    """The one thing the bridge validates for itself: `registry.validate()` ran
+    before these declarations existed, and re-running it would refuse a legacy
+    `/cancel` that `directory` legitimately still owns."""
+    registry = Registry()
+    api = registry.api_for("directory")
+    api.command("me", "Show your profile.")(lambda message: None)
+    shim = legacy.install(registry)
+
+    with pytest.raises(ContractError) as raised:
+        shim.adopt([_legacy("relic", "me")])
+
+    assert "/me" in str(raised.value)
+    assert "directory" in str(raised.value) and "relic" in str(raised.value)
