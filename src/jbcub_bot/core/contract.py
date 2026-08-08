@@ -14,6 +14,7 @@ from typing import Callable
 
 from aiogram.types import Message
 
+from jbcub_bot.core.dialogs import DialogHandle, state_name
 from jbcub_bot.core.models import Role, User
 
 
@@ -212,16 +213,16 @@ class BotApi:
 
     def dialog(self, name: str, *, on_text: Callable,
                on_cancel: Callable | None = None, public: bool = False,
-               role: Role | None = None) -> DialogSpec:
+               role: Role | None = None) -> DialogHandle:
         """A plain call, not a decorator -- a dialog has two handlers, so there
-        is nothing single to decorate. The returned spec is what a feature keeps
-        in order to start the dialog later."""
-        spec = DialogSpec(
+        is nothing single to decorate. The handle is what a feature keeps in
+        order to start the dialog later; the spec behind it is how the core
+        routes into it, and is nobody else's business."""
+        self._own.dialogs.append(DialogSpec(
             feature=self.feature, name=name, on_text=on_text,
             on_cancel=on_cancel, guard=Guard(public, role),
-        )
-        self._own.dialogs.append(spec)
-        return spec
+        ))
+        return DialogHandle(self.feature, name)
 
     def note(self, text: str | Callable[[User | None], str], *,
              public: bool = False, role: Role | None = None) -> None:
@@ -266,10 +267,11 @@ class Registry:
         return [spec for reg in self._features.values() for spec in reg.buttons]
 
     def dialogs(self) -> dict[str, DialogSpec]:
-        # Keyed the way `core/dialogs.state_name` derives it, which is why a
-        # feature writes no StatesGroup and why two features may both call
-        # their dialog "edit".
-        return {f"{spec.feature}:{spec.name}": spec
+        # Keyed by the state name a running dialog reports, so `owner()` looks
+        # a spec up directly. That derivation lives in `core/dialogs` and only
+        # there -- it is also why a feature writes no StatesGroup and why two
+        # features may both call their dialog "edit".
+        return {state_name(spec.feature, spec.name): spec
                 for reg in self._features.values() for spec in reg.dialogs}
 
     def validate(self) -> None:

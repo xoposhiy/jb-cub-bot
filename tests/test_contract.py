@@ -15,6 +15,7 @@ from jbcub_bot.core.contract import (
     Registry,
     call_handler,
 )
+from jbcub_bot.core.dialogs import DialogHandle
 from jbcub_bot.core.models import Role
 
 
@@ -94,7 +95,7 @@ def test_button_records_its_key_and_guard():
     assert spec.handler is _noop
 
 
-def test_dialog_is_a_call_and_returns_the_spec_it_recorded():
+def test_dialog_is_a_call_and_returns_a_handle_to_what_it_recorded():
     registry = Registry()
     bot = _api(registry)
 
@@ -103,7 +104,9 @@ def test_dialog_is_a_call_and_returns_the_spec_it_recorded():
 
     handle = bot.dialog("edit", on_text=_noop, on_cancel=on_cancel)
     [spec] = registry.features()[0].dialogs
-    assert handle is spec
+    # The handle is what the feature keeps -- the spec is the core's business.
+    assert handle == DialogHandle("directory", "edit")
+    assert handle.state == "directory:edit"
     assert (spec.feature, spec.name) == ("directory", "edit")
     assert spec.on_text is _noop
     assert spec.on_cancel is on_cancel
@@ -112,7 +115,8 @@ def test_dialog_is_a_call_and_returns_the_spec_it_recorded():
 def test_dialog_may_have_no_cancel_hook():
     registry = Registry()
     bot = _api(registry)
-    spec = bot.dialog("edit", on_text=_noop)
+    bot.dialog("edit", on_text=_noop)
+    [spec] = registry.features()[0].dialogs
     assert spec.on_cancel is None
 
 
