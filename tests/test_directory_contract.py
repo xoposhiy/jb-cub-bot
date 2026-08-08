@@ -16,6 +16,7 @@ import pytest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.methods import SendMessage
 from aiogram.types import Chat, Message
 from aiogram.types import User as TgUser
 
@@ -50,18 +51,22 @@ def _registry() -> Registry:
     return registry
 
 
-def _message(text: str) -> Message:
-    """A real `Message` with `answer` replaced, so the refusal is readable
-    without a bot: what is under test is who gets turned away, not the send."""
-    message = Message(message_id=1, date=datetime.now(timezone.utc),
-                      chat=Chat(id=777, type="private"),
-                      from_user=TgUser(id=777, is_bot=False, first_name="tg"),
-                      text=text).as_(FakeBot())
-    object.__setattr__(message, "answer", AsyncMock())
-    return message
+def _message(bot: FakeBot, text: str) -> Message:
+    """A real `Message` on a fake bot, so `answer` takes the real send path and
+    what the caller was told is readable off `bot.sent`."""
+    return Message(message_id=1, date=datetime.now(timezone.utc),
+                   chat=Chat(id=777, type="private"),
+                   from_user=TgUser(id=777, is_bot=False, first_name="tg"),
+                   text=text).as_(bot)
+
+
+def _replies(bot: FakeBot) -> list[str]:
+    return [m.text for m in bot.sent if isinstance(m, SendMessage)]
 
 
 def _callback(data: str) -> SimpleNamespace:
+    """A tap is a stand-in rather than a real `CallbackQuery`: the refusal goes
+    out through `cb.answer`, which is not a send this suite has a bot for."""
     return SimpleNamespace(data=data, answer=AsyncMock(),
                            message=SimpleNamespace(edit_text=AsyncMock(),
                                                    edit_reply_markup=AsyncMock(),
@@ -74,17 +79,31 @@ def _dialog(user_id: int = 777) -> Dialog:
                                         user_id=user_id)))
 
 
-async def _send(registry, message, principal, dialog=None, session=None):
-    return await take_message(registry, message, principal=principal,
-                              session=session, bot=message.bot,
-                              impersonator=None, dialog=dialog or _dialog(),
-                              oplog=None)
+class NoRows:
+    """A session that finds nobody: a handler past its guard may look something
+    up, and these tests are about the guard rather than the lookup."""
+
+    def scalar(self, *args, **kwargs):
+        return None
+
+    def scalars(self, *args, **kwargs):
+        return SimpleNamespace(all=lambda: [])
+
+
+async def _send(registry, text, principal, dialog=None) -> list[str]:
+    """Offer one message to the registry the way `main.py` does, and return
+    what the sender was told."""
+    bot = FakeBot()
+    await take_message(registry, _message(bot, text), principal=principal,
+                       session=NoRows(), bot=bot, impersonator=None,
+                       dialog=dialog or _dialog(), oplog=None)
+    return _replies(bot)
 
 
 async def _tap(registry, callback, principal, session=None):
     return await take_callback(registry, callback, principal=principal,
-                               session=session, bot=None, impersonator=None,
-                               dialog=_dialog(), oplog=None)
+                               session=session or NoRows(), bot=None,
+                               impersonator=None, dialog=_dialog(), oplog=None)
 
 
 # --- the guards that used to be the first two lines of a handler ---------------
@@ -94,9 +113,7 @@ async def test_sync_refuses_a_student_and_an_unlinked_caller():
     the wrapper `CommandRegistrar` handed back. `role=Role.ADMIN` on the
     registration is what refuses now."""
     for principal, expected in ((STUDENT, ADMIN_REFUSAL), (None, NOT_LINKED)):
-        message = _message("/sync")
-        await _send(_registry(), message, principal)
-        message.answer.assert_awaited_once_with(expected)
+        assert await _send(_registry(), "/sync", principal) == [expected]
 
 
 ADMIN_TAPS = ["dir:admin:30000001", "dir:admin_back:30000001",
@@ -125,42 +142,26 @@ async def test_a_staff_button_refuses_a_student_and_admits_a_teacher(data):
     callback.answer.assert_awaited_once_with(STAFF_REFUSAL, show_alert=True)
 
     allowed = _callback(data)
-    await _tap(_registry(), allowed, TEACHER, session=_NoRows())
+    await _tap(_registry(), allowed, TEACHER)
     assert STAFF_REFUSAL not in str(allowed.answer.await_args)
-
-
-class _NoRows:
-    """A session that finds nobody: a staff handler past its guard is allowed
-    to look something up, and this test is about the guard, not the lookup."""
-
-    def scalar(self, *args, **kwargs):
-        return None
-
-    def scalars(self, *args, **kwargs):
-        return SimpleNamespace(all=lambda: [])
 
 
 # --- one meaning of `public`, whichever kind declares it -----------------------
 
 async def test_public_lets_an_unlinked_caller_through_on_a_command_and_the_chain():
     registry = _registry()
-    start = _message("/start")
-    await _send(registry, start, None)
-    assert NOT_LINKED not in start.answer.await_args.args[0]
+    assert await _send(registry, "/start", None) == [
+        "I couldn't recognize you. Ask a program admin for a one-time link."]
 
     # The same guard on the chain handler, and the reason it is public: an
     # unlinked caller who types a name is told what to do rather than left with
     # "No one found."
-    typed = _message("Ivanov")
-    await _send(registry, typed, None)
-    typed.answer.assert_awaited_once_with(NOT_LINKED)
+    assert await _send(registry, "Ivanov", None) == [NOT_LINKED]
 
 
 async def test_no_public_refuses_an_unlinked_caller_on_a_command_button_dialog():
     registry = _registry()
-    command = _message("/me")
-    await _send(registry, command, None)
-    command.answer.assert_awaited_once_with(NOT_LINKED)
+    assert await _send(registry, "/me", None) == [NOT_LINKED]
 
     callback = _callback("dir:privacy")
     await _tap(registry, callback, None)
@@ -168,9 +169,7 @@ async def test_no_public_refuses_an_unlinked_caller_on_a_command_button_dialog()
 
     dialog = _dialog()
     await edit.PROMPT.start(dialog, field="github")
-    value = _message("alice")
-    await _send(registry, value, None, dialog=dialog)
-    value.answer.assert_awaited_once_with(NOT_LINKED)
+    assert await _send(registry, "alice", None, dialog=dialog) == [NOT_LINKED]
 
 
 # --- the longest registered key wins -------------------------------------------
@@ -229,9 +228,10 @@ async def test_a_command_beats_the_open_prompt():
     dialog = _dialog()
     await edit.PROMPT.start(dialog, field="github")
 
-    await _send(registry, _message("/me"), STUDENT, dialog=dialog)
+    said = await _send(registry, "/me", STUDENT, dialog=dialog)
 
-    assert await dialog.owner() == "directory:edit"  # /me did not end it
+    assert "Ivan Ivanov" in said[0]                  # /me ran, not on_value
+    assert await dialog.owner() == "directory:edit"  # and did not end it
 
 
 # --- the six commands and the one chain slot -----------------------------------
