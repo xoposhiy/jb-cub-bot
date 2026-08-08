@@ -18,8 +18,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from jbcub_bot.core.db import Base
-from jbcub_bot.core.middleware import DEPARTED_NOTICE
 from jbcub_bot.core.models import Role, User
+from jbcub_bot.core.principal import DEPARTED_NOTICE
 from jbcub_bot.main import build_dispatcher
 
 DEPARTED_TID = 222

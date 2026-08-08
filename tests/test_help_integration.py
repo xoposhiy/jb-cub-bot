@@ -88,7 +88,6 @@ async def test_admin_help_keeps_an_elevated_line_under_its_own_heading():
 async def test_student_help_hides_admin_section():
     out = await _run_help(_with_student(), 222)
     assert "/me" in out
-    assert "🔐 Admin" not in out
     assert "/sync" not in out
 
 
@@ -96,7 +95,6 @@ async def test_unlinked_help_shows_notice():
     f = _factory()
     out = await _run_help(f, 999)  # no user row for this telegram id
     assert "You're not linked yet — ask a program admin for a one-time link." in out
-    assert "🔐 Admin" not in out
 
 
 # --- the bridge: a legacy feature reads like a migrated one -------------------

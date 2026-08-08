@@ -1,10 +1,10 @@
 """The features that still route themselves, hosted inside the new pipeline.
 
 **Phase F deletes this file**, and with it the last of `core/intents.py`. Until
-then two shapes coexist in `features/`: `kb` keeps its `Router` and its `Intent`
-until the 2026-08-07 spec rewrites it, and it is the last one -- `help`,
-`impersonate` and `directory` migrated in tasks 7, 8 and 10. Two things have to
-stay true while both shapes are loaded.
+then two shapes coexist in `features/`: `kb` keeps its `Router` and its
+`Intent` until the 2026-08-07 spec rewrites it, and it is the only one left --
+`help`, `impersonate` and `directory` are all migrated. Two things have to stay
+true while both shapes are loaded.
 
 **A legacy `Intent` must still be offered plain text.** `LegacyIntents` is one
 chain handler at `pipeline.LEGACY`, after every landmark, so a migrated feature
@@ -14,10 +14,10 @@ always gets first refusal -- which is what keeps `directory`'s name search at
 **A legacy feature must still appear in /help.** `core/help.py` renders what the
 `Registry` holds and deliberately knows nothing about legacy, so `adopt` also
 republishes every `Manifest` through a real `BotApi` -- see `_declare`. Without
-it, the first migrated `help` would list itself and the rest of the bot would
-vanish from /help; with it, a feature's block reads the same before and after
-its own migration, which is the only way tasks 8 and 10 could be judged
-behaviour-preserving.
+it, the first migrated `help` would have listed itself and the rest of the bot
+would have vanished from /help; with it, a feature's block reads the same
+before and after its own migration, which is the only way each migration could
+be judged behaviour-preserving -- and is what `kb`'s will be judged by too.
 
 **The core's entry points must decline whatever a legacy router still owns.** A
 `Dispatcher` runs its own handlers before its sub-routers, so an entry point
@@ -67,10 +67,11 @@ FEATURE = "legacy"
 class LegacyIntents:
     """The legacy features' `Intent` objects, in one chain slot.
 
-    The walk is `core/intents.py`'s `IntentRouter.dispatch` -- a matching
-    `pattern`, a `min_role` the caller meets, and `False` to decline -- kept here
-    rather than delegated so that phase E can reduce that module to the `Intent`
-    dataclass and `intent_allowed` this reads.
+    The walk -- a matching `pattern`, a `min_role` the caller meets, and `False`
+    to decline -- was `core/intents.py`'s `IntentRouter.dispatch` and is now
+    only here: keeping it rather than delegating is what let that module shrink
+    to the `Intent` dataclass and the `intent_allowed` this reads, and what
+    makes this the single copy production actually runs.
     """
 
     def __init__(self, registry: Registry):
@@ -159,9 +160,10 @@ def _declare(registry: Registry, loaded: list[LoadedFeature]) -> None:
     for feature in loaded:
         if not feature.legacy:
             continue
-        # Everything the manifest holds except `Manifest.min_role`, which is
-        # read nowhere in `src/` and has no counterpart in a contract that
-        # guards declarations rather than whole features.
+        # Everything the manifest still holds. It used to carry a
+        # `Manifest.min_role` as well, read nowhere in `src/` and with no
+        # counterpart in a contract that guards declarations rather than whole
+        # features; that field is gone.
         manifest = feature.manifest
         bot = registry.api_for(feature.name)
         # `name.capitalize()` is exactly what the old renderer built the heading
@@ -199,7 +201,7 @@ def _refuse_duplicate(registry: Registry, feature: str, name: str) -> None:
     exist, and re-running it over them would refuse the bridge rather than
     verify it: a bridged command's handler is a placeholder, and a legacy
     manifest may declare `/cancel`, which rule 9 forbids a *feature* to own --
-    `directory` did until task 10. So the bridge validates the one thing it
+    `directory` did while it was legacy. So the bridge validates the one thing it
     could get wrong on its own: a name a migrated feature already took, which
     `Registry.commands()` would otherwise resolve to whichever came last.
     """

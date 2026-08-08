@@ -306,7 +306,7 @@ async def test_a_command_in_a_caption_is_still_a_command():
     """A photo captioned "/sync 2024" is as deliberate an address as typing it.
 
     aiogram's own Command filter, which the core replaces here, matches text
-    *or* caption, and `core/middleware.py` already turns on that distinction.
+    *or* caption, and `core/principal.py` already turns on that distinction.
     """
     seen = {}
 

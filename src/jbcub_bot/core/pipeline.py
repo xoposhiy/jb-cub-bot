@@ -41,7 +41,7 @@ from jbcub_bot.core.oplog import format_miss
 # this replaces.
 LOOKUP = 100   # a name finds a classmate
 AGENT = 200    # the knowledge-base agent answers
-LEGACY = 900   # phase B/E only: where the legacy-intent shim sits. Dies in F.
+LEGACY = 900   # until phase F: where the legacy-intent shim sits. Dies with it.
 
 NOTHING_MATCHED = "No one found."
 NOTHING_TO_CANCEL = "Nothing to cancel."
@@ -61,7 +61,7 @@ def command_of(message: Message) -> tuple[str, str] | None:
     """
     # aiogram's Command filter matches text *or* caption, so a photo posted
     # with "/sync 2024" as its caption is just as deliberate an address as
-    # typing the command -- see the same reading in `core/middleware.py`.
+    # typing the command -- see the same reading in `core/principal.py`.
     text = message.text or message.caption or ""
     if not text.startswith("/"):
         return None

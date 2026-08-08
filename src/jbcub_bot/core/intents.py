@@ -1,18 +1,21 @@
-"""Plain text nobody addressed to a command, offered around until something
-takes it.
+"""What a legacy feature still declares as "plain text I might want".
 
-Registration order is precedence: `dispatch` walks the intents whose pattern
-matches and whose `min_role` the caller meets, and stops at the first one that
-does not decline. Declining is `False` and obliges a handler to have answered
-nothing, since the next intent -- or `nl_fallback` in `main.py`, which owns the
-reply when nothing took the message -- is about to answer instead.
+**Phase F deletes this module**, together with `core/legacy.py`. It survives
+this branch only because `kb` has not migrated: its manifest carries an
+`Intent`, and the shim reads `pattern`, `min_role` and `handler` off it to
+offer text around.
+
+What used to live here as well -- `IntentRouter`, with `matches` and a
+`dispatch` whose registration order was precedence -- is gone. Order is a
+declaration now (`at=` in `core/contract.py`, resolved by `core/pipeline.py`),
+and the walk that once belonged to `dispatch` is `LegacyIntents.offer` in
+`core/legacy.py`, so there is one copy of it and it is the one production runs.
 """
-import re
 from dataclasses import dataclass
 from typing import Callable
 
-from jbcub_bot.core.middleware import role_rank
 from jbcub_bot.core.models import Role
+from jbcub_bot.core.principal import role_rank
 
 
 @dataclass
@@ -28,34 +31,3 @@ def intent_allowed(principal, intent: "Intent") -> bool:
     if principal is None:
         return intent.min_role is Role.STUDENT
     return role_rank(principal.role) >= role_rank(intent.min_role)
-
-
-class IntentRouter:
-    def __init__(self):
-        self._intents: list[Intent] = []
-
-    def register(self, intent: Intent) -> None:
-        self._intents.append(intent)
-
-    def matches(self, text: str) -> Intent | None:
-        for intent in self._intents:
-            if re.search(intent.pattern, text, re.IGNORECASE):
-                return intent
-        return None
-
-    async def dispatch(self, text, message, principal, session) -> bool:
-        """Offer `text` to each matching intent until one takes it.
-
-        A handler returning False declines -- it must not have answered -- and
-        the turn goes to the next intent. Anything else (including None, so a
-        handler that forgets to return cannot go silently unhandled) ends the
-        walk.
-        """
-        for intent in self._intents:
-            if not re.search(intent.pattern, text, re.IGNORECASE):
-                continue
-            if not intent_allowed(principal, intent):
-                continue
-            if await intent.handler(message, principal, session) is not False:
-                return True
-        return False

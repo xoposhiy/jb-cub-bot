@@ -9,25 +9,15 @@ from sqlalchemy.pool import StaticPool
 
 from jbcub_bot.core import impersonation
 from jbcub_bot.core.db import Base
-from jbcub_bot.core.middleware import (
-    GROUP_NOTICE, HasRole, PrincipalMiddleware, role_rank,
-)
 from jbcub_bot.core.models import Role, User
+from jbcub_bot.core.principal import (
+    GROUP_NOTICE, PrincipalMiddleware, role_rank,
+)
 from jbcub_bot.main import build_dispatcher
 
 
 def test_role_rank_ordering():
     assert role_rank(Role.STUDENT) < role_rank(Role.TEACHER) < role_rank(Role.ADMIN)
-
-
-def test_has_role_allows_equal_or_higher():
-    guard = HasRole(Role.ADMIN)
-    assert guard(User(role=Role.ADMIN)) is True
-    assert guard(User(role=Role.STUDENT)) is False
-
-
-def test_has_role_none_principal_denied():
-    assert HasRole(Role.STUDENT)(None) is False
 
 
 async def test_middleware_injects_principal(session):

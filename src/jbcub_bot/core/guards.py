@@ -8,8 +8,8 @@ check, a profile with no saved row) is ordinary code inside its feature, not a
 guard.
 """
 from jbcub_bot.core.contract import Guard
-from jbcub_bot.core.middleware import role_rank
 from jbcub_bot.core.models import Role, User
+from jbcub_bot.core.principal import role_rank
 
 ADMIN_REFUSAL = "Admins only."
 STAFF_REFUSAL = "Staff only."

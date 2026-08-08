@@ -18,7 +18,6 @@ def test_manifest_defaults():
     m = Manifest(name="x")
     assert m.commands == []
     assert m.intents == []
-    assert m.min_role is Role.STUDENT
     assert m.emoji == "📒"
 
 

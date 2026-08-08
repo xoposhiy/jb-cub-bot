@@ -129,6 +129,22 @@ def _edits(bot) -> list[str]:
     return [m.text for m in bot.sent if isinstance(m, EditMessageText)]
 
 
+# --- what is still legacy -----------------------------------------------------
+
+def test_kb_is_the_last_legacy_feature():
+    """Moved here from `tests/test_registry.py`, which asked the same question
+    of the module-global manifest list `main.py` used to publish to.
+
+    It is the assertion that fires when a contributor adds a package of the old
+    shape, and the one that will fail when `kb` finally migrates -- at which
+    point the shim, `core/intents.py` and `core/commands.py` go with it.
+    """
+    still_legacy = {feature.name
+                    for feature in load_features(features_pkg, Registry())
+                    if feature.legacy}
+    assert still_legacy == {"kb"}
+
+
 # --- the registry belongs to the build ----------------------------------------
 
 async def test_building_twice_does_not_double_the_chain(caplog):

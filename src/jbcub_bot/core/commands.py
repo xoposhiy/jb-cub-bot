@@ -1,11 +1,20 @@
+"""The pre-contract way of declaring a command: register it and guard it here.
+
+**Phase F deletes this module.** It was meant to go with `core/registry.py`,
+but `kb` still declares `/ask` and `/kb_reload` through `CommandRegistrar` and
+builds its `Manifest` out of `.specs`, and `core/legacy.py`'s bridge reads
+`CommandSpec` off that manifest to republish it in /help. A migrated feature
+uses `bot.command(...)` in `core/contract.py` and is guarded once, by
+`core/guards.py`; nothing new may be added here.
+"""
 import functools
 from dataclasses import dataclass
 
 from aiogram import Router
 from aiogram.filters import Command
 
-from jbcub_bot.core.middleware import role_rank
 from jbcub_bot.core.models import Role, User
+from jbcub_bot.core.principal import role_rank
 
 
 @dataclass

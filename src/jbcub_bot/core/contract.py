@@ -253,7 +253,8 @@ class Registry:
         # Routing state rather than a declaration, but it belongs to whoever
         # built this registry: a second `build_dispatcher` must not inherit the
         # first one's answers. That is the mistake `main.py`'s module-global
-        # `_intent_router` makes today, beside a `registry` that is reset.
+        # `_intent_router` made, beside a manifest list that was reset -- only
+        # half of the pair was ever cleared.
         self._last_taker: dict[int, MessageSpec | None] = {}
 
     def api_for(self, feature: str) -> BotApi:

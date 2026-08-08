@@ -14,8 +14,13 @@ def _reset_feature_routers():
     # an already-parented Router, so build_dispatcher() can only be called once
     # per process unless we detach them first. Reset before every test so any
     # number of build_dispatcher() calls succeed regardless of test order.
+    #
+    # This was on phase E's deletion list on the grounds that nothing is
+    # parented any more. It is: `kb` is still legacy and `main.py` still
+    # includes its Router, so removing this fails 151 tests with aiogram's
+    # "Router is already attached". It goes in phase F, with that Router.
     # A throwaway Registry: only the routers of the features that still have
-    # one are wanted here, and the last of those goes in phase F.
+    # one are wanted here, and `kb` is the last of those.
     for feature in load_features(features_pkg, Registry()):
         if feature.router is not None:
             feature.router._parent_router = None

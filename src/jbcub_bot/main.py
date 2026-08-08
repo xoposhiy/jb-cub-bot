@@ -8,11 +8,6 @@ from aiogram.types import CallbackQuery, ErrorEvent, Message, Update
 
 import jbcub_bot.features as features_pkg
 from jbcub_bot.core import buttons, impersonation, legacy, pipeline
-# The pre-contract list of manifests. Nothing reads it any more -- task 7 moved
-# /help onto `core/help.py` and the contract registry -- and task 11 deletes the
-# module along with these two calls; aliased until then so `registry` here means
-# the contract's own.
-from jbcub_bot.core import registry as manifests
 from jbcub_bot.core.config import get_settings
 from jbcub_bot.core.contract import Registry
 from jbcub_bot.core.db import get_session, init_db
@@ -20,7 +15,7 @@ from jbcub_bot.core import oplog as oplog_mod
 from jbcub_bot.core.dialogs import DialogMiddleware
 from jbcub_bot.core.errors import report_exception, summarize
 from jbcub_bot.core.loader import load_features
-from jbcub_bot.core.middleware import PrincipalMiddleware
+from jbcub_bot.core.principal import PrincipalMiddleware
 
 _log = logging.getLogger(__name__)
 
@@ -79,22 +74,21 @@ def build_dispatcher(session_factory, bootstrap_ids: set | None = None,
         return oplog_mod.OpsLog(bot, log_chat_id, bootstrap_ids or ())
 
     # Local, and nothing here is a module global: a second build_dispatcher must
-    # inherit neither the chain nor the per-chat taker record. The
-    # `_intent_router` this replaces was reset nowhere while the manifest list
-    # beside it was, so every call appended the whole chain again.
+    # inherit neither the chain nor the per-chat taker record. The pair this
+    # replaces -- a module-global `_intent_router` beside a `core/registry.py`
+    # that was reset -- appended the whole chain again on every call, because
+    # only one half of it was ever cleared.
     registry = Registry()
-    # Phase B/E only: the legacy features' intents live in the chain at LEGACY,
+    # Until phase F: the legacy features' intents live in the chain at LEGACY,
     # after every landmark. Claimed before loading so `load_features` validates
     # and logs the slot beside every real feature's, and filled from the
     # manifests once they exist. Phase F deletes core/legacy.py and these lines.
     shim = legacy.install(registry)
-    manifests.reset()
     loaded = load_features(features_pkg, registry)
     shim.adopt(loaded)
     for feature in loaded:
         if feature.legacy:
             dp.include_router(feature.router)
-            manifests.register(feature.manifest)
     # Where a test -- or anything else wanting to see the resolved contract --
     # finds it, since there is deliberately no module global holding it.
     dp["registry"] = registry

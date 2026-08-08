@@ -17,7 +17,7 @@ from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery
 
 from jbcub_bot.core import identity, impersonation
-from jbcub_bot.core.models import Role, User
+from jbcub_bot.core.models import Role
 
 _RANK = {Role.STUDENT: 0, Role.TEACHER: 1, Role.ADMIN: 2}
 
@@ -31,16 +31,6 @@ GROUP_NOTICE = "I only work in a private chat — message me directly."
 
 def role_rank(role: Role) -> int:
     return _RANK[role]
-
-
-class HasRole:
-    def __init__(self, min_role: Role):
-        self.min_role = min_role
-
-    def __call__(self, principal: User | None) -> bool:
-        if principal is None:
-            return False
-        return role_rank(principal.role) >= role_rank(self.min_role)
 
 
 async def _refuse(event, notice: str) -> None:

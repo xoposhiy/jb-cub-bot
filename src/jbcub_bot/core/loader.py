@@ -9,8 +9,8 @@ is logged once its order is resolved, so reading the deploy log beats opening
 five files.
 
 `Manifest` is the pre-contract shape and lives here only until phase F retires
-it; `core/registry.py`, `core/legacy.py`'s bridge and every unmigrated feature
-still import it from here.
+it; `core/legacy.py`'s bridge and `kb`, the last unmigrated feature, still
+import it from here.
 """
 import importlib
 import logging
@@ -21,7 +21,6 @@ from aiogram import Router
 
 from jbcub_bot.core.commands import CommandSpec
 from jbcub_bot.core.contract import ContractError, Registry
-from jbcub_bot.core.models import Role
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,6 @@ class Manifest:
     name: str
     commands: list[CommandSpec] = field(default_factory=list)
     intents: list = field(default_factory=list)
-    min_role: Role = Role.STUDENT
     help_text: str = ""
     emoji: str = "📒"
 
@@ -48,8 +46,8 @@ class LoadedFeature:
 
     @property
     def legacy(self) -> bool:
-        """Still on the old shape, so task 6 includes its router and shims its
-        intents rather than finding it in the registry."""
+        """Still on the old shape, so `main.py` includes its router and the
+        shim hosts its intents rather than finding either in the registry."""
         return self.router is not None
 
 
