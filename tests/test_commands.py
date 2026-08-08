@@ -1,3 +1,20 @@
+"""`core/commands.py`, which phase E was supposed to delete and could not.
+
+The plan said "delete `core/registry.py`, `core/commands.py` with their tests".
+`registry` went; `commands` could not, because `kb` is still legacy and blocks
+it twice over: it declares `/ask` and `/kb_reload` through `CommandRegistrar`,
+and `CommandSpec` is the element type of `Manifest.commands`, which
+`core/legacy.py`'s bridge reads to put a legacy feature into /help. So `_guard`
+below is live production code -- it runs on both of kb's commands -- and this
+is its only test. Deleting it on the plan's word would have left live code
+untested, which is the same defect as testing a copy nothing calls.
+
+Phase F deletes the module, and this file with it. A *migrated* feature is
+guarded once, by `core/guards.py`; `tests/test_guards.py` covers that, and
+covers every wording and role combination this file does. What is only here is
+what `CommandRegistrar` itself does: collect `.specs` for the manifest, and
+keep `__wrapped__` so aiogram still sees the real signature.
+"""
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 

@@ -1,11 +1,14 @@
 """The pre-contract way of declaring a command: register it and guard it here.
 
 **Phase F deletes this module.** It was meant to go with `core/registry.py`,
-but `kb` still declares `/ask` and `/kb_reload` through `CommandRegistrar` and
-builds its `Manifest` out of `.specs`, and `core/legacy.py`'s bridge reads
-`CommandSpec` off that manifest to republish it in /help. A migrated feature
-uses `bot.command(...)` in `core/contract.py` and is guarded once, by
-`core/guards.py`; nothing new may be added here.
+and two separate things hold it here, so removing either alone is not enough:
+`kb` declares `/ask` and `/kb_reload` through `CommandRegistrar` and builds its
+`Manifest` out of `.specs`; and `CommandSpec` is the element type of
+`Manifest.commands` itself, which `core/legacy.py`'s bridge reads to put any
+legacy feature into /help. Both die with `Manifest`, in phase F.
+
+A migrated feature uses `bot.command(...)` in `core/contract.py` and is guarded
+once, by `core/guards.py`. Nothing new may be added here.
 """
 import functools
 from dataclasses import dataclass
