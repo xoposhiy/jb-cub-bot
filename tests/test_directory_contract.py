@@ -25,7 +25,7 @@ from jbcub_bot.core.contract import TEXT, Registry
 from jbcub_bot.core.dialogs import Dialog
 from jbcub_bot.core.guards import ADMIN_REFUSAL, NOT_LINKED, STAFF_REFUSAL
 from jbcub_bot.core.models import Role, User
-from jbcub_bot.core.pipeline import LOOKUP, take_message
+from jbcub_bot.core.pipeline import CANCELLED, LOOKUP, take_message
 from jbcub_bot.features.directory import cohort, edit, grades, handlers, privacy
 from jbcub_bot.features.directory import register
 
@@ -232,6 +232,24 @@ async def test_a_command_beats_the_open_prompt():
 
     assert "Ivan Ivanov" in said[0]                  # /me ran, not on_value
     assert await dialog.owner() == "directory:edit"  # and did not end it
+
+
+async def test_cancel_still_works_once_the_senders_row_has_gone():
+    """`on_cancel` renders the principal, and the dialog outlives the row.
+
+    The FSM is in memory, so an open `/edit` prompt survives an admin resetting
+    that person's binding -- and the next `/cancel` would reach
+    `render_edit(None, ...)`. The core skips a hook its dialog's guard no longer
+    admits, and ends the dialog anyway so the sender is not stuck in it.
+    """
+    registry = _registry()
+    dialog = _dialog()
+    await edit.PROMPT.start(dialog, field="github", chat_id=777, message_id=7)
+
+    said = await _send(registry, "/cancel", None, dialog=dialog)
+
+    assert said == [CANCELLED]
+    assert await dialog.owner() is None
 
 
 # --- the six commands and the one chain slot -----------------------------------

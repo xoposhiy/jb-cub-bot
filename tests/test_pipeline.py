@@ -452,6 +452,73 @@ async def test_cancel_ends_the_dialog_and_calls_its_on_cancel():
     assert _replies(fake_bot) == "", "the feature owns what cancelling says"
 
 
+async def test_a_raising_on_cancel_still_ends_the_dialog():
+    """The property the hook-before-end order has to keep.
+
+    The hook runs first so it can read the dialog's data, which is what lets
+    `directory` redraw the screen the prompt is on -- but a hook that crashes
+    must not leave the sender in a state only this command can clear. So the end
+    is in a `finally`, and the exception still reaches `dp.errors` unswallowed.
+    """
+    async def on_cancel(message):
+        raise RuntimeError("boom")
+
+    registry = Registry()
+    _api(registry).dialog("edit", on_text=_noop, on_cancel=on_cancel)
+    dialog = _dialog()
+    await dialog.start("directory:edit", field="github")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await _handle(registry, _message(FakeBot(), "/cancel"), dialog=dialog)
+
+    assert await dialog.owner() is None
+
+
+async def test_the_hook_reads_the_data_the_end_is_about_to_clear():
+    """Why the order is what it is, stated as a test rather than a comment:
+    `directory.on_cancel` redraws over the prompt's chat and message ids, and
+    the dialog's data is the only place they are."""
+    seen = []
+
+    async def on_cancel(message, dialog):
+        seen.append(await dialog.data())
+
+    registry = Registry()
+    _api(registry).dialog("edit", on_text=_noop, on_cancel=on_cancel)
+    dialog = _dialog()
+    await dialog.start("directory:edit", field="github", message_id=7)
+
+    await _handle(registry, _message(FakeBot(), "/cancel"), dialog=dialog)
+
+    assert seen == [{"field": "github", "message_id": 7}]
+    assert await dialog.data() == {}
+
+
+async def test_cancel_ends_the_dialog_without_the_hook_when_it_may_not_run():
+    """A guard on the dialog decides whether the *hook* runs, not whether the
+    exit does. An in-memory dialog outlives the row behind it, so the sender the
+    hook was written for may be gone by the time they type `/cancel` -- and
+    `directory`'s hook renders that principal. Locking them in would be worse
+    than skipping the redraw, so the dialog ends either way."""
+    calls = []
+
+    async def on_cancel(message):
+        calls.append("on_cancel")
+
+    registry = Registry()
+    _api(registry).dialog("edit", on_text=_noop, on_cancel=on_cancel)
+    dialog = _dialog()
+    await dialog.start("directory:edit", field="github")
+    fake_bot = FakeBot()
+
+    await _handle(registry, _message(fake_bot, "/cancel"), dialog=dialog,
+                  principal=None)
+
+    assert calls == []
+    assert await dialog.owner() is None
+    assert _replies(fake_bot) == CANCELLED
+
+
 async def test_cancel_ends_a_dialog_that_declared_no_hook_and_says_so():
     registry = Registry()
     _api(registry).dialog("edit", on_text=_noop)

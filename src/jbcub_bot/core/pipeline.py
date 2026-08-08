@@ -208,9 +208,21 @@ async def _cancel(registry: Registry, message: Message, **given) -> None:
     # The hook runs *before* the end, though, because it is the dialog's last
     # act and the dialog's data is what it has to work with: `directory`'s
     # redraws the screen the prompt is on, and the chat and message ids of that
-    # screen are stored nowhere else.
+    # screen are stored nowhere else. The cost of that order, for whoever writes
+    # the second `on_cancel`: a hook that *starts* a dialog has it ended again
+    # the moment it returns. No feature does; one that wants to would have to
+    # ask for a rule here first.
+    #
+    # The dialog's guard decides whether the *hook* runs, and nothing else. Not
+    # whether the exit runs -- refusing that would lock the sender inside a
+    # dialog they cannot leave, which is the opposite of why the core took
+    # `/cancel` off `directory`. What a guard covers is the hook's right to
+    # assume a principal: an in-memory dialog outlives the row behind it, so an
+    # admin resetting somebody's binding mid-`/edit` would otherwise turn that
+    # person's next `/cancel` into a redraw of `render_edit(None, ...)`.
+    allowed = spec is not None and refusal(spec.guard, given["principal"]) is None
     try:
-        if spec is not None and spec.on_cancel is not None:
+        if allowed and spec.on_cancel is not None:
             await call_handler(spec.on_cancel, message, **given, arg="")
             return
         await message.answer(CANCELLED)
