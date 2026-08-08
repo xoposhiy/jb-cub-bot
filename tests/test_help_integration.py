@@ -77,8 +77,17 @@ async def test_admin_help_keeps_an_elevated_line_under_its_own_heading():
     assert "/as" in out
     # `/sync` is directory's and `/as` is impersonate's, so they render under
     # their own headings instead of pooling into a trailing "🔐 Admin" block.
+    # Checked by block rather than by cross-feature order: task 8 moved
+    # `impersonate` into the load phase (it registers itself instead of being
+    # bridged), which puts its block ahead of `directory`'s now -- the absence
+    # of a pooled block is the property this test cares about, not which
+    # feature happens to render first.
     assert "🔐 Admin" not in out
-    assert out.index("/sync") < out.index("🕵️ Impersonate")
+    blocks = out.split("\n\n")
+    directory_block = next(b for b in blocks if b.startswith("📒 Directory"))
+    impersonate_block = next(b for b in blocks if b.startswith("🕵️ Impersonate"))
+    assert "/sync" in directory_block
+    assert "/as" in impersonate_block
 
 
 async def test_student_help_hides_admin_section():
