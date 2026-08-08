@@ -1,30 +1,12 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import jbcub_bot.features.directory as directory
 from jbcub_bot.features.directory.cohort import cmd_cohort
-from jbcub_bot.features.directory.handlers import (
-    name_search,
-    name_search_intent,
-    set_status,
-)
+from jbcub_bot.features.directory.handlers import name_search, set_status
 from jbcub_bot.core.models import Role, User
 
-
-def test_manifest_exposes_contract():
-    assert directory.manifest.name == "directory"
-    names = {c.name for c in directory.manifest.commands}
-    assert {"me", "cohort", "sync", "start"} <= names
-    sync = next(c for c in directory.manifest.commands if c.name == "sync")
-    assert sync.min_role is Role.ADMIN
-    assert directory.manifest.min_role is Role.STUDENT
-    assert any(i.name == "directory.search" for i in directory.manifest.intents)
-    assert directory.router is not None
-
-
-def test_search_intent_matches_plain_text():
-    import re
-    assert re.search(name_search_intent.pattern, "Ivan", re.IGNORECASE)
+# What the feature declares -- the commands, the chain slot, the guards -- is
+# asserted in test_directory_contract.py, on the registration itself.
 
 
 def test_set_status_updates_user(session):
@@ -62,7 +44,7 @@ async def test_cohort_list_omits_a_departed_mate_for_a_student(session):
     _seed_departed(session)
     msg = SimpleNamespace(answer=AsyncMock())
     await cmd_cohort(msg, principal=_viewer(Role.STUDENT), session=session,
-                     command=SimpleNamespace(args=None))
+                     arg="")
     assert "Expelled" not in msg.answer.await_args.args[0]
 
 
@@ -71,7 +53,7 @@ async def test_cohort_list_omits_a_departed_mate_for_a_teacher(session):
     _seed_departed(session)
     msg = SimpleNamespace(answer=AsyncMock(), answer_document=AsyncMock())
     await cmd_cohort(msg, principal=_viewer(Role.TEACHER), session=session,
-                     command=SimpleNamespace(args="2024"))
+                     arg="2024")
     text = msg.answer.await_args.args[0]
     assert "Ivan Ivanov" in text  # the list was actually reached
     assert "Expelled" not in text
@@ -83,7 +65,7 @@ async def test_cohort_list_omits_a_departed_mate_for_an_admin_too(session):
     _seed_departed(session)
     msg = SimpleNamespace(answer=AsyncMock(), answer_document=AsyncMock())
     await cmd_cohort(msg, principal=_viewer(Role.ADMIN), session=session,
-                     command=SimpleNamespace(args="2024"))
+                     arg="2024")
     text = msg.answer.await_args.args[0]
     assert "Ivan Ivanov" in text  # the list was actually reached
     assert "Expelled" not in text

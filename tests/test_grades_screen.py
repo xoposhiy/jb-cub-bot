@@ -33,7 +33,7 @@ def _student_with_grades(session):
     return user
 
 
-def _callback(data, text=None):
+def _callback(text=None):
     """A callback whose message rejects an edit that changes nothing, as Telegram does."""
     message = Mock(spec=Message)
     message.text = text
@@ -49,7 +49,7 @@ def _callback(data, text=None):
         message.text = new_text
 
     message.edit_text = AsyncMock(side_effect=edit_text)
-    return SimpleNamespace(data=data, answer=AsyncMock(), message=message)
+    return SimpleNamespace(answer=AsyncMock(), message=message)
 
 
 def test_has_grades_grouping_and_position_order(session):
@@ -81,14 +81,16 @@ def _button_texts(cb):
 async def test_open_latest_and_switch_to_explicit_term(session):
     _student_with_grades(session)
     admin = User(last_name="Admin", role=Role.ADMIN)
-    latest = _callback("dir:grades:30000001:-1")
-    await grades.cb_grades(latest, principal=admin, session=session)
+    latest = _callback()
+    await grades.cb_grades(latest, principal=admin, session=session,
+                           arg="30000001:-1")
     assert latest.message.edit_text.await_args.args[0].startswith("Spring 2026")
     assert "Physics: pass" in latest.message.edit_text.await_args.args[0]
     assert _button_texts(latest)[:2] == ["Fall 2025", "📍 Spring 2026"]
 
-    earlier = _callback("dir:grades:30000001:0")
-    await grades.cb_grades(earlier, principal=admin, session=session)
+    earlier = _callback()
+    await grades.cb_grades(earlier, principal=admin, session=session,
+                           arg="30000001:0")
     assert earlier.message.edit_text.await_args.args[0].startswith("Fall 2025")
     assert "Math: 91%" in earlier.message.edit_text.await_args.args[0]
     assert _button_texts(earlier)[:2] == ["📍 Fall 2025", "Spring 2026"]
@@ -110,29 +112,29 @@ async def test_tapping_the_semester_already_on_screen_changes_nothing(session):
     """The profile button opens the latest term, so its own button is a repeat tap."""
     _student_with_grades(session)
     admin = User(last_name="Admin", role=Role.ADMIN)
-    opened = _callback("dir:grades:30000001:-1")
-    await grades.cb_grades(opened, principal=admin, session=session)
+    opened = _callback()
+    await grades.cb_grades(opened, principal=admin, session=session,
+                           arg="30000001:-1")
 
-    again = _callback("dir:grades:30000001:1", text=opened.message.text)
-    await grades.cb_grades(again, principal=admin, session=session)
+    again = _callback(text=opened.message.text)
+    await grades.cb_grades(again, principal=admin, session=session,
+                           arg="30000001:1")
     again.message.edit_text.assert_not_awaited()
     again.answer.assert_awaited_once_with()
 
 
-async def test_stale_index_and_student_are_refused(session):
+async def test_a_stale_index_is_refused(session):
+    # The student refusal that used to sit beside this one is
+    # `role=Role.TEACHER` on the registration now -- see
+    # test_directory_contract.py.
     _student_with_grades(session)
-    stale = _callback("dir:grades:30000001:7")
+    stale = _callback()
     await grades.cb_grades(
-        stale, principal=User(last_name="Admin", role=Role.ADMIN), session=session
+        stale, principal=User(last_name="Admin", role=Role.ADMIN),
+        session=session, arg="30000001:7",
     )
     stale.answer.assert_awaited_once_with(EXPIRED, show_alert=True)
     stale.message.edit_text.assert_not_awaited()
-
-    denied = _callback("dir:grades:30000001:-1")
-    await grades.cb_grades(
-        denied, principal=User(last_name="Student", role=Role.STUDENT), session=session
-    )
-    denied.answer.assert_awaited_once_with("Staff only.", show_alert=True)
 
 
 async def test_bootstrap_admin_and_back_to_profile(session):
@@ -141,12 +143,14 @@ async def test_bootstrap_admin_and_back_to_profile(session):
     session.commit()
     admin = User(last_name="Bootstrap", role=Role.ADMIN)
 
-    opened = _callback("dir:grades:30000001:-1")
-    await grades.cb_grades(opened, principal=admin, session=session)
+    opened = _callback()
+    await grades.cb_grades(opened, principal=admin, session=session,
+                           arg="30000001:-1")
     opened.message.edit_text.assert_awaited_once()
 
-    back = _callback("dir:grades_back:30000001")
-    await grades.cb_grades_back(back, principal=admin, session=session)
+    back = _callback()
+    await grades.cb_grades_back(back, principal=admin, session=session,
+                                arg="30000001")
     kwargs = back.message.edit_text.await_args.kwargs
     assert kwargs["entities"]
     data = [

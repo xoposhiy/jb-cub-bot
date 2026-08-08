@@ -44,8 +44,8 @@ def test_keyboard_puts_two_fields_per_row_and_back_alone():
 def test_keyboard_buttons_carry_their_field():
     kb = edit.edit_keyboard(_me())
     data = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert f"{edit.FIELD_CALLBACK_PREFIX}github" in data
-    assert f"{edit.FIELD_CALLBACK_PREFIX}status_line" in data
+    assert f"{edit.FIELD_CALLBACK}:github" in data
+    assert f"{edit.FIELD_CALLBACK}:status_line" in data
 
 
 def test_every_callback_data_fits_telegram_s_64_byte_limit():
@@ -81,7 +81,7 @@ def test_prompt_shows_a_long_status_in_full_so_it_can_be_retyped():
 def test_prompt_keyboard_offers_clear_and_cancel():
     kb = edit.prompt_keyboard(BY_NAME["github"])
     assert [b.callback_data for b in kb.inline_keyboard[0]] == [
-        f"{edit.CLEAR_CALLBACK_PREFIX}github", edit.CANCEL_CALLBACK,
+        f"{edit.CLEAR_CALLBACK}:github", edit.CANCEL_CALLBACK,
     ]
 
 
@@ -90,15 +90,9 @@ def test_clear_asks_before_removing_the_value():
     assert "Clear your GitHub?" in edit.render_clear_confirm(spec)
     kb = edit.clear_confirm_keyboard(spec)
     assert [b.callback_data for b in kb.inline_keyboard[0]] == [
-        f"{edit.CLEAR_DO_CALLBACK_PREFIX}github", edit.CANCEL_CALLBACK,
+        f"{edit.CLEAR_DO_CALLBACK}:github", edit.CANCEL_CALLBACK,
     ]
     assert kb.inline_keyboard[0][0].text == "Yes, clear GitHub"
-
-
-def test_clear_prefix_does_not_match_the_clear_do_payload():
-    # Both handlers filter by prefix; one must not swallow the other's taps.
-    assert not f"{edit.CLEAR_DO_CALLBACK_PREFIX}github".startswith(
-        edit.CLEAR_CALLBACK_PREFIX)
 
 
 def test_editable_spec_refuses_a_field_the_user_may_not_edit():

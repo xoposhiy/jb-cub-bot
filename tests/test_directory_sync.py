@@ -404,16 +404,6 @@ async def test_oversized_cohort_report_is_one_document_message(
     assert message.answer.await_count == 2
 
 
-async def test_sync_denied_for_non_admin(session, monkeypatch):
-    called = []
-    monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows",
-                        lambda *a, **k: called.append(1) or [])
-    msg = SimpleNamespace(answer=AsyncMock())
-    await cmd_sync(msg, principal=User(last_name="S", role=Role.STUDENT), session=session)
-    msg.answer.assert_awaited_with("Admins only.")
-    assert called == []  # no fetch, no writes
-
-
 async def test_sync_aborts_on_credential_error_without_raising(session, monkeypatch):
     def raise_credential_error(*a):
         raise ValueError(

@@ -3,7 +3,6 @@ import json
 import logging
 from datetime import date
 
-from aiogram import F, Router
 from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
@@ -13,15 +12,13 @@ from aiogram.types import (
 )
 
 from jbcub_bot.core import identity
-from jbcub_bot.core.commands import CommandRegistrar
 from jbcub_bot.core.config import get_settings
-from jbcub_bot.core.intents import Intent
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.core.tokens import issue_link_token
 from jbcub_bot.features.directory import grades, matching, sync_diagnostics
 from jbcub_bot.features.directory.render import (
-    ADMIN_BACK_CALLBACK,
-    ADMIN_CALLBACK,
+    RESET_CANCEL_CALLBACK,
+    RESET_DO_CALLBACK,
     admin_actions_keyboard,
     invite_row,
     me_keyboard,
@@ -31,14 +28,9 @@ from jbcub_bot.features.directory.render import (
 )
 from jbcub_bot.features.directory.search import rank_users
 
-from aiogram.filters import CommandObject
-
 from jbcub_bot.core.sheets_client import build_credentials, fetch_rows
 from jbcub_bot.features.directory import sheets
 from jbcub_bot.core.tokens import verify_link_token
-
-router = Router(name="directory")
-cmd = CommandRegistrar(router)
 
 
 # A Sheets read that never answers must not take the bot with it. googleapiclient
@@ -203,7 +195,6 @@ async def _send_cohort_report(
     await _send_rendered_report(message, rendered, keyboard)
 
 
-@cmd.command("me", "Show your own profile.")
 async def cmd_me(message: Message, principal: User, session):
     text = render_profile(principal, principal)
     await message.answer(
@@ -216,8 +207,13 @@ async def cmd_me(message: Message, principal: User, session):
 async def name_search(message: Message, principal: User, session) -> bool:
     """Answer with a profile or a shortlist; return False when unsure.
 
-    Returning False leaves the message unanswered on purpose: the intent
-    router moves on, and whatever ends the chain gets to reply.
+    Returning False leaves the message unanswered on purpose: the chain moves
+    on, and whatever ends it gets to reply.
+
+    Registered `public=True` and checking `principal` itself, which is the
+    spec's own pattern for a refusal that has something to say: a contract
+    guard would filter this handler out of the chain silently, and the unlinked
+    sender would read "No one found." instead of what to do about it.
     """
     if principal is None:
         # Answering here rather than declining: an unlinked user gets told what
@@ -245,20 +241,9 @@ async def name_search(message: Message, principal: User, session) -> bool:
     return True
 
 
-name_search_intent = Intent(
-    name="directory.search",
-    pattern=r".+",
-    handler=name_search,
-    description="just type a name — search people",
-)
-
-
-@router.callback_query(F.data.startswith(f"{ADMIN_CALLBACK}:"))
-async def cb_admin_open(cb: CallbackQuery, principal: User, session):
-    if principal is None or principal.role is not Role.ADMIN:
-        await cb.answer("Admins only.", show_alert=True)
-        return
-    matriculation = cb.data.split(":", 2)[2]
+async def cb_admin_open(cb: CallbackQuery, principal: User, session,
+                        arg: str):
+    matriculation = arg
     # Read the row rather than trusting the profile that was rendered: which
     # actions apply depends on whether the person is linked right now.
     target = identity.find_by_matriculation(session, matriculation)
@@ -270,12 +255,9 @@ async def cb_admin_open(cb: CallbackQuery, principal: User, session):
     await cb.answer()
 
 
-@router.callback_query(F.data.startswith(f"{ADMIN_BACK_CALLBACK}:"))
-async def cb_admin_back(cb: CallbackQuery, principal: User, session):
-    if principal is None or principal.role is not Role.ADMIN:
-        await cb.answer("Admins only.", show_alert=True)
-        return
-    matriculation = cb.data.split(":", 2)[2]
+async def cb_admin_back(cb: CallbackQuery, principal: User, session,
+                        arg: str):
+    matriculation = arg
     # An admin looking at their own profile came from /me, so put its own
     # buttons back too — not just the collapsed Admin row.
     if principal.matriculation and principal.matriculation == matriculation:
@@ -292,12 +274,9 @@ async def cb_admin_back(cb: CallbackQuery, principal: User, session):
     await cb.answer()
 
 
-@router.callback_query(F.data.startswith("dir:link:"))
-async def cb_issue_link(cb: CallbackQuery, principal: User, session):
-    if principal is None or principal.role is not Role.ADMIN:
-        await cb.answer("Admins only.", show_alert=True)
-        return
-    matriculation = cb.data.split(":", 2)[2]
+async def cb_issue_link(cb: CallbackQuery, principal: User, session,
+                        arg: str):
+    matriculation = arg
     target = identity.find_by_matriculation(session, matriculation)
     if target is None:
         await cb.answer("Not found.", show_alert=True)
@@ -338,16 +317,14 @@ async def cb_issue_link(cb: CallbackQuery, principal: User, session):
     await cb.answer()
 
 
-@router.callback_query(F.data.startswith("dir:reset:"))
-async def cb_reset(cb: CallbackQuery, principal: User, session):
-    if principal is None or principal.role is not Role.ADMIN:
-        await cb.answer("Admins only.", show_alert=True)
-        return
-    matriculation = cb.data.split(":", 2)[2]
+async def cb_reset(cb: CallbackQuery, principal: User, session, arg: str):
+    matriculation = arg
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Yes, reset",
-                             callback_data=f"dir:reset_do:{matriculation}"),
-        InlineKeyboardButton(text="Cancel", callback_data="dir:reset_cancel"),
+        InlineKeyboardButton(
+            text="Yes, reset",
+            callback_data=f"{RESET_DO_CALLBACK}:{matriculation}"),
+        InlineKeyboardButton(text="Cancel",
+                             callback_data=RESET_CANCEL_CALLBACK),
     ]])
     await cb.message.answer(
         f"🧐 Reset telegram_id for {matriculation}? This unlinks their Telegram "
@@ -360,12 +337,8 @@ async def cb_reset(cb: CallbackQuery, principal: User, session):
     await cb.answer()
 
 
-@router.callback_query(F.data.startswith("dir:reset_do:"))
-async def cb_reset_do(cb: CallbackQuery, principal: User, session):
-    if principal is None or principal.role is not Role.ADMIN:
-        await cb.answer("Admins only.", show_alert=True)
-        return
-    matriculation = cb.data.split(":", 2)[2]
+async def cb_reset_do(cb: CallbackQuery, principal: User, session, arg: str):
+    matriculation = arg
     ok = identity.reset_binding(session, matriculation)
     if not ok:
         await cb.message.edit_text("Not found.")
@@ -382,17 +355,14 @@ async def cb_reset_do(cb: CallbackQuery, principal: User, session):
     await cb.answer()
 
 
-@router.callback_query(F.data == "dir:reset_cancel")
 async def cb_reset_cancel(cb: CallbackQuery, principal: User, session):
     await cb.message.edit_text("Reset cancelled.")
     await cb.answer()
 
 
-@cmd.command("start", "Start / link your account.", public=True)
-async def cmd_start(message: Message, principal: User, session,
-                    command: CommandObject):
+async def cmd_start(message: Message, principal: User, session, arg: str):
     settings = get_settings()
-    payload = command.args
+    payload = arg
     if payload:  # one-time link binding
         user = verify_link_token(session, payload, settings.link_secret,
                                  settings.link_ttl_seconds)
@@ -422,7 +392,6 @@ async def cmd_start(message: Message, principal: User, session,
         )
 
 
-@cmd.command("sync", "Re-sync roster from Google Sheets.", min_role=Role.ADMIN)
 async def cmd_sync(message: Message, principal: User, session):
     settings = get_settings()
     try:

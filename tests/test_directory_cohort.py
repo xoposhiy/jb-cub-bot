@@ -5,7 +5,7 @@ from aiogram.types import Message
 
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.directory.cohort import (
-    PICK_PREFIX,
+    PICK_CALLBACK,
     _match,
     cb_pick,
     cmd_cohort,
@@ -95,17 +95,13 @@ def _msg():
     return SimpleNamespace(answer=AsyncMock(), answer_document=AsyncMock())
 
 
-def _args(text):
-    return SimpleNamespace(args=text)
-
-
 async def test_a_student_still_gets_one_message_and_no_file(session):
     _seed(session)
     msg = _msg()
     viewer = User(first_name="V", last_name="Viewer", role=Role.STUDENT,
                   primary_cohort="2024")
     await cmd_cohort(msg, principal=viewer, session=session,
-                     command=_args("2023"))
+                     arg="2023")
     assert "Ivan Ivanov" in msg.answer.await_args.args[0]
     assert "Old Timer" not in msg.answer.await_args.args[0]  # argument ignored
     msg.answer_document.assert_not_awaited()
@@ -115,12 +111,12 @@ async def test_staff_with_no_argument_get_a_button_per_cohort(session):
     _seed(session)
     msg = _msg()
     await cmd_cohort(msg, principal=User(last_name="T", role=Role.TEACHER),
-                     session=session, command=_args(None))
+                     session=session, arg="")
     keyboard = msg.answer.await_args.kwargs["reply_markup"]
     labels = [b.text for row in keyboard.inline_keyboard for b in row]
     assert labels == ["2024", "2023"]
     payloads = [b.callback_data for row in keyboard.inline_keyboard for b in row]
-    assert payloads[0] == f"{PICK_PREFIX}2024"
+    assert payloads[0] == f"{PICK_CALLBACK}:2024"
     msg.answer_document.assert_not_awaited()
 
 
@@ -128,7 +124,7 @@ async def test_staff_with_an_argument_get_the_list_and_one_document(session):
     _seed(session)
     msg = _msg()
     await cmd_cohort(msg, principal=User(last_name="A", role=Role.ADMIN),
-                     session=session, command=_args(" 2024 "))
+                     session=session, arg=" 2024 ")
     text = msg.answer.await_args.args[0]
     assert "2024" in text and "Ivan Ivanov" in text
     assert "Expelled" not in text  # even for an admin
@@ -142,7 +138,7 @@ async def test_an_unknown_cohort_redraws_the_picker_with_a_note(session):
     _seed(session)
     msg = _msg()
     await cmd_cohort(msg, principal=User(last_name="A", role=Role.ADMIN),
-                     session=session, command=_args("2019"))
+                     session=session, arg="2019")
     assert "2019" in msg.answer.await_args.args[0]
     assert msg.answer.await_args.kwargs["reply_markup"] is not None
     msg.answer_document.assert_not_awaited()
@@ -151,12 +147,12 @@ async def test_an_unknown_cohort_redraws_the_picker_with_a_note(session):
 async def test_staff_are_told_when_there_are_no_cohorts_at_all(session):
     msg = _msg()
     await cmd_cohort(msg, principal=User(last_name="A", role=Role.ADMIN),
-                     session=session, command=_args(None))
+                     session=session, arg="")
     assert "/sync" in msg.answer.await_args.args[0]
     assert msg.answer.await_args.kwargs.get("reply_markup") is None
 
 
-def _cb(data, text="Which cohort?"):
+def _cb(text="Which cohort?"):
     # Mock, not AsyncMock: aiogram's Message methods aren't real coroutine
     # functions (inspect.iscoroutinefunction is False on them), so a spec'd
     # AsyncMock wouldn't autodetect edit_text/answer_document as awaitable.
@@ -164,7 +160,7 @@ def _cb(data, text="Which cohort?"):
     message.text = text
     message.edit_text = AsyncMock()
     message.answer_document = AsyncMock()
-    return SimpleNamespace(data=data, message=message, answer=AsyncMock())
+    return SimpleNamespace(message=message, answer=AsyncMock())
 
 
 async def test_a_bootstrap_admin_with_no_row_is_served(session):
@@ -172,17 +168,17 @@ async def test_a_bootstrap_admin_with_no_row_is_served(session):
     # The guard that would refuse it is require_linked's absence, and the only
     # place that matters is cb_pick -- cmd_cohort never looks at id at all.
     _seed(session)
-    cb = _cb(f"{PICK_PREFIX}2024")
+    cb = _cb()
     await cb_pick(cb, principal=User(last_name="Boot", role=Role.ADMIN),
-                  session=session)
+                  session=session, arg="2024")
     cb.message.answer_document.assert_awaited_once()
 
 
 async def test_tapping_a_cohort_replaces_the_text_and_sends_the_file(session):
     _seed(session)
-    cb = _cb(f"{PICK_PREFIX}2024")
+    cb = _cb()
     await cb_pick(cb, principal=User(last_name="A", role=Role.ADMIN),
-                  session=session)
+                  session=session, arg="2024")
     assert "Ivan Ivanov" in cb.message.edit_text.await_args.args[0]
     assert cb.message.edit_text.await_args.kwargs["reply_markup"] is not None
     assert cb.message.answer_document.await_args.args[0].filename == \
@@ -194,23 +190,14 @@ async def test_tapping_the_open_cohort_again_only_resends_the_file(session):
     # Telegram rejects an edit that changes nothing; the file is the point of
     # the tap, so it still goes out.
     _seed(session)
-    cb = _cb(f"{PICK_PREFIX}2024")
+    cb = _cb()
     await cb_pick(cb, principal=User(last_name="A", role=Role.ADMIN),
-                  session=session)
-    same = _cb(f"{PICK_PREFIX}2024", text=cb.message.edit_text.await_args.args[0])
+                  session=session, arg="2024")
+    same = _cb(text=cb.message.edit_text.await_args.args[0])
     await cb_pick(same, principal=User(last_name="A", role=Role.ADMIN),
-                  session=session)
+                  session=session, arg="2024")
     same.message.edit_text.assert_not_awaited()
     same.message.answer_document.assert_awaited_once()
-
-
-async def test_a_student_tapping_a_stale_button_is_refused(session):
-    _seed(session)
-    cb = _cb(f"{PICK_PREFIX}2024")
-    await cb_pick(cb, principal=User(last_name="S", role=Role.STUDENT),
-                  session=session)
-    cb.message.answer_document.assert_not_awaited()
-    assert cb.answer.await_args.kwargs.get("show_alert") is True
 
 
 async def test_a_cohort_name_too_long_for_a_button_is_named_in_the_text_instead(session):
@@ -223,7 +210,7 @@ async def test_a_cohort_name_too_long_for_a_button_is_named_in_the_text_instead(
 
     msg = _msg()
     await cmd_cohort(msg, principal=User(last_name="A", role=Role.ADMIN),
-                     session=session, command=_args(None))
+                     session=session, arg="")
     text = msg.answer.await_args.args[0]
     assert long_name in text
     keyboard = msg.answer.await_args.kwargs["reply_markup"]
@@ -233,6 +220,6 @@ async def test_a_cohort_name_too_long_for_a_button_is_named_in_the_text_instead(
     # It still works when typed, since _match checks the unfiltered names.
     msg2 = _msg()
     await cmd_cohort(msg2, principal=User(last_name="A", role=Role.ADMIN),
-                     session=session, command=_args(long_name))
+                     session=session, arg=long_name)
     assert "Ivan Ivanov" in msg2.answer.await_args.args[0]
     msg2.answer_document.assert_awaited_once()

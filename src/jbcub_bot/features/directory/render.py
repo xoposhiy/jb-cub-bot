@@ -9,6 +9,9 @@ from jbcub_bot.features.directory.visibility import (
     visible_fields,
 )
 
+# Button keys. Each is registered as written and the payload follows one ":",
+# which the core drops -- so a key never carries its own separator, and
+# `dir:admin` can coexist with `dir:admin_back`.
 PRIVACY_CALLBACK = "dir:privacy"
 PROFILE_CALLBACK = "dir:profile"
 EDIT_CALLBACK = "dir:edit"
@@ -16,6 +19,10 @@ ADMIN_CALLBACK = "dir:admin"
 ADMIN_BACK_CALLBACK = "dir:admin_back"
 GRADES_CALLBACK = "dir:grades"
 GRADES_BACK_CALLBACK = "dir:grades_back"
+LINK_CALLBACK = "dir:link"
+RESET_CALLBACK = "dir:reset"
+RESET_DO_CALLBACK = "dir:reset_do"
+RESET_CANCEL_CALLBACK = "dir:reset_cancel"
 
 # first_name and last_name render as one "Name" line; every other label comes
 # from the field table.
@@ -121,8 +128,9 @@ def profile_entities(
 
 
 def invite_row(matriculation: str) -> list[InlineKeyboardButton]:
-    return [InlineKeyboardButton(text="✉️ Issue Invite",
-                                 callback_data=f"dir:link:{matriculation}")]
+    return [InlineKeyboardButton(
+        text="✉️ Issue Invite",
+        callback_data=f"{LINK_CALLBACK}:{matriculation}")]
 
 
 def admin_actions_keyboard(target: User) -> InlineKeyboardMarkup:
@@ -139,8 +147,9 @@ def admin_actions_keyboard(target: User) -> InlineKeyboardMarkup:
     if target.telegram_id is None:
         rows = [invite_row(m)]
     else:
-        rows = [[InlineKeyboardButton(text="♻️ Reset telegram_id",
-                                      callback_data=f"dir:reset:{m}")]]
+        rows = [[InlineKeyboardButton(
+            text="♻️ Reset telegram_id",
+            callback_data=f"{RESET_CALLBACK}:{m}")]]
     rows.append([InlineKeyboardButton(text="⬅️ Back",
                                       callback_data=f"{ADMIN_BACK_CALLBACK}:{m}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

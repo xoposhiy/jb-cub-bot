@@ -77,11 +77,6 @@ async def test_admin_help_keeps_an_elevated_line_under_its_own_heading():
     assert "/as" in out
     # `/sync` is directory's and `/as` is impersonate's, so they render under
     # their own headings instead of pooling into a trailing "🔐 Admin" block.
-    # Checked by block rather than by cross-feature order: task 8 moved
-    # `impersonate` into the load phase (it registers itself instead of being
-    # bridged), which puts its block ahead of `directory`'s now -- the absence
-    # of a pooled block is the property this test cares about, not which
-    # feature happens to render first.
     assert "🔐 Admin" not in out
     blocks = out.split("\n\n")
     directory_block = next(b for b in blocks if b.startswith("📒 Directory"))
@@ -114,9 +109,9 @@ async def test_an_admin_sees_every_legacy_feature_bridged_into_the_registry():
     assert "📒 Directory — Find classmates and manage your own profile." in out
     assert "  /me — Show your own profile." in out
     assert "  /sync — Re-sync roster from Google Sheets. (admin)" in out
-    # directory owns a `/cancel` of its own until task 10, and the bridge lists
-    # it the way the manifest does rather than the way the core's own one reads.
-    assert "  /cancel — Stop editing a profile field." in out
+    # `/cancel` is the core's since task 10, listed under the feature whose
+    # dialog it ends and worded by the core rather than by `directory`.
+    assert "  /cancel — Cancel what you are in the middle of." in out
     assert "  💬 just type a name — search people" in out
     assert ("🕵️ Impersonate — Admin: see the bot as a given user "
             "(/as <ref>, /unas to return).") in out
@@ -150,18 +145,37 @@ async def test_a_student_sees_the_legacy_lines_their_role_allows():
 async def test_an_unlinked_caller_sees_the_public_commands_and_the_notice():
     """The one path `PrincipalMiddleware` lets through with `principal=None`.
 
-    A legacy intent is bridged as a *non-public* note whatever its `min_role`,
+    `kb`'s intent is bridged as a *non-public* note whatever its `min_role`,
     because the old renderer hid every `💬` line from an unlinked caller while
     it showed a public command -- so this is also where that survives.
+    `directory`'s own chain line is public and does show, which is the one
+    difference migration made: typing a name while unlinked really does answer,
+    and what it answers is what to do about being unlinked.
     """
     out = await _run_help(_factory(), 999)
 
     assert out == (
+        "📒 Directory — Find classmates and manage your own profile.\n"
+        "  /start — Start / link your account.\n"
+        "  💬 just type a name — search people\n"
+        "\n"
         "❓ Help — Commands you can use.\n"
         "  /help — List the commands you can use.\n"
         "\n"
-        "📒 Directory — Find classmates and manage your own profile.\n"
-        "  /start — Start / link your account.\n"
-        "\n"
         "You're not linked yet — ask a program admin for a one-time link."
     )
+
+
+async def test_the_features_are_listed_in_discovery_order():
+    """Alphabetical by package name, which is what `pkgutil.iter_modules`
+    yields -- and what phases C to E broke while a migrated feature claimed its
+    slot during `load_features` and a bridged one only during `adopt`. With
+    `directory` migrated, `kb` is the last one left and it also sorts last, so
+    the order is right again before the bridge is deleted."""
+    out = await _run_help(_with_admin(), 777)
+
+    headings = [line for line in out.splitlines() if not line.startswith("  ")
+                and line]
+    assert [heading.split(" — ")[0] for heading in headings] == [
+        "📒 Directory", "❓ Help", "🕵️ Impersonate", "📚 Kb",
+    ]

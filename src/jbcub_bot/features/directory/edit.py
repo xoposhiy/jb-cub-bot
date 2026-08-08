@@ -9,10 +9,7 @@ Only the caller's own row is ever written, so there is nothing to authorize
 beyond being linked.
 """
 
-from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.methods import EditMessageText
 from aiogram.types import (
     CallbackQuery,
@@ -21,17 +18,16 @@ from aiogram.types import (
     Message,
 )
 
-from jbcub_bot.core.commands import CommandRegistrar
+from jbcub_bot.core.dialogs import DialogHandle
 from jbcub_bot.core.models import User
 from jbcub_bot.features.directory import accounts
 from jbcub_bot.features.directory.accounts import Verdict
-from jbcub_bot.features.directory.render import EDIT_CALLBACK, PROFILE_CALLBACK
+from jbcub_bot.features.directory.render import PROFILE_CALLBACK
 from jbcub_bot.features.directory.screens import (
     EMPTY,
     EXPIRED,
-    NOT_LINKED,
+    NO_ROW,
     UNKNOWN_FIELD,
-    require_linked,
     short_value,
 )
 from jbcub_bot.features.directory.visibility import (
@@ -42,10 +38,19 @@ from jbcub_bot.features.directory.visibility import (
     field_value,
 )
 
-FIELD_CALLBACK_PREFIX = "dir:edit:f:"
-CLEAR_CALLBACK_PREFIX = "dir:edit:clear:"
-CLEAR_DO_CALLBACK_PREFIX = "dir:edit:clear_do:"
+# Button keys, without the separator that divides each from the field name it
+# carries: the core matches the longest key and hands the rest over as `arg`,
+# which is what lets `dir:edit`, `dir:edit:clear` and `dir:edit:clear_do`
+# coexist without any of them swallowing the others.
+FIELD_CALLBACK = "dir:edit:f"
+CLEAR_CALLBACK = "dir:edit:clear"
+CLEAR_DO_CALLBACK = "dir:edit:clear_do"
 CANCEL_CALLBACK = "dir:edit:cancel"
+
+# What `bot.dialog(...)` handed back, put here by `register`. A feature never
+# writes the state name out -- deriving it is `core/dialogs.state_name`'s job --
+# so `cb_field` opens the prompt through this handle instead.
+PROMPT: DialogHandle | None = None
 
 _HEADER = "Edit your profile"
 _BUTTONS_PER_ROW = 2
@@ -70,7 +75,7 @@ def edit_keyboard(user: User) -> InlineKeyboardMarkup:
     buttons = [
         InlineKeyboardButton(
             text=f"{spec.label} ✏️",
-            callback_data=f"{FIELD_CALLBACK_PREFIX}{spec.name}",
+            callback_data=f"{FIELD_CALLBACK}:{spec.name}",
         )
         for spec in EDITABLE_FIELDS
     ]
@@ -98,7 +103,7 @@ def render_prompt(user: User, spec: FieldSpec) -> str:
 def prompt_keyboard(spec: FieldSpec) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="\U0001f5d1 Clear",
-                             callback_data=f"{CLEAR_CALLBACK_PREFIX}{spec.name}"),
+                             callback_data=f"{CLEAR_CALLBACK}:{spec.name}"),
         InlineKeyboardButton(text="Cancel", callback_data=CANCEL_CALLBACK),
     ]])
 
@@ -112,23 +117,13 @@ def clear_confirm_keyboard(spec: FieldSpec) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
             text=f"Yes, clear {spec.label}",
-            callback_data=f"{CLEAR_DO_CALLBACK_PREFIX}{spec.name}"),
+            callback_data=f"{CLEAR_DO_CALLBACK}:{spec.name}"),
         InlineKeyboardButton(text="Cancel", callback_data=CANCEL_CALLBACK),
     ]])
 
 
-router = Router(name="directory.edit")
-cmd = CommandRegistrar(router)
-
-_NOTHING_TO_CANCEL = "Nothing to cancel."
 _CANCELLED = "Editing cancelled."
 _STALE_STATE = "That edit screen is from an older version — send /edit again."
-
-
-class EditProfile(StatesGroup):
-    # One state for every field: which field is being edited lives in the FSM
-    # data, so adding an editable field adds no state.
-    value = State()
 
 
 async def _redraw(message: Message, data: dict, text: str, keyboard) -> None:
@@ -154,28 +149,25 @@ async def _redraw(message: Message, data: dict, text: str, keyboard) -> None:
     await message.answer(text, reply_markup=keyboard)
 
 
-@cmd.command("edit", "Edit your status, GitHub or Codeforces.")
-async def cmd_edit(message: Message, principal: User, session,
-                   state: FSMContext):
-    await state.clear()
+async def cmd_edit(message: Message, principal: User, session, dialog):
+    await dialog.end()
     await message.answer(
         render_edit(principal),
         reply_markup=edit_keyboard(principal),
     )
 
 
-@cmd.command("cancel", "Stop editing a profile field.")
-async def cmd_cancel(message: Message, principal: User, session,
-                     state: FSMContext):
-    data = await state.get_data()
-    # Only this feature's own state: another feature may be waiting for text,
-    # and clearing that would end its session while showing an edit screen.
-    if await state.get_state() != EditProfile.value.state:
-        await message.answer(_NOTHING_TO_CANCEL)
-        return
-    await state.clear()
-    await _redraw(message, data, render_edit(principal, _CANCELLED),
-                  edit_keyboard(principal))
+async def on_cancel(message: Message, principal: User, dialog):
+    """What `/cancel` leaves on the screen. The core owns the command.
+
+    Reads the dialog while it is still open, because the prompt's chat and
+    message ids are the only way back to the screen the sender is looking at:
+    without them `_redraw` sends a fresh one and the dead prompt stays up with
+    live buttons. `/cancel` with nothing open never gets here -- that answer is
+    the core's, and it is the same one this feature used to give.
+    """
+    await _redraw(message, await dialog.data(),
+                  render_edit(principal, _CANCELLED), edit_keyboard(principal))
 
 
 async def _show_screen(cb: CallbackQuery, user: User, notice: str = "") -> None:
@@ -187,27 +179,19 @@ async def _show_screen(cb: CallbackQuery, user: User, notice: str = "") -> None:
     await cb.answer()
 
 
-@router.callback_query(F.data == EDIT_CALLBACK)
-@require_linked
-async def cb_open(cb: CallbackQuery, principal: User, session,
-                  state: FSMContext):
-    await state.clear()
+async def cb_open(cb: CallbackQuery, principal: User, session, dialog):
+    await dialog.end()
     await _show_screen(cb, principal)
 
 
-@router.callback_query(F.data == CANCEL_CALLBACK)
-@require_linked
-async def cb_cancel(cb: CallbackQuery, principal: User, session,
-                    state: FSMContext):
-    await state.clear()
+async def cb_cancel(cb: CallbackQuery, principal: User, session, dialog):
+    await dialog.end()
     await _show_screen(cb, principal)
 
 
-@router.callback_query(F.data.startswith(FIELD_CALLBACK_PREFIX))
-@require_linked
-async def cb_field(cb: CallbackQuery, principal: User, session,
-                   state: FSMContext):
-    spec = editable_spec(cb.data[len(FIELD_CALLBACK_PREFIX):])
+async def cb_field(cb: CallbackQuery, principal: User, session, dialog,
+                   arg: str):
+    spec = editable_spec(arg)
     if spec is None:
         # A keyboard left over from an older deploy, or a hand-crafted payload.
         await cb.answer(UNKNOWN_FIELD, show_alert=True)
@@ -215,30 +199,31 @@ async def cb_field(cb: CallbackQuery, principal: User, session,
     if not isinstance(cb.message, Message):
         await cb.answer(EXPIRED, show_alert=True)
         return
-    await state.set_state(EditProfile.value)
-    await state.update_data(field=spec.name, chat_id=cb.message.chat.id,
-                            message_id=cb.message.message_id)
+    # Which field is being edited, and where the prompt is drawn, are the whole
+    # of the dialog's data -- so adding an editable field adds no state.
+    await PROMPT.start(dialog, field=spec.name, chat_id=cb.message.chat.id,
+                       message_id=cb.message.message_id)
     await cb.message.edit_text(render_prompt(principal, spec),
                                reply_markup=prompt_keyboard(spec))
     await cb.answer()
 
 
-@router.message(EditProfile.value, F.text & ~F.text.startswith("/"))
-async def on_value(message: Message, principal: User, session,
-                   state: FSMContext):
+async def on_value(message: Message, principal: User, session, dialog):
     """Save what the user typed, or explain why it can't be saved.
 
-    Commands are excluded from this handler rather than intercepted, so /cancel
-    -- and anything else -- still works while a prompt is open.
+    The core routes text here only while this feature's own dialog is open, and
+    a command never gets this far -- so nothing has to exclude one.
     """
-    if principal is None or principal.id is None:
-        await state.clear()
-        await message.answer(NOT_LINKED)
+    # The write this screen exists for, so the one place it has to care that a
+    # bootstrap admin's principal was never saved: see `privacy.cb_cycle`.
+    if principal.id is None:
+        await dialog.end()
+        await message.answer(NO_ROW)
         return
-    data = await state.get_data()
+    data = await dialog.data()
     spec = editable_spec(data.get("field", ""))
     if spec is None:
-        await state.clear()
+        await dialog.end()
         await message.answer(_STALE_STATE)
         return
     try:
@@ -253,7 +238,7 @@ async def on_value(message: Message, principal: User, session,
         return
     setattr(principal, editable_column(spec), value)
     session.commit()
-    await state.clear()
+    await dialog.end()
     notice = (f"✅ {spec.label} updated." if verdict is Verdict.EXISTS else
               f"⚠️ Saved. {spec.label} didn't answer, so I couldn't "
               f"verify {value}.")
@@ -269,12 +254,9 @@ async def _reprompt(message: Message, data: dict, user: User, spec: FieldSpec,
                   prompt_keyboard(spec))
 
 
-@router.callback_query(F.data.startswith(CLEAR_CALLBACK_PREFIX))
-@require_linked
-async def cb_clear(cb: CallbackQuery, principal: User, session,
-                   state: FSMContext):
+async def cb_clear(cb: CallbackQuery, principal: User, session, arg: str):
     """Ask first: removing a value is destructive, however small."""
-    spec = editable_spec(cb.data[len(CLEAR_CALLBACK_PREFIX):])
+    spec = editable_spec(arg)
     if spec is None:
         await cb.answer(UNKNOWN_FIELD, show_alert=True)
         return
@@ -286,15 +268,18 @@ async def cb_clear(cb: CallbackQuery, principal: User, session,
     await cb.answer()
 
 
-@router.callback_query(F.data.startswith(CLEAR_DO_CALLBACK_PREFIX))
-@require_linked
-async def cb_clear_do(cb: CallbackQuery, principal: User, session,
-                      state: FSMContext):
-    spec = editable_spec(cb.data[len(CLEAR_DO_CALLBACK_PREFIX):])
+async def cb_clear_do(cb: CallbackQuery, principal: User, session, dialog,
+                      arg: str):
+    # A write, so the bootstrap admin with no saved row is turned away here
+    # too: see `privacy.cb_cycle` for why that is not a contract guard.
+    if principal.id is None:
+        await cb.answer(NO_ROW, show_alert=True)
+        return
+    spec = editable_spec(arg)
     if spec is None:
         await cb.answer(UNKNOWN_FIELD, show_alert=True)
         return
     setattr(principal, editable_column(spec), None)
     session.commit()
-    await state.clear()
+    await dialog.end()
     await _show_screen(cb, principal, f"✅ {spec.label} cleared.")

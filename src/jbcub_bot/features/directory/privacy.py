@@ -5,7 +5,6 @@ and redraws this same message. Only the caller's own row is ever written, so
 there is nothing to authorize beyond being linked.
 """
 
-from aiogram import F, Router
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -13,10 +12,8 @@ from aiogram.types import (
     Message,
 )
 
-from jbcub_bot.core.commands import CommandRegistrar
 from jbcub_bot.core.models import User
 from jbcub_bot.features.directory.render import (
-    PRIVACY_CALLBACK,
     PROFILE_CALLBACK,
     me_keyboard,
     profile_entities,
@@ -24,8 +21,8 @@ from jbcub_bot.features.directory.render import (
 )
 from jbcub_bot.features.directory.screens import (
     EXPIRED,
+    NO_ROW,
     UNKNOWN_FIELD,
-    require_linked,
     short_value,
 )
 from jbcub_bot.features.directory.visibility import (
@@ -41,7 +38,9 @@ from jbcub_bot.features.directory.visibility import (
     set_level,
 )
 
-FIELD_CALLBACK_PREFIX = "dir:vis:"
+# The button key, without the separator that divides it from the field name:
+# the core matches the key and hands the rest over as `arg`.
+FIELD_CALLBACK = "dir:vis"
 
 _HEADER = "Who sees your data"
 _LEGEND = " · ".join(f"{LEVEL_EMOJI[lv]} {LEVEL_LABELS[lv]}" for lv in LEVELS)
@@ -62,7 +61,7 @@ def privacy_keyboard(user: User) -> InlineKeyboardMarkup:
     buttons = [
         InlineKeyboardButton(
             text=f"{spec.label} {LEVEL_EMOJI[level_of(user, spec.name)]}",
-            callback_data=f"{FIELD_CALLBACK_PREFIX}{spec.name}",
+            callback_data=f"{FIELD_CALLBACK}:{spec.name}",
         )
         for spec in CONFIGURABLE_FIELDS
     ]
@@ -75,11 +74,6 @@ def privacy_keyboard(user: User) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-router = Router(name="directory.privacy")
-cmd = CommandRegistrar(router)
-
-
-@cmd.command("privacy", "Choose who sees each of your profile fields.")
 async def cmd_privacy(message: Message, principal: User, session):
     await message.answer(
         render_privacy(principal),
@@ -96,14 +90,10 @@ async def _show_privacy(cb: CallbackQuery, principal: User) -> None:
     await cb.answer()
 
 
-@router.callback_query(F.data == PRIVACY_CALLBACK)
-@require_linked
 async def cb_open(cb: CallbackQuery, principal: User, session):
     await _show_privacy(cb, principal)
 
 
-@router.callback_query(F.data == PROFILE_CALLBACK)
-@require_linked
 async def cb_back(cb: CallbackQuery, principal: User, session):
     if not isinstance(cb.message, Message):
         await cb.answer(EXPIRED, show_alert=True)
@@ -117,10 +107,16 @@ async def cb_back(cb: CallbackQuery, principal: User, session):
     await cb.answer()
 
 
-@router.callback_query(F.data.startswith(FIELD_CALLBACK_PREFIX))
-@require_linked
-async def cb_cycle(cb: CallbackQuery, principal: User, session):
-    name = cb.data[len(FIELD_CALLBACK_PREFIX):]
+async def cb_cycle(cb: CallbackQuery, principal: User, session, arg: str):
+    # The one place this screen writes, so the one place it has to care that a
+    # bootstrap admin's principal was never saved: `identity.apply_bootstrap`
+    # attaches it to no session, so the commit below would change nothing while
+    # the screen redrew as if it had. Not a contract guard -- that would hide
+    # the button from exactly the person who needs to be told.
+    if principal.id is None:
+        await cb.answer(NO_ROW, show_alert=True)
+        return
+    name = arg
     spec = BY_NAME.get(name)
     if spec is None or spec.category is not Category.CONFIGURABLE:
         # A keyboard left over from an older deploy, or a hand-crafted payload.

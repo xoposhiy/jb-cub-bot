@@ -1,6 +1,6 @@
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.directory.privacy import (
-    FIELD_CALLBACK_PREFIX,
+    FIELD_CALLBACK,
     privacy_keyboard,
     render_privacy,
 )
@@ -73,9 +73,9 @@ def test_keyboard_buttons_carry_the_field_and_show_its_level():
     kb = privacy_keyboard(_me(visibility={"gmail": STAFF_ONLY}))
     buttons = {b.callback_data: b.text
                for row in kb.inline_keyboard for b in row}
-    assert buttons[f"{FIELD_CALLBACK_PREFIX}telegram"] == \
+    assert buttons[f"{FIELD_CALLBACK}:telegram"] == \
         f"Telegram {LEVEL_EMOJI[EVERYONE]}"
-    assert buttons[f"{FIELD_CALLBACK_PREFIX}gmail"] == \
+    assert buttons[f"{FIELD_CALLBACK}:gmail"] == \
         f"Gmail {LEVEL_EMOJI[STAFF_ONLY]}"
 
 

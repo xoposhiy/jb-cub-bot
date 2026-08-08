@@ -25,9 +25,9 @@ def _message(telegram_id: int, username: str | None):
     )
 
 
-async def _start(message, session, principal=None, payload=None):
+async def _start(message, session, principal=None, payload=""):
     await handlers.cmd_start(message, principal=principal, session=session,
-                             command=SimpleNamespace(args=payload))
+                             arg=payload)
 
 
 async def test_invite_links_an_account_whose_handle_differs_from_the_sheet(session):

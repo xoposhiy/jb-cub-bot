@@ -835,13 +835,15 @@ async def test_a_stale_session_starts_fresh(monkeypatch):
     assert asked == ["first"], "a stale session does not take the next message"
 
 
-async def test_cancel_belongs_to_directory_and_leaves_the_session_open(
-        monkeypatch):
-    """The deviation from the spec, pinned down.
+async def test_cancel_ends_the_session_now_that_the_core_owns_it(monkeypatch):
+    """The deviation this used to pin down is gone.
 
-    `directory.edit` owns /cancel and is loaded first, so the KB feature cannot
-    claim that name. What it can insist on is that directory's handler no longer
-    clears a state that is not its own.
+    `directory` owned `/cancel` while it was legacy, so a KB session met a
+    handler that said "Nothing to cancel." and left it running. Since task 10
+    the core owns one `/cancel` for every dialog: it ends whatever state the
+    sender is in -- this one included, even though `KbChat.active` is a raw FSM
+    state no registered dialog claims -- and answers with its own wording,
+    because only a feature that declared an `on_cancel` gets to say more.
     """
     dp, bot, _, asked = _setup(monkeypatch)
     await dp.feed_update(bot, _message(bot, TEACHER_ID, "/ask"), dispatcher=dp)
@@ -851,8 +853,8 @@ async def test_cancel_belongs_to_directory_and_leaves_the_session_open(
     await dp.feed_update(bot, _message(bot, TEACHER_ID, "retakes?", update_id=3),
                          dispatcher=dp)
 
-    assert "Nothing to cancel." in _texts(bot)
-    assert asked == ["retakes?"], "/cancel must not end a knowledge base session"
+    assert "Cancelled." in _texts(bot)
+    assert asked == [], "the session was over, so nothing was asked of the agent"
 
 
 async def test_kb_reload_is_admin_only(monkeypatch):

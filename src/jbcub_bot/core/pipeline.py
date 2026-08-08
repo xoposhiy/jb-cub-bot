@@ -200,13 +200,22 @@ async def _cancel(registry: Registry, message: Message, **given) -> None:
         await message.answer(NOTHING_TO_CANCEL)
         return
     spec = registry.dialogs().get(owner)
-    # Ended first, and whatever the state was: a state no feature claims any
-    # more is exactly the one a sender cannot get out of by themselves.
-    await dialog.end()
-    if spec is not None and spec.on_cancel is not None:
-        await call_handler(spec.on_cancel, message, **given, arg="")
-        return
-    await message.answer(CANCELLED)
+    # Ended whatever the state was, and whatever the hook does: a state no
+    # feature claims any more -- one left behind by an older deploy -- is
+    # exactly the one a sender cannot get out of by themselves, and a hook that
+    # raises must not strand them in it either. Hence the `finally`.
+    #
+    # The hook runs *before* the end, though, because it is the dialog's last
+    # act and the dialog's data is what it has to work with: `directory`'s
+    # redraws the screen the prompt is on, and the chat and message ids of that
+    # screen are stored nowhere else.
+    try:
+        if spec is not None and spec.on_cancel is not None:
+            await call_handler(spec.on_cancel, message, **given, arg="")
+            return
+        await message.answer(CANCELLED)
+    finally:
+        await dialog.end()
 
 
 async def _run_dialog(registry: Registry, message: Message, **given) -> bool:

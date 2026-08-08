@@ -1,7 +1,8 @@
 from jbcub_bot.main import build_dispatcher
 
 
-def test_build_dispatcher_registers_directory_router():
+def test_build_dispatcher_registers_the_directory_feature():
+    # A migrated feature exports no router, so what proves it was mounted is
+    # its slot in the registry the entry points read.
     dp = build_dispatcher(session_factory=lambda: None)
-    names = [r.name for r in dp.sub_routers]
-    assert "directory" in names
+    assert "directory" in {reg.name for reg in dp["registry"].features()}

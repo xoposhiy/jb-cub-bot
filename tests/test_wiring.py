@@ -1,11 +1,12 @@
 """What `build_dispatcher` mounts, proved by feeding real updates through it.
 
-Phase B puts the new pipeline in front of routers that still own their own
+Phase B put the new pipeline in front of routers that still owned their own
 commands, callbacks and FSM states, so the two questions here are "does a
 legacy feature still work" and "does anything answer twice". Both are asked of
 a real `Dispatcher` built by `jbcub_bot.main`, because the wiring is the thing
 under test -- a unit test of the entry points would prove the parts task 3
-already proved.
+already proved. Since task 10 only `kb` is legacy, so the same two questions
+are now asked of it and of a `directory` that answers through the core.
 
 The probe feature (`_probe`) registers itself into the *live* registry after the
 dispatcher was built. That it takes effect at all is the point: the entry points
@@ -18,7 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 from aiogram import Router
-from aiogram.methods import EditMessageText
+from aiogram.methods import AnswerCallbackQuery, EditMessageText
 from aiogram.types import CallbackQuery, Chat, Message, PhotoSize, Update
 from aiogram.types import User as TgUser
 from sqlalchemy import create_engine, select
@@ -37,6 +38,7 @@ from jbcub_bot.core.models import Role, User
 from jbcub_bot.core.oplog import OpsLog
 from jbcub_bot.core.pipeline import LEGACY, LOOKUP
 from jbcub_bot.features.directory import accounts, render
+from jbcub_bot.features.kb import handlers as kb_handlers
 from jbcub_bot.features.directory.accounts import Verdict
 from jbcub_bot.main import build_dispatcher
 
@@ -135,14 +137,14 @@ async def test_building_twice_does_not_double_the_chain(caplog):
         _detach()
         second = _build()
 
-    assert len(first["registry"].chain()) == len(second["registry"].chain()) == 1
-    # And the shim inside that one slot hosts the same two intents both times,
-    # rather than four: it is built per call, like everything else here.
+    assert len(first["registry"].chain()) == len(second["registry"].chain()) == 2
+    # And the shim in the later of those two slots hosts the same one intent
+    # both times, rather than two: it is built per call, like everything else
+    # here.
     hosted = [record.getMessage() for record in caplog.records
               if "legacy shim" in record.getMessage()]
     assert hosted == [
-        f"legacy shim at={LEGACY} hosts 2 intents: "
-        f"directory.search, kb.offer",
+        f"legacy shim at={LEGACY} hosts 1 intents: kb.offer",
     ] * 2
 
 
@@ -160,9 +162,9 @@ async def test_building_twice_does_not_inherit_the_taker_record():
     assert second["registry"].last_taker(STUDENT_ID) is None
 
 
-# --- the legacy routers still get their turn ----------------------------------
+# --- what the core owns, end to end -------------------------------------------
 
-async def test_a_legacy_command_still_reaches_its_router():
+async def test_a_migrated_command_is_dispatched_by_the_core():
     dp = _build()
     bot = FakeBot()
 
@@ -171,7 +173,7 @@ async def test_a_legacy_command_still_reaches_its_router():
     assert any("Ivan Ivanov" in text for text in _replies(bot))
 
 
-async def test_a_legacy_callback_still_reaches_its_router():
+async def test_a_migrated_button_is_dispatched_by_the_core():
     dp = _build()
     bot = FakeBot()
 
@@ -180,7 +182,7 @@ async def test_a_legacy_callback_still_reaches_its_router():
     assert any("Edit your profile" in text for text in _edits(bot))
 
 
-async def test_free_text_reaches_the_shim_and_a_legacy_intent_takes_it():
+async def test_free_text_reaches_the_name_search_at_lookup():
     dp = _build()
     bot = FakeBot()
 
@@ -188,6 +190,7 @@ async def test_free_text_reaches_the_shim_and_a_legacy_intent_takes_it():
 
     assert any("Ivan Ivanov" in text for text in _replies(bot))
     assert not any("No one found." in text for text in _replies(bot))
+    assert dp["registry"].last_taker(STUDENT_ID).feature == "directory"
 
 
 async def test_free_text_nothing_takes_gets_the_last_word_and_the_ops_log_miss():
@@ -201,9 +204,11 @@ async def test_free_text_nothing_takes_gets_the_last_word_and_the_ops_log_miss()
     assert "как дела" in bot.logged[0].text
 
 
-async def test_a_legacy_cancel_is_left_to_the_router_that_owns_it(monkeypatch):
-    """`/cancel` is the core's own command, but `directory` still has one until
-    task 10 -- and only its answer can redraw the edit screen."""
+async def test_the_cores_cancel_runs_the_dialogs_own_on_cancel(monkeypatch):
+    """The constraint task 10 lifted. `directory` owned a `/cancel` of its own
+    while it was legacy, so the core's never ran; now it does, and the notice
+    on the screen is still the feature's -- edited into the prompt message,
+    which is what needs the dialog's data to outlive the end of the dialog."""
     _no_network(monkeypatch)
     dp = _build()
     bot = FakeBot()
@@ -211,7 +216,9 @@ async def test_a_legacy_cancel_is_left_to_the_router_that_owns_it(monkeypatch):
 
     await dp.feed_update(bot, _message(bot, "/cancel", update_id=3))
 
-    assert any("Editing cancelled." in text for text in _edits(bot))
+    redraw = [m for m in bot.sent if isinstance(m, EditMessageText)][-1]
+    assert "Editing cancelled." in redraw.text
+    assert redraw.message_id == 7  # the prompt, not a fresh message
 
 
 # --- one answer, never two ----------------------------------------------------
@@ -229,13 +236,13 @@ def _no_network(monkeypatch):
     monkeypatch.setattr(accounts, "verify", fake_verify)
 
 
-async def test_text_in_a_legacy_state_is_answered_once_by_the_legacy_handler(
+async def test_text_in_a_registered_dialog_is_answered_once_by_its_on_text(
         monkeypatch):
-    """The transitional stand-in for `StateFilter(None)`.
+    """A dialog takes the text meant for it, and nothing else answers.
 
-    `EditProfile.value` is a state no registered dialog owns, so the entry point
-    declines the message and the chain never runs -- otherwise the shim's `.+`
-    intents would answer the value as well as `on_value` saving it.
+    `directory:edit` is a registered dialog since task 10, so the pipeline
+    routes the value to `on_value` itself and never walks the chain -- which is
+    what stops the shim's `.+` intent answering the value as well.
     """
     _no_network(monkeypatch)
     factory = _factory()
@@ -268,7 +275,8 @@ async def test_the_resolved_chain_and_the_shim_are_logged_at_startup(caplog):
     messages = [record.getMessage() for record in caplog.records]
     # The shim is a chain entry like any other, and it says it is the shim.
     assert f"chain at={LEGACY}: legacy.offer" in messages
-    assert any("legacy shim" in message and "directory.search, kb.offer" in message
+    assert f"chain at={LOOKUP}: directory.name_search" in messages
+    assert any("legacy shim" in message and "kb.offer" in message
                for message in messages)
 
 
@@ -299,7 +307,9 @@ def probe():
             seen.append(("button", dialog, oplog, arg))
             await callback.answer("probe button")
 
-        @bot.message(at=LOOKUP, when=TEXT)
+        # Ahead of LOOKUP rather than at it: `directory` owns that position
+        # now, and two handlers at one `at=` is a startup error.
+        @bot.message(at=LOOKUP - 1, when=TEXT)
         async def on_text(message, oplog):
             seen.append(("chain", None, oplog, ""))
             await message.answer("probe chain")
@@ -389,14 +399,14 @@ async def test_a_button_registered_after_the_mount_is_dispatched(probe):
     assert isinstance(dialog, Dialog) and isinstance(oplog, OpsLog)
 
 
-async def test_a_chain_handler_runs_ahead_of_the_legacy_shim(probe):
+async def test_a_chain_handler_runs_ahead_of_everything_behind_it(probe):
     dp = _build()
     probe.install(dp)
     bot = FakeBot()
 
     await dp.feed_update(bot, _message(bot, "Ivanov"))
 
-    # at=LOOKUP is ahead of at=LEGACY, so the name search never sees it.
+    # Ahead of both the name search and the shim, so neither one sees it.
     assert _replies(bot) == ["probe chain"]
     assert dp["registry"].last_taker(STUDENT_ID).feature == "probe"
 
@@ -438,15 +448,19 @@ async def test_a_photo_is_still_answered_once_the_registry_owns_the_chain(probe)
 async def test_an_unmatched_callback_is_left_to_the_legacy_routers(probe):
     """A tap the registry does not know is declined while anything is legacy:
     answering it here as well as in the router that owns the key would answer
-    one tap twice."""
+    one tap twice. `kb`'s keys are the last such, `directory`'s having all
+    become registered ones in task 10."""
     dp = _build()
     probe.install(dp)
     bot = FakeBot()
 
-    await dp.feed_update(bot, _callback(bot, render.PRIVACY_CALLBACK))
+    await dp.feed_update(bot, _callback(bot, kb_handlers.START_CALLBACK))
 
     assert probe.seen == []
-    assert any("Who sees your data" in text for text in _edits(bot))
+    # kb's own handler answered it -- with "not configured", since the suite
+    # runs with no agent runtime installed.
+    [alert] = [m for m in bot.sent if isinstance(m, AnswerCallbackQuery)]
+    assert "KB_LLM_API_KEY" in alert.text
 
 
 # --- what the filters will say once the migrations are done -------------------

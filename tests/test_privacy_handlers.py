@@ -14,10 +14,12 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-import jbcub_bot.features.directory as directory
 from jbcub_bot.core.db import Base
+# NOT_LINKED comes from the core now: refusing an unlinked caller is the
+# contract's default guard, and `directory` no longer keeps a wording for it.
+from jbcub_bot.core.guards import NOT_LINKED
 from jbcub_bot.core.models import Role, User
-from jbcub_bot.features.directory.screens import EXPIRED, NO_ROW, NOT_LINKED
+from jbcub_bot.features.directory.screens import EXPIRED, NO_ROW
 from jbcub_bot.features.directory.visibility import COHORT, EVERYONE, STAFF_ONLY
 from jbcub_bot.main import build_dispatcher
 
@@ -260,11 +262,6 @@ async def test_a_hidden_field_still_shows_on_the_owner_s_own_screen():
     assert "i@gmail.com" in _edits(fake_bot)[0].text
 
 
-def test_manifest_lists_the_privacy_command():
-    names = {c.name for c in directory.manifest.commands}
-    assert "privacy" in names
-
-
 # --- Interactive /as keeps every privacy action on the target ---------------
 
 async def test_privacy_under_impersonation_updates_the_target():
@@ -341,6 +338,23 @@ async def test_bootstrap_admin_without_a_row_is_refused_and_persists_nothing():
     check = factory()
     assert check.scalars(select(User)).all() == []  # nothing was created
     check.close()
+
+
+async def test_bootstrap_admin_without_a_row_may_still_look():
+    """The other half, and the reason this check is not a contract guard: a
+    guard is a visibility filter, so it would take the screen away from exactly
+    the person who has to be told their account is not linked yet. Only the tap
+    that writes is refused; opening the screen is not."""
+    factory = _session_factory()  # nobody seeded at all
+    dp = build_dispatcher(session_factory=factory, bootstrap_ids={555})
+    fake_bot = FakeBot()
+
+    await dp.feed_update(fake_bot,
+                         _callback_update(fake_bot, 555, "dir:privacy"),
+                         dispatcher=dp)
+
+    assert "Who sees your data" in _edits(fake_bot)[0].text
+    assert [alert.text for alert in _alerts(fake_bot)] == [None]  # a bare ack
 
 
 # --- Fix 3: a stale (>48h) privacy screen answers instead of crashing ------

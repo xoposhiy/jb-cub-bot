@@ -15,11 +15,11 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-import jbcub_bot.features.directory as directory
 from jbcub_bot.core.db import Base
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.directory import accounts, edit
 from jbcub_bot.features.directory.accounts import Verdict
+from jbcub_bot.features.directory.screens import NO_ROW
 from jbcub_bot.main import build_dispatcher
 
 
@@ -122,7 +122,7 @@ async def _open_prompt(dp, fake_bot, field: str, telegram_id=222):
     await dp.feed_update(
         fake_bot,
         _callback_update(fake_bot, telegram_id,
-                         f"{edit.FIELD_CALLBACK_PREFIX}{field}"),
+                         f"{edit.FIELD_CALLBACK}:{field}"),
         dispatcher=dp)
 
 
@@ -358,6 +358,50 @@ async def test_an_unlinked_user_gets_no_prompt():
     assert len(_alerts(fake_bot)) == 1
 
 
+async def test_a_bootstrap_admin_without_a_row_cannot_save_a_value():
+    """A write, so the check that is not a guard applies here too. Without it
+    the save is not an error but silence: the synthetic principal is attached
+    to no session, so the commit changes nothing while the screen redraws as if
+    it had."""
+    factory = _session_factory()  # nobody seeded at all
+    dp = build_dispatcher(session_factory=factory, bootstrap_ids={555})
+    fake_bot = FakeBot()
+
+    await _open_prompt(dp, fake_bot, "github", telegram_id=555)
+    await dp.feed_update(fake_bot,
+                         _message_update(fake_bot, 555, "alice", update_id=3),
+                         dispatcher=dp)
+
+    assert any(NO_ROW == getattr(m, "text", "") for m in fake_bot.sent)
+    check = factory()
+    assert check.scalars(select(User)).all() == []  # nothing was created
+    check.close()
+
+
+async def test_a_command_beats_the_open_prompt(monkeypatch):
+    """`~F.text.startswith("/")` is gone from `on_value`; the order in
+    `core/pipeline` is what keeps a command working inside a dialog now."""
+    factory = _session_factory()
+    _seed_student(factory)
+    _verdict(monkeypatch, Verdict.EXISTS)
+    dp = build_dispatcher(session_factory=factory)
+    fake_bot = FakeBot()
+
+    await _open_prompt(dp, fake_bot, "github")
+    await dp.feed_update(fake_bot, _message_update(fake_bot, 222, "/me",
+                                                   update_id=3),
+                         dispatcher=dp)
+    # The prompt is still open, so the next line is still the value.
+    await dp.feed_update(fake_bot, _message_update(fake_bot, 222, "alice",
+                                                   update_id=4),
+                         dispatcher=dp)
+
+    # `or ""`: an AnswerCallbackQuery carries text=None.
+    assert any("Ivan Ivanov" in (getattr(m, "text", "") or "")
+               for m in fake_bot.sent)          # /me ran
+    assert _stored(factory, "github_self") == "alice"
+
+
 async def test_plain_text_still_searches_when_nobody_is_editing():
     # Regression: StateFilter(None) must narrow the fallback, not disable it.
     factory = _session_factory()
@@ -423,7 +467,7 @@ async def test_edit_under_impersonation_updates_the_target():
     )
     edit_screen = _edits(fake_bot)[-1]
     assert "target status" in edit_screen.text
-    status_button = f"{edit.FIELD_CALLBACK_PREFIX}status_line"
+    status_button = f"{edit.FIELD_CALLBACK}:status_line"
     assert status_button in [
         button.callback_data
         for row in edit_screen.reply_markup.inline_keyboard
@@ -444,7 +488,7 @@ async def test_edit_under_impersonation_updates_the_target():
     assert _stored(factory, "status_line") == "admin changed this"
     assert _stored(factory, "status_line", telegram_id=777) is None
     redraw = _edits(fake_bot)[-1]
-    assert f"{edit.FIELD_CALLBACK_PREFIX}github" in [
+    assert f"{edit.FIELD_CALLBACK}:github" in [
         button.callback_data
         for row in redraw.reply_markup.inline_keyboard
         for button in row
@@ -469,7 +513,7 @@ async def test_cancel_inside_the_mode_cancels_the_targets_edit():
     await dp.feed_update(
         fake_bot,
         _callback_update(fake_bot, 777,
-                         f"{edit.FIELD_CALLBACK_PREFIX}status_line",
+                         f"{edit.FIELD_CALLBACK}:status_line",
                          update_id=3),
         dispatcher=dp)
     await dp.feed_update(fake_bot,
@@ -504,7 +548,7 @@ async def test_clear_asks_before_removing_anything():
     await dp.feed_update(
         fake_bot,
         _callback_update(fake_bot, 222,
-                         f"{edit.CLEAR_CALLBACK_PREFIX}github", update_id=3),
+                         f"{edit.CLEAR_CALLBACK}:github", update_id=3),
         dispatcher=dp)
 
     assert _stored(factory, "github_self") == "alice"  # nothing gone yet
@@ -520,7 +564,7 @@ async def test_confirming_clears_the_value_and_leaves_the_roster_alone():
     await dp.feed_update(
         fake_bot,
         _callback_update(fake_bot, 222,
-                         f"{edit.CLEAR_DO_CALLBACK_PREFIX}github", update_id=3),
+                         f"{edit.CLEAR_DO_CALLBACK}:github", update_id=3),
         dispatcher=dp)
 
     assert _stored(factory, "github_self") is None
@@ -539,14 +583,10 @@ async def test_clearing_an_unknown_field_is_refused():
     await dp.feed_update(
         fake_bot,
         _callback_update(fake_bot, 222,
-                         f"{edit.CLEAR_DO_CALLBACK_PREFIX}gmail", update_id=3),
+                         f"{edit.CLEAR_DO_CALLBACK}:gmail", update_id=3),
         dispatcher=dp)
 
     assert _stored(factory, "gmail") == "i@gmail.com"
     assert _edits(fake_bot) == []
     assert len(_alerts(fake_bot)) == 1
 
-
-def test_manifest_lists_the_new_commands():
-    names = {c.name for c in directory.manifest.commands}
-    assert {"edit", "cancel"} <= names

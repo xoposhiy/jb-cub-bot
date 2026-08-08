@@ -3,7 +3,6 @@
 from collections import Counter
 from dataclasses import dataclass, field
 
-from aiogram import F, Router
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -23,7 +22,6 @@ from jbcub_bot.features.directory.render import (
     render_profile,
 )
 from jbcub_bot.features.directory.screens import EXPIRED
-from jbcub_bot.features.directory.visibility import is_staff
 
 
 @dataclass(frozen=True)
@@ -226,15 +224,11 @@ def semester_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-router = Router(name="directory.grades")
-
-
-@router.callback_query(F.data.startswith(f"{GRADES_CALLBACK}:"))
-async def cb_grades(cb: CallbackQuery, principal: User, session):
-    if principal is None or not is_staff(principal):
-        await cb.answer("Staff only.", show_alert=True)
-        return
-    _, _, matriculation, index_text = cb.data.split(":")
+async def cb_grades(cb: CallbackQuery, principal: User, session, arg: str):
+    # The one button carrying two values, so it splits its own payload. A
+    # matriculation containing ":" would break it -- as it already did when the
+    # whole of `cb.data` was split here, so nothing is newly fragile.
+    matriculation, index_text = arg.split(":")
     target = identity.find_by_matriculation(session, matriculation)
     if target is None:
         await cb.answer("Not found.", show_alert=True)
@@ -263,12 +257,9 @@ async def cb_grades(cb: CallbackQuery, principal: User, session):
     await cb.answer()
 
 
-@router.callback_query(F.data.startswith(f"{GRADES_BACK_CALLBACK}:"))
-async def cb_grades_back(cb: CallbackQuery, principal: User, session):
-    if principal is None or not is_staff(principal):
-        await cb.answer("Staff only.", show_alert=True)
-        return
-    matriculation = cb.data.split(":", 2)[2]
+async def cb_grades_back(cb: CallbackQuery, principal: User, session,
+                         arg: str):
+    matriculation = arg
     target = identity.find_by_matriculation(session, matriculation)
     if target is None:
         await cb.answer("Not found.", show_alert=True)
