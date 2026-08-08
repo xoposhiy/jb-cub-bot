@@ -3,21 +3,24 @@ import logging
 import sys
 import threading
 
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import StateFilter
-from aiogram.types import ErrorEvent, Message, Update
+from aiogram import Bot, Dispatcher, Router
+from aiogram.types import CallbackQuery, ErrorEvent, Message, Update
 
 import jbcub_bot.features as features_pkg
-from jbcub_bot.core import registry, impersonation
+from jbcub_bot.core import buttons, impersonation, legacy, pipeline
+# The pre-contract list of manifests, which `features/help` still renders from.
+# Task 7 moves that to `core/help.py` and task 11 deletes the module; aliased
+# until then so `registry` here means the contract's own.
+from jbcub_bot.core import registry as manifests
 from jbcub_bot.core.config import get_settings
+from jbcub_bot.core.contract import Registry
 from jbcub_bot.core.db import get_session, init_db
 from jbcub_bot.core import oplog as oplog_mod
+from jbcub_bot.core.dialogs import DialogMiddleware
 from jbcub_bot.core.errors import report_exception, summarize
-from jbcub_bot.core.intents import IntentRouter
-from jbcub_bot.core.loader import discover_features
+from jbcub_bot.core.loader import load_features
 from jbcub_bot.core.middleware import PrincipalMiddleware
 
-_intent_router = IntentRouter()
 _log = logging.getLogger(__name__)
 
 
@@ -50,12 +53,6 @@ def describe_update(update: Update) -> str:
     return " · ".join(parts)
 
 
-# What the bot says when no intent took the message. Search is the only intent
-# today, so this is its "not found"; when the chain grows it becomes the
-# generic "I didn't understand that".
-NOTHING_MATCHED = "No one found."
-
-
 def build_dispatcher(session_factory, bootstrap_ids: set | None = None,
                      log_chat_id: str = "") -> Dispatcher:
     dp = Dispatcher()
@@ -66,63 +63,74 @@ def build_dispatcher(session_factory, bootstrap_ids: set | None = None,
     # inner middlewares for a sub-router's handler, and runs them once, for the
     # handler that actually matched.
     dp.message.middleware(impersonation.BannerMiddleware())
+    # `dialog` for both kinds, because a tap opens the prompt the next message
+    # answers and the two must see the same FSM context. aiogram resolves that
+    # context into `data["state"]` in an outer middleware at update level, so it
+    # is there whichever inner middleware reads it -- and reading it after
+    # PrincipalMiddleware means the one event that resolves no context at all (a
+    # message with no sender, which only a group can produce) has already been
+    # refused for being outside a private chat.
+    dp.message.middleware(DialogMiddleware())
+    dp.callback_query.middleware(DialogMiddleware())
 
     def ops_log(bot):
         """One per update: the Bot instance only exists per-update."""
         return oplog_mod.OpsLog(bot, log_chat_id, bootstrap_ids or ())
 
-    registry.reset()
-    for feature in discover_features(features_pkg):
-        dp.include_router(feature.router)
-        registry.register(feature.manifest)
-        for intent in feature.manifest.intents:
-            _intent_router.register(intent)
+    # Local, and nothing here is a module global: a second build_dispatcher must
+    # inherit neither the chain nor the per-chat taker record. The
+    # `_intent_router` this replaces was reset nowhere while the manifest list
+    # beside it was, so every call appended the whole chain again.
+    registry = Registry()
+    # Phase B/E only: the legacy features' intents live in the chain at LEGACY,
+    # after every landmark. Claimed before loading so `load_features` validates
+    # and logs the slot beside every real feature's, and filled from the
+    # manifests once they exist. Phase F deletes core/legacy.py and these lines.
+    shim = legacy.install(registry)
+    manifests.reset()
+    loaded = load_features(features_pkg, registry)
+    shim.adopt(loaded)
+    for feature in loaded:
+        if feature.legacy:
+            dp.include_router(feature.router)
+            manifests.register(feature.manifest)
+    # Where a test -- or anything else wanting to see the resolved contract --
+    # finds it, since there is deliberately no module global holding it.
+    dp["registry"] = registry
 
-    # NL fallback: any non-command text runs through the intent router --
-    # unless the sender is in a state. A Dispatcher's own handlers run before
-    # its sub-routers, so without StateFilter(None) this handler would consume
-    # every value a feature is waiting for. The `.+` search intent no longer
-    # swallows the message by matching it -- below its threshold it declines --
-    # but it still runs before any sub-router, so StateFilter(None) stays
-    # load-bearing.
-    @dp.message(StateFilter(None), F.text & ~F.text.startswith("/"))
-    async def nl_fallback(message: Message, principal, session, bot: Bot,
-                          impersonator=None):
-        handled = await _intent_router.dispatch(message.text, message,
-                                                principal, session)
-        if not handled:
-            await message.answer(NOTHING_MATCHED)
-            await ops_log(bot).send(oplog_mod.format_miss(
-                query=message.text, answer=NOTHING_MATCHED,
-                principal=principal, tg_user=message.from_user,
-                impersonator=impersonator,
-            ))
+    # The core routes every message it can prove is its own, and declines the
+    # rest to the legacy routers below. The filter is what decides; see
+    # core/legacy.py for why that decision cannot live inside the handler.
+    @dp.message(legacy.core_owns_message(registry, loaded))
+    async def route_message(message: Message, principal, session, bot: Bot,
+                            dialog, impersonator=None):
+        await pipeline.handle_message(
+            registry, message, principal=principal, session=session, bot=bot,
+            impersonator=impersonator, dialog=dialog, oplog=ops_log(bot),
+        )
+
+    @dp.callback_query(legacy.core_owns_callback(registry, loaded))
+    async def route_callback(callback: CallbackQuery, principal, session,
+                             bot: Bot, dialog, impersonator=None):
+        await buttons.handle_callback(
+            registry, callback, principal=principal, session=session, bot=bot,
+            impersonator=impersonator, dialog=dialog, oplog=ops_log(bot),
+        )
 
     # Last word: a message no handler took must still get an answer. Sub-routers
     # run after the Dispatcher's own handlers, so this router is included last
     # and only sees what everything above it declined — unknown commands, and
-    # anything that isn't text.
+    # anything that isn't text. The wording and the ops-log miss are
+    # `pipeline.last_word`'s now, which is also what answers a message the entry
+    # point above took nothing from; phase F leaves only that one.
     fallback = Router(name="fallback")
 
     @fallback.message()
     async def nothing_understood(message: Message, bot: Bot, principal=None,
                                  impersonator=None):
-        command = (message.text or "").split()[0] if message.text else ""
-        if command.startswith("/"):
-            # The bot answered correctly, so this is not a gap worth logging.
-            await message.answer(
-                f"I don't know {command}. /help lists what I can do."
-            )
-            return
-        answer = "I only read text. /help lists what I can do."
-        await message.answer(answer)
-        # `.value`, not the enum: aiogram's ContentType is a (str, Enum), so
-        # interpolating it would write "ContentType.PHOTO" into the entry.
-        await ops_log(bot).send(oplog_mod.format_miss(
-            query=message.content_type.value, answer=answer,
-            principal=principal, tg_user=message.from_user,
-            impersonator=impersonator,
-        ))
+        await pipeline.last_word(message, principal=principal,
+                                 impersonator=impersonator,
+                                 oplog=ops_log(bot))
 
     dp.include_router(fallback)
 

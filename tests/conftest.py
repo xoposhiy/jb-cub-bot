@@ -3,8 +3,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 import jbcub_bot.features as features_pkg
+from jbcub_bot.core.contract import Registry
 from jbcub_bot.core.db import Base
-from jbcub_bot.core.loader import discover_features
+from jbcub_bot.core.loader import load_features
 
 
 @pytest.fixture(autouse=True)
@@ -13,8 +14,11 @@ def _reset_feature_routers():
     # an already-parented Router, so build_dispatcher() can only be called once
     # per process unless we detach them first. Reset before every test so any
     # number of build_dispatcher() calls succeed regardless of test order.
-    for feature in discover_features(features_pkg):
-        feature.router._parent_router = None
+    # A throwaway Registry: only the routers of the features that still have
+    # one are wanted here, and the last of those goes in phase F.
+    for feature in load_features(features_pkg, Registry()):
+        if feature.router is not None:
+            feature.router._parent_router = None
     yield
 
 

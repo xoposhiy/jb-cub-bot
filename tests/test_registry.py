@@ -1,6 +1,7 @@
 import jbcub_bot.features as features_pkg
 from jbcub_bot.core import registry
-from jbcub_bot.core.loader import Manifest, discover_features
+from jbcub_bot.core.contract import Registry
+from jbcub_bot.core.loader import Manifest, load_features
 from jbcub_bot.main import build_dispatcher
 
 
@@ -26,8 +27,9 @@ def test_all_returns_copy():
 
 
 def _reset_routers():
-    for feature in discover_features(features_pkg):
-        feature.router._parent_router = None
+    for feature in load_features(features_pkg, Registry()):
+        if feature.router is not None:
+            feature.router._parent_router = None
 
 
 def test_build_dispatcher_populates_registry():

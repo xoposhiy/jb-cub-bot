@@ -15,7 +15,8 @@ from sqlalchemy.pool import StaticPool
 
 from jbcub_bot.core.db import Base
 from jbcub_bot.core.models import Role, User
-from jbcub_bot.main import NOTHING_MATCHED, build_dispatcher
+from jbcub_bot.core.pipeline import NOTHING_MATCHED
+from jbcub_bot.main import build_dispatcher
 
 
 class FakeBot:

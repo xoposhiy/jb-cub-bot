@@ -107,17 +107,3 @@ def _log_chain(registry: Registry) -> None:
         # must not turn a startup log line into a startup crash.
         handler = getattr(spec.handler, "__name__", repr(spec.handler))
         logger.info("chain at=%s: %s.%s", spec.at, spec.feature, handler)
-
-
-def discover_features(package) -> list[LoadedFeature]:
-    """The pre-contract loader, still what `main.py` calls until task 6."""
-    found: list[LoadedFeature] = []
-    for info in pkgutil.iter_modules(package.__path__):
-        module = importlib.import_module(f"{package.__name__}.{info.name}")
-        manifest = getattr(module, "manifest", None)
-        router = getattr(module, "router", None)
-        if manifest is None or router is None:
-            continue
-        found.append(LoadedFeature(name=info.name, module=module,
-                                   manifest=manifest, router=router))
-    return found
