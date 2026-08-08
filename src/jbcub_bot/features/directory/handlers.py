@@ -33,8 +33,8 @@ from jbcub_bot.features.directory.search import rank_users
 
 from aiogram.filters import CommandObject
 
-from jbcub_bot.core import sheets
 from jbcub_bot.core.sheets_client import build_credentials, fetch_rows
+from jbcub_bot.features.directory import sheets
 from jbcub_bot.core.tokens import verify_link_token
 
 router = Router(name="directory")

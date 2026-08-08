@@ -3,8 +3,7 @@
 from dataclasses import dataclass
 import re
 
-from jbcub_bot.core import gradebook, sheets
-from jbcub_bot.features.directory import grades
+from jbcub_bot.features.directory import gradebook, grades, sheets
 
 
 MAX_REPORT_TEXT = 3900

@@ -1,4 +1,4 @@
-from jbcub_bot.core import sheets
+from jbcub_bot.features.directory import sheets
 from jbcub_bot.core.models import User
 
 

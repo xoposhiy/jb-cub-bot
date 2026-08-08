@@ -1,7 +1,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity
 
-from jbcub_bot.core import sheets
 from jbcub_bot.core.models import Role, User
+from jbcub_bot.features.directory import sheets
 from jbcub_bot.features.directory.visibility import (
     BY_NAME,
     FIELDS,

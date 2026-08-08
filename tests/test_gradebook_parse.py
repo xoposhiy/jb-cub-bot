@@ -1,6 +1,6 @@
 import pytest
 
-from jbcub_bot.core.gradebook import (
+from jbcub_bot.features.directory.gradebook import (
     Column,
     GradebookRow,
     IgnoredColumn,

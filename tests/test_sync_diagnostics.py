@@ -1,5 +1,4 @@
-from jbcub_bot.core import gradebook, sheets
-from jbcub_bot.features.directory import grades, sync_diagnostics
+from jbcub_bot.features.directory import gradebook, grades, sheets, sync_diagnostics
 from jbcub_bot.features.directory.sync_diagnostics import (
     MAX_REPORT_TEXT,
     CohortOutcome,

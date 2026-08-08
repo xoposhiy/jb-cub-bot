@@ -1,6 +1,11 @@
 import pytest
 
-from jbcub_bot.core.sheets import MappingError, SHEET_OWNED, normalize_rows, sheet_url
+from jbcub_bot.features.directory.sheets import (
+    MappingError,
+    SHEET_OWNED,
+    normalize_rows,
+    sheet_url,
+)
 
 
 def test_source_link_is_sheet_owned():
@@ -35,7 +40,7 @@ def test_normalize_rows_maps_by_header():
 
 
 def test_normalize_handle_strips_at_url_and_whitespace():
-    from jbcub_bot.core.sheets import normalize_handle
+    from jbcub_bot.features.directory.sheets import normalize_handle
     assert normalize_handle("@xoposhiy") == "xoposhiy"
     assert normalize_handle("xoposhiy") == "xoposhiy"
     assert normalize_handle("  @xoposhiy ") == "xoposhiy"
@@ -135,13 +140,13 @@ def test_normalize_rows_missing_column_error_lists_the_columns_the_sheet_has():
 
 
 def test_extract_sheet_id_from_url():
-    from jbcub_bot.core.sheets import extract_sheet_id
+    from jbcub_bot.features.directory.sheets import extract_sheet_id
     url = "https://docs.google.com/spreadsheets/d/1AbC-dEf_123/edit#gid=0"
     assert extract_sheet_id(url) == "1AbC-dEf_123"
 
 
 def test_extract_sheet_id_passthrough_bare_id():
-    from jbcub_bot.core.sheets import extract_sheet_id
+    from jbcub_bot.features.directory.sheets import extract_sheet_id
     assert extract_sheet_id("  1AbC-dEf_123 ") == "1AbC-dEf_123"
 
 
@@ -149,7 +154,7 @@ def test_parse_cohort_index_reads_each_cohorts_mapping_from_its_row():
     # Every column past Cohort/Link is one of our field names; the cell under it
     # is what that field is called in that cohort's own sheet. Two cohorts can
     # name the same field differently.
-    from jbcub_bot.core.sheets import parse_cohort_index
+    from jbcub_bot.features.directory.sheets import parse_cohort_index
     rows = [
         ["Cohort", "Link", "matriculation", "last_name", "handle_sheet"],
         ["2024", "https://docs.google.com/spreadsheets/d/AAA/edit",
@@ -171,7 +176,7 @@ def test_parse_cohort_index_reads_each_cohorts_mapping_from_its_row():
 def test_parse_cohort_index_treats_a_blank_cell_as_a_field_that_cohort_lacks():
     # A cohort sheet with no Citizenship column leaves the cell empty rather
     # than needing a separate mapping. A short row means the same thing.
-    from jbcub_bot.core.sheets import parse_cohort_index
+    from jbcub_bot.features.directory.sheets import parse_cohort_index
     rows = [
         ["Cohort", "Link", "matriculation", "citizenship", "comment"],
         ["2024", "AAA", "Matr", "", "Comment"],
@@ -184,7 +189,7 @@ def test_parse_cohort_index_treats_a_blank_cell_as_a_field_that_cohort_lacks():
 
 def test_parse_cohort_index_rejects_an_unknown_field_name():
     # A typo in the header would otherwise silently drop a whole column of data.
-    from jbcub_bot.core.sheets import parse_cohort_index
+    from jbcub_bot.features.directory.sheets import parse_cohort_index
     rows = [
         ["Cohort", "Link", "matriculation", "last_nmae"],
         ["2024", "AAA", "Matr", "Last name"],
@@ -198,7 +203,7 @@ def test_parse_cohort_index_rejects_an_unknown_field_name():
 def test_parse_cohort_index_requires_matriculation():
     # upsert_users keys students on matriculation: without it every row is
     # silently skipped and the sync reports success having written nothing.
-    from jbcub_bot.core.sheets import parse_cohort_index
+    from jbcub_bot.features.directory.sheets import parse_cohort_index
     rows = [
         ["Cohort", "Link", "last_name"],
         ["2024", "AAA", "Last name"],
@@ -209,7 +214,7 @@ def test_parse_cohort_index_requires_matriculation():
 
 
 def test_parse_cohort_index_missing_columns_raises():
-    from jbcub_bot.core.sheets import parse_cohort_index
+    from jbcub_bot.features.directory.sheets import parse_cohort_index
     with pytest.raises(MappingError):
         parse_cohort_index([["Cohort"], ["2024"]])  # no Link column
 
@@ -217,7 +222,7 @@ def test_parse_cohort_index_missing_columns_raises():
 def test_identity_mapping_maps_each_header_field_to_itself():
     # The Rights tab names its columns with our own field names, so it needs no
     # translation -- only a check that we recognize every one of them.
-    from jbcub_bot.core.sheets import identity_mapping
+    from jbcub_bot.features.directory.sheets import identity_mapping
     header = ["first_name", "last_name", "handle_sheet", "role", ""]
     assert identity_mapping(header) == {
         "first_name": "first_name", "last_name": "last_name",
@@ -226,7 +231,7 @@ def test_identity_mapping_maps_each_header_field_to_itself():
 
 
 def test_identity_mapping_rejects_an_unknown_field_name():
-    from jbcub_bot.core.sheets import identity_mapping
+    from jbcub_bot.features.directory.sheets import identity_mapping
     with pytest.raises(MappingError) as err:
         identity_mapping(["first_name", "rolle"])
     assert "rolle" in str(err.value)
@@ -234,7 +239,7 @@ def test_identity_mapping_rejects_an_unknown_field_name():
 
 
 def test_identity_mapping_enforces_required_fields():
-    from jbcub_bot.core.sheets import identity_mapping
+    from jbcub_bot.features.directory.sheets import identity_mapping
     with pytest.raises(MappingError) as err:
         identity_mapping(["first_name", "role"], required=("handle_sheet",))
     assert "handle_sheet" in str(err.value)

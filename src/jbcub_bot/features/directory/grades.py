@@ -12,8 +12,9 @@ from aiogram.types import (
 )
 from sqlalchemy import delete, select
 
-from jbcub_bot.core import gradebook, identity
+from jbcub_bot.core import identity
 from jbcub_bot.core.models import Grade, User
+from jbcub_bot.features.directory import gradebook
 from jbcub_bot.features.directory.render import (
     GRADES_BACK_CALLBACK,
     GRADES_CALLBACK,
