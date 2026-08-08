@@ -6,6 +6,7 @@ from aiogram.types import Chat, Document, Message, PhotoSize
 
 from jbcub_bot.core.contract import (
     ANY,
+    CANCEL_COMMAND,
     DOCUMENT,
     PHOTO,
     TEXT,
@@ -217,13 +218,24 @@ def test_a_feature_without_describe_is_refused():
 
 def test_two_commands_of_one_name_are_refused():
     registry = Registry()
-    _api(registry, "directory").command("cancel", "Stop.")(_noop)
-    _api(registry, "kb").command("cancel", "Stop asking.")(_noop)
+    _api(registry, "directory").command("ask", "Ask a classmate.")(_noop)
+    _api(registry, "kb").command("ask", "Ask the knowledge base.")(_noop)
+    with pytest.raises(ContractError) as err:
+        registry.validate()
+    assert "ask" in str(err.value)
+    assert "directory" in str(err.value)
+    assert "kb" in str(err.value)
+
+
+def test_a_feature_claiming_the_core_s_cancel_is_refused():
+    # Two /cancel is the collision this whole contract exists to kill, and the
+    # core's own is the one a feature cannot shadow: it ends every dialog.
+    registry = Registry()
+    _api(registry).command(CANCEL_COMMAND, "Stop editing a profile field.")(_noop)
     with pytest.raises(ContractError) as err:
         registry.validate()
     assert "cancel" in str(err.value)
     assert "directory" in str(err.value)
-    assert "kb" in str(err.value)
 
 
 def test_a_command_without_a_description_is_refused():

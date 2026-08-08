@@ -40,6 +40,16 @@ def ANY(message: Message) -> bool:
     return True
 
 
+# --- what the core keeps for itself ----------------------------------------------
+
+# The one command no feature may declare: it ends whatever dialog the sender is
+# in, whichever feature owns it, so it cannot belong to any of them. The name
+# lives here rather than in `core/pipeline`, which routes it, so that
+# `validate()` can refuse a feature claiming it without importing the router.
+CANCEL_COMMAND = "cancel"
+CANCEL_DESCRIPTION = "Cancel what you are in the middle of."
+
+
 # --- the calling convention ----------------------------------------------------
 
 # The core dispatches to feature handlers itself, so it cannot lean on aiogram's
@@ -240,6 +250,11 @@ class Registry:
 
     def __init__(self):
         self._features: dict[str, FeatureRegistration] = {}
+        # Routing state rather than a declaration, but it belongs to whoever
+        # built this registry: a second `build_dispatcher` must not inherit the
+        # first one's answers. That is the mistake `main.py`'s module-global
+        # `_intent_router` makes today, beside a `registry` that is reset.
+        self._last_taker: dict[int, MessageSpec | None] = {}
 
     def api_for(self, feature: str) -> BotApi:
         return BotApi(feature, self)
@@ -274,6 +289,20 @@ class Registry:
         return {state_name(spec.feature, spec.name): spec
                 for reg in self._features.values() for spec in reg.dialogs}
 
+    def record_taker(self, chat_id: int, spec: MessageSpec | None) -> None:
+        """Remember what took this chat's last message. A record, not a
+        history: the question it answers is "what just happened here"."""
+        self._last_taker[chat_id] = spec
+
+    def last_taker(self, chat_id: int) -> MessageSpec | None:
+        """The chain handler that took the last message in this chat, or None
+        when a command, a dialog, or nothing at all did.
+
+        This is how a future `ai` learns a profile was shown between two
+        questions without knowing that `directory` exists.
+        """
+        return self._last_taker.get(chat_id)
+
     def validate(self) -> None:
         """Refuse anything the core could not honour, before polling starts."""
         commands: dict[str, str] = {}
@@ -293,6 +322,13 @@ class Registry:
                     raise ContractError(
                         f"{where} in '{reg.name}' has an empty description. "
                         f"Unlisted is not undocumented -- describe it."
+                    )
+                if spec.name == CANCEL_COMMAND:
+                    raise ContractError(
+                        f"{where} in '{reg.name}' is the core's own: it ends "
+                        f"whatever dialog the sender is in, whichever feature "
+                        f"owns it. Drop it and give the dialog an on_cancel "
+                        f"hook instead."
                     )
                 _claim(commands, spec.name, reg.name, where, "Rename one.")
             for spec in reg.messages:

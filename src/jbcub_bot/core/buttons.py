@@ -34,8 +34,23 @@ def match(buttons: list[ButtonSpec], data: str) -> tuple[ButtonSpec, str] | None
 
 async def handle_callback(registry: Registry, callback: CallbackQuery, *,
                           principal, session, bot, impersonator, dialog,
-                          oplog) -> ButtonSpec | None:
-    """Route one tap. Returns the spec that took it, or None.
+                          oplog) -> None:
+    """Route one tap, and answer it even when no key matched."""
+    given = dict(principal=principal, session=session, bot=bot,
+                 impersonator=impersonator, dialog=dialog, oplog=oplog)
+    if not await take_callback(registry, callback, **given):
+        await callback.answer()
+
+
+async def take_callback(registry: Registry, callback: CallbackQuery, *,
+                        principal, session, bot, impersonator, dialog,
+                        oplog) -> bool:
+    """True when the tap was taken or refused -- either way it was answered.
+
+    False means no registered key matched it *and* nothing was said, so a
+    caller can offer the tap somewhere else: answering here as well as in a
+    router that still owns the key would answer one tap twice. Same seam as
+    `pipeline.take_message`, for the same reason.
 
     Every injectable is passed by name, including the ones that are nobody --
     `impersonator=None` outside /as, `principal=None` for an unlinked caller.
@@ -44,16 +59,15 @@ async def handle_callback(registry: Registry, callback: CallbackQuery, *,
     """
     found = match(registry.buttons(), callback.data or "")
     if found is None:
-        await callback.answer()
-        return None
+        return False
     spec, arg = found
     refused = refusal(spec.guard, principal)
     if refused is not None:
         # An alert rather than a toast: the tap did nothing, and a toast on a
         # screen that did not change is easy to miss.
         await callback.answer(refused, show_alert=True)
-        return None
+        return True
     await call_handler(spec.handler, callback, principal=principal,
                        session=session, bot=bot, impersonator=impersonator,
                        dialog=dialog, arg=arg, oplog=oplog)
-    return spec
+    return True

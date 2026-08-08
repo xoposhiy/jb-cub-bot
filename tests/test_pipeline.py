@@ -15,7 +15,6 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Chat, Message, PhotoSize
 from aiogram.types import User as TgUser
 
-from jbcub_bot.core import pipeline
 from jbcub_bot.core.contract import ANY, PHOTO, TEXT, Registry
 from jbcub_bot.core.dialogs import Dialog
 from jbcub_bot.core.guards import ADMIN_REFUSAL, NOT_LINKED
@@ -29,20 +28,12 @@ from jbcub_bot.core.pipeline import (
     NOTHING_TO_CANCEL,
     dispatch,
     handle_message,
-    last_taker,
     take_message,
 )
 
 LOG_CHAT = "-1009999"
 STUDENT = User(last_name="Ivanov", role=Role.STUDENT)
 ADMIN = User(last_name="Egorov", role=Role.ADMIN)
-
-
-@pytest.fixture(autouse=True)
-def _forget_the_last_taker():
-    pipeline.reset()
-    yield
-    pipeline.reset()
 
 
 class FakeBot:
@@ -81,8 +72,8 @@ def _message(fake_bot, text=None, chat_id=777, **kwargs) -> Message:
                    text=text, **kwargs).as_(fake_bot)
 
 
-def _photo(fake_bot, chat_id=777) -> Message:
-    return _message(fake_bot, chat_id=chat_id, photo=[
+def _photo(fake_bot, chat_id=777, caption=None) -> Message:
+    return _message(fake_bot, chat_id=chat_id, caption=caption, photo=[
         PhotoSize(file_id="f", file_unique_id="u", width=1, height=1)])
 
 
@@ -309,6 +300,43 @@ async def test_a_pasted_command_with_a_newline_after_it_is_still_that_command():
     _api(registry).command("me", "Show your profile.")(cmd_me)
     await _handle(registry, _message(FakeBot(), "/me\n"))
     assert calls == [""]
+
+
+async def test_a_command_in_a_caption_is_still_a_command():
+    """A photo captioned "/sync 2024" is as deliberate an address as typing it.
+
+    aiogram's own Command filter, which the core replaces here, matches text
+    *or* caption, and `core/middleware.py` already turns on that distinction.
+    """
+    seen = {}
+
+    async def cmd_sync(message, arg):
+        seen["arg"] = arg
+
+    registry = Registry()
+    _api(registry).command("sync", "Refresh the roster.")(cmd_sync)
+    fake_bot = FakeBot()
+    await _handle(registry, _photo(fake_bot, caption="/sync 2024"))
+    assert seen == {"arg": "2024"}
+
+
+async def test_an_unknown_command_in_a_caption_is_answered_as_a_command():
+    registry = Registry()
+    _api(registry)
+    fake_bot = FakeBot()
+    await _handle(registry, _photo(fake_bot, caption="/nosuchthing"))
+    replies = _replies(fake_bot)
+    assert "/nosuchthing" in replies
+    assert "I only read text." not in replies
+    assert fake_bot.logged == []
+
+
+async def test_a_caption_that_is_not_a_command_is_still_not_text():
+    registry = Registry()
+    _api(registry).message(at=LOOKUP)(_noop)
+    fake_bot = FakeBot()
+    await _handle(registry, _photo(fake_bot, caption="Ivan"))
+    assert "I only read text." in _replies(fake_bot)
 
 
 async def test_a_command_addressed_to_the_bot_by_name_is_still_that_command():
@@ -651,8 +679,8 @@ async def test_the_last_taker_is_the_spec_that_took_the_last_message():
     registry = Registry()
     _api(registry).message(at=LOOKUP)(_noop)
     await _handle(registry, _message(FakeBot(), "Ivan"))
-    assert last_taker(777).feature == "directory"
-    assert last_taker(777).at == LOOKUP
+    assert registry.last_taker(777).feature == "directory"
+    assert registry.last_taker(777).at == LOOKUP
 
 
 async def test_the_last_taker_is_per_chat():
@@ -660,17 +688,66 @@ async def test_the_last_taker_is_per_chat():
     _api(registry).message(at=LOOKUP)(_noop)
     fake_bot = FakeBot()
     await _handle(registry, _message(fake_bot, "Ivan", chat_id=777))
-    assert last_taker(777) is not None
-    assert last_taker(888) is None, "one chat's taker leaked into another's"
+    assert registry.last_taker(777) is not None
+    assert registry.last_taker(888) is None, \
+        "one chat's taker leaked into another's"
+
+
+async def test_the_last_taker_belongs_to_the_registry_that_answered():
+    # A second build_dispatcher must not inherit the first one's answers.
+    registry = Registry()
+    _api(registry).message(at=LOOKUP)(_noop)
+    await _handle(registry, _message(FakeBot(), "Ivan"))
+    assert Registry().last_taker(777) is None
 
 
 async def test_a_message_nobody_took_leaves_no_taker_standing():
     # Otherwise a stale "a profile was just shown" outlives the profile.
     registry = Registry()
-    bot = _api(registry)
-    bot.message(at=LOOKUP, when=TEXT)(_noop)
+    _api(registry).message(at=LOOKUP, when=TEXT)(_noop)
     fake_bot = FakeBot()
     await _handle(registry, _message(fake_bot, "Ivan"))
-    assert last_taker(777) is not None
+    assert registry.last_taker(777) is not None
     await _handle(registry, _photo(fake_bot))
-    assert last_taker(777) is None
+    assert registry.last_taker(777) is None
+
+
+async def test_a_command_taking_the_message_is_not_a_chain_taker():
+    # /me shows a profile too, and phase F must not read that as the chain
+    # having answered.
+    registry = Registry()
+    bot = _api(registry)
+    bot.message(at=LOOKUP, when=TEXT)(_noop)
+    bot.command("me", "Show your profile.")(_noop)
+    fake_bot = FakeBot()
+    await _handle(registry, _message(fake_bot, "Ivan"))
+    await _handle(registry, _message(fake_bot, "/me"))
+    assert registry.last_taker(777) is None
+
+
+async def test_a_dialog_taking_the_message_is_not_a_chain_taker():
+    registry = Registry()
+    bot = _api(registry)
+    bot.message(at=LOOKUP, when=TEXT)(_noop)
+    bot.dialog("edit", on_text=_noop)
+    fake_bot = FakeBot()
+    await _handle(registry, _message(fake_bot, "Ivan"))
+    dialog = _dialog()
+    await dialog.start("directory:edit")
+    await _handle(registry, _message(fake_bot, "xoposhiy"), dialog=dialog)
+    assert registry.last_taker(777) is None
+
+
+async def test_a_crash_in_the_chain_leaves_no_stale_taker():
+    async def takes_then_crashes(message):
+        if message.text == "boom":
+            raise RuntimeError("boom")
+
+    registry = Registry()
+    _api(registry).message(at=LOOKUP)(takes_then_crashes)
+    fake_bot = FakeBot()
+    await _handle(registry, _message(fake_bot, "Ivan"))
+    assert registry.last_taker(777) is not None
+    with pytest.raises(RuntimeError, match="boom"):
+        await _handle(registry, _message(fake_bot, "boom"))
+    assert registry.last_taker(777) is None

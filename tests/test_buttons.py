@@ -14,7 +14,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Chat, Message
 from aiogram.types import User as TgUser
 
-from jbcub_bot.core.buttons import handle_callback, match
+from jbcub_bot.core.buttons import handle_callback, match, take_callback
 from jbcub_bot.core.contract import ButtonSpec, Guard, Registry
 from jbcub_bot.core.dialogs import Dialog
 from jbcub_bot.core.guards import ADMIN_REFUSAL, NOT_LINKED
@@ -128,9 +128,8 @@ async def test_the_matching_handler_gets_the_tap_and_its_payload():
     registry = Registry()
     _api(registry).button("dir:admin")(cb_admin)
     fake_bot = FakeBot()
-    took = await _handle(registry, _callback(fake_bot, "dir:admin:30000001"))
+    await _handle(registry, _callback(fake_bot, "dir:admin:30000001"))
     assert seen == {"data": "dir:admin:30000001", "arg": "30000001"}
-    assert took.key == "dir:admin"
 
 
 async def test_a_callback_nothing_matched_is_still_answered():
@@ -138,9 +137,37 @@ async def test_a_callback_nothing_matched_is_still_answered():
     registry = Registry()
     _api(registry).button("dir:admin")(_noop)
     fake_bot = FakeBot()
-    took = await _handle(registry, _callback(fake_bot, "gone:from:an:old:deploy"))
-    assert took is None
+    await _handle(registry, _callback(fake_bot, "gone:from:an:old:deploy"))
     assert [type(m).__name__ for m in fake_bot.sent] == ["AnswerCallbackQuery"]
+
+
+async def test_take_callback_answers_nothing_when_nothing_matched():
+    """What lets a caller offer the tap elsewhere before anything answers.
+
+    Answering here as well as in a router that still owns the key would answer
+    one tap twice, which is what the message side's `take_message` avoids.
+    """
+    registry = Registry()
+    _api(registry).button("dir:admin")(_noop)
+    fake_bot = FakeBot()
+    took = await take_callback(registry, _callback(fake_bot, "legacy:key:2"),
+                               principal=STUDENT, session="SESSION",
+                               bot=fake_bot, impersonator=None,
+                               dialog=_dialog(), oplog=OpsLog(None))
+    assert took is False
+    assert fake_bot.sent == [], "the tap was answered before anyone else saw it"
+
+
+async def test_take_callback_reports_a_refusal_as_answered():
+    registry = Registry()
+    _api(registry).button("dir:sync", role=Role.ADMIN)(_noop)
+    fake_bot = FakeBot()
+    took = await take_callback(registry, _callback(fake_bot, "dir:sync"),
+                               principal=STUDENT, session="SESSION",
+                               bot=fake_bot, impersonator=None,
+                               dialog=_dialog(), oplog=OpsLog(None))
+    assert took is True
+    assert fake_bot.sent[0].text == ADMIN_REFUSAL
 
 
 async def test_a_refused_tap_alerts_and_never_reaches_the_handler():
@@ -152,10 +179,9 @@ async def test_a_refused_tap_alerts_and_never_reaches_the_handler():
     registry = Registry()
     _api(registry).button("dir:sync", role=Role.ADMIN)(cb_sync)
     fake_bot = FakeBot()
-    took = await _handle(registry, _callback(fake_bot, "dir:sync"),
-                         principal=User(last_name="S", role=Role.STUDENT))
+    await _handle(registry, _callback(fake_bot, "dir:sync"),
+                  principal=User(last_name="S", role=Role.STUDENT))
     assert calls == []
-    assert took is None
     [answer] = fake_bot.sent
     assert answer.text == ADMIN_REFUSAL
     assert answer.show_alert is True

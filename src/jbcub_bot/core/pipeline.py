@@ -15,10 +15,17 @@ mine" and obliges the handler to have answered nothing, since the next handler
 unhandled. What changed is that the walk is ordered by the declared position
 rather than by registration, the match test is a predicate rather than a regex,
 and the taker comes back rather than a bool.
+
+One thing the order does not do: only *text* reaches a dialog's `on_text`. A
+photo or a document sent while the sender's own dialog is open skips the dialog
+and goes to the chain -- and, with nothing there for it, to "I only read text."
+A dialog that wants an upload needs a rule here first; today none does, and the
+hook is named for what it takes.
 """
 from aiogram.types import Message
 
 from jbcub_bot.core.contract import (
+    CANCEL_COMMAND,
     INJECTABLES,
     TEXT,
     MessageSpec,
@@ -42,24 +49,6 @@ NOTHING_TO_CANCEL = "Nothing to cancel."
 # a dialog ended, not what was on the screen behind it.
 CANCELLED = "Cancelled."
 
-CANCEL_COMMAND = "cancel"
-
-# Who took the last message in each chat. A record, not a history: the question
-# it answers is "did something just show a profile", which a future `ai` asks
-# between two questions without having to know that `directory` exists.
-_last_taker: dict[int, MessageSpec | None] = {}
-
-
-def last_taker(chat_id: int) -> MessageSpec | None:
-    """What the chain did with the last message in this chat, or None if
-    nothing took it -- a stale answer here would outlive what it describes."""
-    return _last_taker.get(chat_id)
-
-
-def reset() -> None:
-    """Forget every chat's last taker. Tests only."""
-    _last_taker.clear()
-
 
 async def handle_message(registry: Registry, message: Message, *, principal,
                          session, bot, impersonator, dialog, oplog) -> None:
@@ -82,7 +71,16 @@ async def take_message(registry: Registry, message: Message, *, principal,
     """
     given = dict(principal=principal, session=session, bot=bot,
                  impersonator=impersonator, dialog=dialog, oplog=oplog)
-    text = message.text or ""
+    # The record describes *this* message from here on. A command or a dialog
+    # taking it therefore reads as None: /me shows a profile too, and nothing
+    # downstream may mistake that for the chain having answered. A handler that
+    # crashes mid-walk leaves None as well, which is the truth -- nothing took
+    # the message.
+    registry.record_taker(message.chat.id, None)
+    # aiogram's Command filter matches text *or* caption, so a photo posted
+    # with "/sync 2024" as its caption is just as deliberate an address as
+    # typing the command -- see the same reading in `core/middleware.py`.
+    text = message.text or message.caption or ""
     if text.startswith("/"):
         # An unknown command falls to the last word rather than into the chain:
         # the sender addressed the bot, not the room.
@@ -119,7 +117,7 @@ async def dispatch(registry: Registry, message: Message,
         if await call_handler(spec.handler, message, **given) is not False:
             taker = spec
             break
-    _last_taker[message.chat.id] = taker
+    registry.record_taker(message.chat.id, taker)
     return taker
 
 
@@ -127,7 +125,9 @@ async def last_word(message: Message, *, principal, impersonator,
                     oplog) -> None:
     """Nothing took it, so the core answers. A message with no answer at all
     looks to the sender exactly like a bot that is down."""
-    words = (message.text or "").split()
+    # Caption as well as text, so an unknown command sent under a photo is
+    # answered as the command it is rather than as an unreadable photo.
+    words = (message.text or message.caption or "").split()
     command = words[0] if words else ""
     if command.startswith("/"):
         # The bot answered correctly, so this is not a gap worth logging.
