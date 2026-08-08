@@ -8,9 +8,10 @@ from aiogram.types import CallbackQuery, ErrorEvent, Message, Update
 
 import jbcub_bot.features as features_pkg
 from jbcub_bot.core import buttons, impersonation, legacy, pipeline
-# The pre-contract list of manifests, which `features/help` still renders from.
-# Task 7 moves that to `core/help.py` and task 11 deletes the module; aliased
-# until then so `registry` here means the contract's own.
+# The pre-contract list of manifests. Nothing reads it any more -- task 7 moved
+# /help onto `core/help.py` and the contract registry -- and task 11 deletes the
+# module along with these two calls; aliased until then so `registry` here means
+# the contract's own.
 from jbcub_bot.core import registry as manifests
 from jbcub_bot.core.config import get_settings
 from jbcub_bot.core.contract import Registry

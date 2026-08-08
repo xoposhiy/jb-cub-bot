@@ -36,7 +36,11 @@ def test_build_dispatcher_populates_registry():
     _reset_routers()
     build_dispatcher(session_factory=lambda: None)
     names = {m.name for m in registry.all_manifests()}
-    assert {"directory", "impersonate", "help"} <= names
+    # `help` was here until task 7 migrated it: this list holds the *manifests*,
+    # and a migrated feature has none. It empties one feature at a time until
+    # task 11 deletes the module and this file with it.
+    assert {"directory", "impersonate"} <= names
+    assert "help" not in names
 
 
 def test_build_dispatcher_is_idempotent():
