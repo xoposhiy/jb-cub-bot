@@ -2,22 +2,21 @@
 
 **Phase F deletes this file**, and with it the last of `core/intents.py`. Until
 then two shapes coexist in `features/`: `kb` keeps its `Router` and its `Intent`
-until the 2026-08-07 spec rewrites it, and `help`, `impersonate` and `directory`
-keep theirs until tasks 7, 8 and 10 migrate them one at a time. Two things have
-to stay true while both shapes are loaded.
+until the 2026-08-07 spec rewrites it, and it is the last one -- `help`,
+`impersonate` and `directory` migrated in tasks 7, 8 and 10. Two things have to
+stay true while both shapes are loaded.
 
 **A legacy `Intent` must still be offered plain text.** `LegacyIntents` is one
 chain handler at `pipeline.LEGACY`, after every landmark, so a migrated feature
-always gets first refusal -- and inside it the intents keep their registration
-order, which is what keeps `directory`'s name search ahead of `kb`'s offer
-exactly as `main.py` did.
+always gets first refusal -- which is what keeps `directory`'s name search at
+`LOOKUP` ahead of `kb`'s offer, exactly as `main.py`'s registration order did.
 
 **A legacy feature must still appear in /help.** `core/help.py` renders what the
 `Registry` holds and deliberately knows nothing about legacy, so `adopt` also
 republishes every `Manifest` through a real `BotApi` -- see `_declare`. Without
 it, the first migrated `help` would list itself and the rest of the bot would
 vanish from /help; with it, a feature's block reads the same before and after
-its own migration, which is the only way tasks 8 and 10 can be judged
+its own migration, which is the only way tasks 8 and 10 could be judged
 behaviour-preserving.
 
 **The core's entry points must decline whatever a legacy router still owns.** A
@@ -198,11 +197,11 @@ def _refuse_duplicate(registry: Registry, feature: str, name: str) -> None:
 
     `registry.validate()` runs inside `load_features`, before these declarations
     exist, and re-running it over them would refuse the bridge rather than
-    verify it: a legacy `directory` really does own a `/cancel`, which rule 9
-    forbids a *feature* to declare, and a bridged command's handler is a
-    placeholder. So the bridge validates the one thing it could get wrong on its
-    own -- a name a migrated feature already took, which `Registry.commands()`
-    would otherwise resolve to whichever came last.
+    verify it: a bridged command's handler is a placeholder, and a legacy
+    manifest may declare `/cancel`, which rule 9 forbids a *feature* to own --
+    `directory` did until task 10. So the bridge validates the one thing it
+    could get wrong on its own: a name a migrated feature already took, which
+    `Registry.commands()` would otherwise resolve to whichever came last.
     """
     first = registry.commands().get(name)
     if first is not None:
@@ -221,15 +220,15 @@ def core_owns_message(registry: Registry,
     # The one command the core would otherwise take out from under a legacy
     # router: `validate()` forbids a feature registering `cancel`, so it can
     # never appear in `registry.commands()`, and the core answers it itself.
-    # `directory` still owns one until task 10, and only its answer can redraw
-    # the edit screen the sender is looking at.
+    # `directory` owned one while it was legacy, and only its answer could
+    # redraw the edit screen the sender was looking at.
     #
-    # The constraint that buys, which task 10 lifts: while `directory` is
-    # legacy, `/cancel` never reaches the core, so **a migrated feature's
-    # dialog cannot be cancelled** -- `features/directory/edit.py`'s handler is
-    # not state-filtered and answers "Nothing to cancel." to everyone. Nothing
-    # in the planned order trips over it (`help` and `impersonate` declare no
-    # dialog), but task 8 must not add one and ship a dead `/cancel`.
+    # Nothing claims it any more, so this reads True and `/cancel` reaches the
+    # core for every dialog -- registered or not. The line stays until phase F
+    # deletes the file: a legacy manifest declaring `cancel` again would still
+    # have to be left to its own router, and reading that from `loaded` rather
+    # than hard-coding today's answer is what makes this file deletable in one
+    # piece.
     claimed_cancel = any(spec.name == CANCEL_COMMAND
                          for feature in loaded if feature.legacy
                          for spec in feature.manifest.commands)
@@ -258,8 +257,8 @@ def core_owns_message(registry: Registry,
             spec = registry.commands().get(name)
             return spec is not None \
                 and spec.handler is not _owned_by_a_legacy_router
-        # An open state no registered dialog claims belongs to a legacy router:
-        # `directory`'s `EditProfile.value` and `kb`'s `KbChat.active` today.
+        # An open state no registered dialog claims belongs to a legacy
+        # router: `kb`'s `KbChat.active` is the last one.
         # This is the transitional stand-in for `StateFilter(None)`, and it is
         # what stops the chain answering a value that `on_value` is about to
         # save. A state a *registered* dialog owns is not declined: the pipeline
@@ -271,11 +270,11 @@ def core_owns_message(registry: Registry,
         #
         # Note what this takes that `nl_fallback` did not: it had `F.text`, so
         # a photo or a document went straight to the sub-routers, and here the
-        # core takes those too. Safe only because every non-command
+        # core takes those too. Safe only because the one non-command
         # `@router.message` left in `features/` is state-gated
-        # (`features/kb/handlers.py`, `features/directory/edit.py`) and so is
-        # already declined by the line below -- a legacy router that wanted a
-        # bare upload would starve. Nothing may add one; migrate it instead.
+        # (`features/kb/handlers.py`) and so is already declined by the line
+        # below -- a legacy router that wanted a bare upload would starve.
+        # Nothing may add one; migrate it instead.
         return raw_state is None or raw_state in registry.dialogs()
 
     return owned

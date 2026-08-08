@@ -2,7 +2,10 @@
 
 One cycling button per configurable field; a tap advances that field's level
 and redraws this same message. Only the caller's own row is ever written, so
-there is nothing to authorize beyond being linked.
+there is nothing to authorize beyond being linked -- which the contract's
+default guard does. What is left here is the one caller being linked cannot
+cover: a bootstrap admin whose principal was never saved, refused by the tap
+that writes and by nothing else.
 """
 
 from aiogram.types import (

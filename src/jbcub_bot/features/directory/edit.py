@@ -6,7 +6,9 @@ message. Which fields appear, what each prompt asks for and which column a
 value lands in all come from `FIELDS` -- this module lists no field names.
 
 Only the caller's own row is ever written, so there is nothing to authorize
-beyond being linked.
+beyond being linked -- which the contract's default guard does. What is left
+here is the one caller being linked cannot cover: a bootstrap admin whose
+principal was never saved, refused where a write happens and nowhere else.
 """
 
 from aiogram.exceptions import TelegramBadRequest
