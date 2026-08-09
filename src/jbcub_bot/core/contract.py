@@ -92,7 +92,7 @@ async def call_handler(fn, event, **available):
 
 @dataclass(frozen=True)
 class Guard:
-    """The whole of access control: see `core/guards.py` for what it means."""
+    """Access control: see `core/guards.py`"""
     public: bool = False
     role: Role | None = None
 
@@ -306,6 +306,7 @@ class Registry:
 
     def validate(self) -> None:
         """Refuse anything the core could not honour, before polling starts."""
+        # TODO: Decompose to smaller functions to make this code more readable.
         commands: dict[str, str] = {}
         buttons: dict[str, str] = {}
         positions: dict[int, str] = {}

@@ -138,20 +138,9 @@ class PrincipalMiddleware(BaseMiddleware):
         session = self.session_factory()
         data["session"] = session
         try:
-            # The bot answers wherever it was addressed, and a command typed
-            # in a group would post one person's private data -- a profile,
-            # a cohort CSV row -- into that group. Closing group chats here,
-            # before any lookup, keeps the decision in the one place every
-            # entry point authenticates, same as the departed_at refusal
-            # below. A plain group message gets silence, not a refusal:
-            # nobody addressed the bot, and replying to every line in a busy
-            # group is spam that Telegram will rate-limit.
             chat = _chat_of(event)
             if chat is not None and chat.type != "private":
-                # aiogram's Command filter matches text *or* caption, so a
-                # photo posted with "/cohort 2024" as its caption is just as
-                # deliberate an address as typing the command -- reading only
-                # .text would read it as background chatter and stay silent.
+                # We dont want to spam a group with a refusal, but we do want to refuse any command or callback that comes from a group.
                 text = getattr(event, "text", None) or \
                     getattr(event, "caption", None)
                 if isinstance(event, CallbackQuery) or \
@@ -165,10 +154,7 @@ class PrincipalMiddleware(BaseMiddleware):
                 principal = identity.apply_bootstrap(
                     principal, user.id, user.username, self.bootstrap_ids
                 )
-                # Every entry point authenticates here, so this is the one place
-                # that can close all of them at once. Bootstrap ids are exempt:
-                # they are the way back in when the roster is wrong, and a bad
-                # /sync must not be able to lock out the person who can fix it.
+                # A departed person (i.e. disenrolled student) is refused before any handler runs with a special message.
                 if principal is not None and principal.departed_at \
                         and user.id not in self.bootstrap_ids:
                     await refuse_departed(event)
@@ -179,6 +165,7 @@ class PrincipalMiddleware(BaseMiddleware):
                 ref = impersonation.ref_for(user.id)
             if ref is not None:
                 target = identity.find_impersonation_target(session, ref)
+                # TODO why is it a special case?! I don't want SPECIAL cases for immpersonation, I want DEBUGGING of the REAL behaviour! Can't we move impersonation BEFORE refuse_denial?!
                 # /as shows the bot as its target sees it, and what a departed
                 # target sees is the refusal. Kept separate from the caller's
                 # own check above so the bootstrap exemption covers only the

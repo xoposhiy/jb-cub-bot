@@ -1,6 +1,6 @@
 """What /help says: grouped by feature, with the role on the line."""
 from jbcub_bot.core.contract import Registry
-from jbcub_bot.core.help import UNLINKED_NOTICE, render_help
+from jbcub_bot.features.help.render import UNLINKED_NOTICE, render_help
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.core.pipeline import LOOKUP
 

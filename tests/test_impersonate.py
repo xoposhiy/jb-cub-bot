@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 from jbcub_bot.core import guards, impersonation
 from jbcub_bot.core.contract import Registry, call_handler
-from jbcub_bot.core.help import render_help
+from jbcub_bot.features.help.render import render_help
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.impersonate import register
 from jbcub_bot.features.impersonate.handlers import (
@@ -133,10 +133,11 @@ async def test_unas_outside_the_mode_says_so(session):
 # not ---------------------------------------------------------------------
 
 async def test_impersonate_gets_a_help_heading_for_an_admin():
-    # Today's renderer requires a student-visible line to print a feature's
-    # heading at all (`features/help/render.py:51`), so `impersonate` -- every
-    # line of it elevated -- never got one. Task 4 fixed that in
-    # `core/help.py`; this is the first time it is visible on the real feature.
+    # The pre-contract renderer required a student-visible line to print a
+    # feature's heading at all, so `impersonate` -- every line of it elevated --
+    # never got one. Task 4 fixed that in the renderer that replaced it (now
+    # `features/help/render.py`); this is the first time it is visible on the
+    # real feature.
     out = render_help(_registry().features(),
                       User(last_name="A", role=Role.ADMIN))
     assert "🕵️ Impersonate" in out

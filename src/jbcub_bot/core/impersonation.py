@@ -54,11 +54,13 @@ def is_exit_command(event) -> bool:
     covered /unas as well, `/as <departed student>` would be a trap with no way
     out short of a restart.
     """
+    # TODO: Cant we handle all the immpersonation BEFORE principal?! handle /unas command as well before principal? 
+    # TODO: Check if it is possible to use aiogram parsing in the middleware to avoid manual parsing of the command.
     text = getattr(event, "text", None) or ""
     head = text.split(maxsplit=1)[0] if text.split() else ""
     return head.split("@")[0] == _EXIT_COMMAND
 
-
+# TODO: why impersonation id BOTH in core AND feature?!? It should be either core, or feature.
 class BannerMiddleware(BaseMiddleware):
     """Say whose eyes these are, sent before the handler runs.
 

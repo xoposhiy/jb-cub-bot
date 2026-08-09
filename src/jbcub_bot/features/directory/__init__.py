@@ -43,7 +43,7 @@ def register(bot) -> None:
                 role=Role.ADMIN)(handlers.cmd_sync)
     bot.command("privacy", "Choose who sees each of your profile fields."
                 )(privacy.cmd_privacy)
-    bot.command("edit", "Edit your status, GitHub or Codeforces.")(edit.cmd_edit)
+    bot.command("edit", "Edit your profile fields.")(edit.cmd_edit)
     bot.command("cohort", "List the people in your cohort.")(cohort.cmd_cohort)
 
     # public=True, and `name_search` checks the principal itself: an unlinked

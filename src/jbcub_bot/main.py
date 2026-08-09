@@ -13,7 +13,7 @@ from jbcub_bot.core.contract import Registry
 from jbcub_bot.core.db import get_session, init_db
 from jbcub_bot.core import oplog as oplog_mod
 from jbcub_bot.core.dialogs import DialogMiddleware
-from jbcub_bot.core.errors import report_exception, summarize
+from jbcub_bot.core.errors import report_exception
 from jbcub_bot.core.loader import load_features
 from jbcub_bot.core.principal import PrincipalMiddleware
 
@@ -135,6 +135,13 @@ def build_dispatcher(session_factory, bootstrap_ids: set | None = None,
 
         Returning True marks the update handled, which keeps aiogram from
         logging the same traceback a second time without any of our context.
+
+        What the sender gets is the apology and nothing else. The exception
+        chain and the traceback have already gone to the log chat by then, and
+        the person who typed the command can do nothing with a
+        `ConnectionResetError` except be alarmed by it -- worse, the phase
+        labels /sync raises name internal spreadsheet tabs. Whoever needs the
+        detail is reading the other chat; do not put it back here.
         """
         exc = event.exception
         await report_exception(ops_log(bot), exc,
@@ -142,7 +149,7 @@ def build_dispatcher(session_factory, bootstrap_ids: set | None = None,
         try:
             if event.update.message is not None:
                 await event.update.message.answer(
-                    f"⚠️ Something went wrong.\n{summarize(exc)}\n\n"
+                    "⚠️ Something went wrong.\n"
                     "The bot admins got the full traceback."
                 )
             elif event.update.callback_query is not None:

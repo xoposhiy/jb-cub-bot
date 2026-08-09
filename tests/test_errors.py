@@ -181,10 +181,19 @@ async def test_google_api_error_in_sync_reaches_the_admin_instead_of_hanging(mon
     assert "ConnectionResetError: connection reset by peer" in bot.dms[0].text
     assert "Traceback (most recent call last)" in bot.dms[0].text
     assert "Cohorts tab" in bot.dms[0].text  # which phase died
-    # ...and the admin who typed /sync is not left staring at silence.
+    # ...and the admin who typed /sync is not left staring at silence -- but
+    # what they get is the apology, not the exception. Both halves matter: a
+    # reply is what stops the crash looking like a hang, and keeping the
+    # internals out of it is deliberate, since they are already in the report
+    # above. "Cohorts tab" is the sharp end of that -- /sync's phase labels
+    # name internal spreadsheet tabs, and the sender is not always the admin
+    # who would recognise one.
     replies = "\n".join(m.text for m in bot.sent)
-    assert "ConnectionResetError: connection reset by peer" in replies
-    assert "Cohorts tab" in replies
+    assert "Something went wrong" in replies
+    assert "ConnectionResetError" not in replies, \
+        "the exception type leaked into the sender's chat"
+    assert "Cohorts tab" not in replies, \
+        "the internal phase label leaked into the sender's chat"
 
 
 async def test_crashing_callback_handler_stops_the_spinner_and_reports(monkeypatch):

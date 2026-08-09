@@ -540,7 +540,7 @@ async def test_the_last_legacy_router_leaving_gives_the_core_every_tap():
 
 
 # --- the bridge: a legacy manifest, declared like a real feature --------------
-# `core/help.py` reads the registry and knows nothing about legacy, so `adopt`
+# `features/help` reads the registry and knows nothing about legacy, so `adopt`
 # republishes every manifest through a real `BotApi`. What that must not do is
 # take the update off the router that still owns the handler.
 

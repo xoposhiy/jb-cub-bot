@@ -152,6 +152,12 @@ async def last_word(message: Message, *, principal, impersonator,
     command = words[0] if words else ""
     if command.startswith("/"):
         # The bot answered correctly, so this is not a gap worth logging.
+        #
+        # It points at /help rather than listing what this caller may run, and
+        # that is the boundary: rendering the list belongs to `features/help`,
+        # so doing it here would make the core import a feature. If a future
+        # version wants the list inline, the feature has to offer it -- the
+        # import may not run the other way.
         await message.answer(
             f"I don't know {command}. /help lists what I can do."
         )

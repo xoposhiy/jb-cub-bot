@@ -11,7 +11,7 @@ chain handler at `pipeline.LEGACY`, after every landmark, so a migrated feature
 always gets first refusal -- which is what keeps `directory`'s name search at
 `LOOKUP` ahead of `kb`'s offer, exactly as `main.py`'s registration order did.
 
-**A legacy feature must still appear in /help.** `core/help.py` renders what the
+**A legacy feature must still appear in /help.** `features/help` renders what the
 `Registry` holds and deliberately knows nothing about legacy, so `adopt` also
 republishes every `Manifest` through a real `BotApi` -- see `_declare`. Without
 it, the first migrated `help` would have listed itself and the rest of the bot
@@ -58,7 +58,7 @@ from jbcub_bot.core.pipeline import LEGACY, command_of
 logger = logging.getLogger(__name__)
 
 # The name the shim registers under. Not a package in `features/`, and it
-# declares no command, no button and no described message, so `core/help.py`
+# declares no command, no button and no described message, so `features/help`
 # renders no heading for it -- there is nothing a reader of /help could do with
 # the knowledge that some features are older than others.
 FEATURE = "legacy"
@@ -152,8 +152,10 @@ async def _owned_by_a_legacy_router(message: Message) -> None:
 def _declare(registry: Registry, loaded: list[LoadedFeature]) -> None:
     """Republish every legacy `Manifest` as a real declaration.
 
-    `core/help.py` renders `FeatureRegistration`s and must not learn that legacy
+    `features/help` renders `FeatureRegistration`s and must not learn that legacy
     exists, so the manifest is translated here instead -- once, at boot. The
+    bridge fills the *registry*, not the renderer, which is why moving that
+    renderer into its feature left this untouched. The
     shape is the same one a migrated feature produces, which is what makes a
     feature's /help block read the same on both sides of its own migration.
     """

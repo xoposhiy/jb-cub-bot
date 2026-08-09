@@ -1,7 +1,7 @@
 """End-to-end /help through a real dispatcher: admin vs student vs unlinked.
 
 `help` is the first migrated feature, so this file is also the proof that the
-legacy bridge (`core/legacy.py`'s `_declare`) works: `core/help.py` reads the
+legacy bridge (`core/legacy.py`'s `_declare`) works: `features/help` reads the
 contract registry and nothing else, and three of the four features here are
 still legacy. Every heading and every line below a `📒`, `🕵️` or `📚` comes
 from a `Manifest` republished as a real declaration -- which is what makes

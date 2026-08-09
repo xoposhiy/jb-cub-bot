@@ -1,16 +1,25 @@
 """What /help says, assembled from what the features declared.
 
+The core collects and this decides what to print: `Registry.features()` hands
+over every declaration as data, and every choice made below -- the grouping, the
+order of the lines, the badge, where `/cancel` goes -- is this feature's
+presentation of it. That seam is why the core has nothing to say about /help
+beyond holding the declarations, and it is the reason this module lives here
+rather than in `core/`: it had exactly one caller, `register` below, so in the
+core it would have had the core's address and this feature's lifetime.
+
+The one thing it must *not* decide is who may see a line. `guards.allowed` does,
+and only it -- filtering on `spec.guard.role` here instead would be a second
+place deciding visibility, and the contract has one on purpose. A check the
+guard cannot express (the bootstrap admin, a profile with no saved row) is
+ordinary code inside the feature that owns it and stays listed while it refuses.
+
 Grouped by feature, always: a feature that declared anything this caller may use
 gets its heading, and an elevated line stays under that heading with a badge
-saying so. That replaces two things the old renderer got wrong -- a heading that
-appeared only if a student-visible line survived, so `impersonate` never had one,
-and a pooled trailing `🔐 Admin` block that tore every elevated line away from
-the feature it belongs to.
-
-Nothing here decides who may see what: `guards.allowed` does, and only it. That
-is the whole reason the guard is the only visibility rule in the contract -- a
-check the renderer could not ask about (the bootstrap admin, a profile with no
-saved row) is ordinary code inside its feature and stays listed while it refuses.
+saying so. That replaces two things the pre-contract renderer got wrong -- a
+heading that appeared only if a student-visible line survived, so `impersonate`
+never had one, and a pooled trailing `🔐 Admin` block that tore every elevated
+line away from the feature it belongs to.
 """
 from jbcub_bot.core import guards
 from jbcub_bot.core.contract import (

@@ -6,14 +6,15 @@ whole reason `core/registry.py` can be deleted. Reading at answer time rather
 than at registration time is also what lets a feature that registers after the
 mount be listed.
 
-The rendering is `core/help.py`'s and deliberately not this feature's: what
-/help says is a property of the contract, so it is described and tested where
-the contract is, and `help` is only the command that prints it.
+The rendering is `render.py`'s, next door. The core collects declarations and
+this feature decides how to print them, which is the whole of the split: nothing
+in `core/` renders /help, and nothing here decides who may see a line -- that
+stays `core/guards.py`'s, and `render` calls it.
 """
 from aiogram.types import Message
 
-from jbcub_bot.core.help import render_help
 from jbcub_bot.core.models import User
+from jbcub_bot.features.help.render import render_help
 
 
 def register(bot) -> None:
