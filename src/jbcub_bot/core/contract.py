@@ -1,12 +1,9 @@
-"""Everything a feature is allowed to declare, and everything the core knows
-about it.
+"""What a feature may declare, and everything the core knows about it.
 
-A feature's `register(bot)` gets a `BotApi` and describes itself through it; the
-`Registry` behind that api is the single place the core looks to route, refuse
-or list anything. Declaring is deliberately separate from wiring -- nothing here
-touches aiogram routing -- which is what lets `validate()` reject a whole class
-of mistakes (two commands of one name, two handlers at one position, a typo in
-an injected parameter) at boot, where they are loud, rather than in production.
+`register(bot)` gets a `BotApi` and describes the feature through it; the
+`Registry` behind it is the only thing the core routes from. Nothing here
+touches aiogram, which is what lets `validate()` refuse a broken declaration at
+boot rather than in production. See AGENTS.md, "Add a feature".
 """
 import inspect
 from dataclasses import dataclass, field
@@ -20,9 +17,8 @@ from jbcub_bot.core.models import Role, User
 
 # --- predicates ---------------------------------------------------------------
 # Plain `(Message) -> bool`, not aiogram filters, so a feature can write its own
-# and test it by calling it. TEXT deliberately does not exclude a leading "/":
-# a command never reaches the chain, the core dispatches it first, so
-# `~F.text.startswith("/")` has no reason to reappear inside a predicate.
+# and test it by calling it. TEXT keeps a leading "/": a command never reaches
+# the chain, so no predicate has to exclude one.
 
 def TEXT(message: Message) -> bool:
     return message.text is not None
@@ -43,18 +39,17 @@ def ANY(message: Message) -> bool:
 # --- what the core keeps for itself ----------------------------------------------
 
 # The one command no feature may declare: it ends whatever dialog the sender is
-# in, whichever feature owns it, so it cannot belong to any of them. The name
-# lives here rather than in `core/pipeline`, which routes it, so that
-# `validate()` can refuse a feature claiming it without importing the router.
+# in, whoever owns it. Named here rather than in `core/pipeline`, which routes
+# it, so `validate()` can refuse a feature claiming it without the import.
 CANCEL_COMMAND = "cancel"
 CANCEL_DESCRIPTION = "Cancel what you are in the middle of."
 
 
 # --- the calling convention ----------------------------------------------------
 
-# The core dispatches to feature handlers itself, so it cannot lean on aiogram's
-# dependency injection; this is the replacement. A tuple rather than a set so
-# the error message in `validate()` lists them in a stable, readable order.
+# The core dispatches to feature handlers itself, so aiogram's dependency
+# injection is not available; this is the replacement. A tuple rather than a
+# set, so `validate()` names them in a stable order.
 INJECTABLES = ("principal", "session", "bot", "impersonator", "dialog", "arg",
                "oplog")
 
@@ -62,8 +57,8 @@ INJECTABLES = ("principal", "session", "bot", "impersonator", "dialog", "arg",
 def _declared_injections(fn) -> list[str]:
     """The names a handler expects the core to fill in.
 
-    The event is always the first positional parameter, whatever it is called,
-    so everything after it is an injection request. `inspect.signature` follows
+    The event is the first positional parameter, whatever it is called, so
+    everything after it is an injection request. `inspect.signature` follows
     `__wrapped__`, so a decorated handler is read by its real signature.
     """
     params = [
@@ -77,11 +72,9 @@ def _declared_injections(fn) -> list[str]:
 async def call_handler(fn, event, **available):
     """Call a feature handler: the event positionally, the rest by name.
 
-    Only what the handler declares is passed, so a handler that has no use for
-    `session` does not have to name it -- which is what keeps handler bodies
-    written against aiogram's injection working unchanged. A declared name that
-    is not on offer for this kind of event is left out too; `validate()` has
-    already refused the ones that are simply typos.
+    Only what the handler declares is passed, so a handler with no use for
+    `session` need not name it. A declared name the core does not offer for
+    this kind of event is skipped; `validate()` has already refused the typos.
     """
     kwargs = {name: available[name] for name in _declared_injections(fn)
               if name in available}
@@ -137,8 +130,8 @@ class DialogSpec:
 
 @dataclass(frozen=True)
 class NoteSpec:
-    # A callable takes the principal and returns the line: kb's note changes on
-    # /kb_reload, so a static string would lie.
+    # A callable when the line depends on the reader or on runtime state; a
+    # string frozen at boot would go stale.
     feature: str
     text: str | Callable[[User | None], str]
     guard: Guard
@@ -165,8 +158,8 @@ class FeatureRegistration:
 
 
 class ContractError(Exception):
-    """A feature declared something the core cannot honour. Raised at startup,
-    before polling, because loud at boot beats discovered in production."""
+    """A feature declared something the core cannot honour. Raised at boot,
+    before polling."""
 
 
 # --- the surface a feature sees -------------------------------------------------
@@ -181,8 +174,8 @@ class BotApi:
         self._own = registry._registration(feature)
 
     def describe(self, emoji: str, title: str, summary: str) -> None:
-        """The feature's heading in /help. Required -- a feature without one has
-        no heading, so its absence is a startup error rather than a blank line."""
+        """The feature's heading in /help. Required: `validate()` refuses a
+        feature that never called it."""
         self._own.description = Description(emoji, title, summary)
 
     def command(self, name: str, description: str, *,
@@ -224,10 +217,9 @@ class BotApi:
     def dialog(self, name: str, *, on_text: Callable,
                on_cancel: Callable | None = None, public: bool = False,
                role: Role | None = None) -> DialogHandle:
-        """A plain call, not a decorator -- a dialog has two handlers, so there
-        is nothing single to decorate. The handle is what a feature keeps in
-        order to start the dialog later; the spec behind it is how the core
-        routes into it, and is nobody else's business."""
+        """A call rather than a decorator: a dialog has two handlers, so there
+        is nothing single to decorate. The returned handle is how the feature
+        opens the dialog later; the spec is the core's copy, for routing."""
         self._own.dialogs.append(DialogSpec(
             feature=self.feature, name=name, on_text=on_text,
             on_cancel=on_cancel, guard=Guard(public, role),
@@ -250,20 +242,18 @@ class Registry:
 
     def __init__(self):
         self._features: dict[str, FeatureRegistration] = {}
-        # Routing state rather than a declaration, but it belongs to whoever
-        # built this registry: a second `build_dispatcher` must not inherit the
-        # first one's answers. That is the mistake `main.py`'s module-global
-        # `_intent_router` made, beside a manifest list that was reset -- only
-        # half of the pair was ever cleared.
+        # Routing state, not a declaration, but it belongs to whoever built
+        # this registry: a second `build_dispatcher` must not inherit the first
+        # one's answers, which is what a module-level dict would give it.
         self._last_taker: dict[int, MessageSpec | None] = {}
 
     def api_for(self, feature: str) -> BotApi:
         return BotApi(feature, self)
 
     def _registration(self, feature: str) -> FeatureRegistration:
-        """The feature's own slot, created on first ask -- so a feature that
-        declares nothing at all is still known, and still fails `validate()`
-        for having no `describe`."""
+        """Created on first ask, so a feature that declares nothing at all is
+        still known -- and still fails `validate()` for having no
+        `describe`."""
         if feature not in self._features:
             self._features[feature] = FeatureRegistration(name=feature)
         return self._features[feature]
@@ -284,23 +274,22 @@ class Registry:
 
     def dialogs(self) -> dict[str, DialogSpec]:
         # Keyed by the state name a running dialog reports, so `owner()` looks
-        # a spec up directly. That derivation lives in `core/dialogs` and only
-        # there -- it is also why a feature writes no StatesGroup and why two
-        # features may both call their dialog "edit".
+        # the spec up directly. `core/dialogs.state_name` is the only place
+        # that derivation lives.
         return {state_name(spec.feature, spec.name): spec
                 for reg in self._features.values() for spec in reg.dialogs}
 
     def record_taker(self, chat_id: int, spec: MessageSpec | None) -> None:
         """Remember what took this chat's last message. A record, not a
-        history: the question it answers is "what just happened here"."""
+        history: the question is "what just happened here"."""
         self._last_taker[chat_id] = spec
 
     def last_taker(self, chat_id: int) -> MessageSpec | None:
         """The chain handler that took the last message in this chat, or None
         when a command, a dialog, or nothing at all did.
 
-        This is how a future `ai` learns a profile was shown between two
-        questions without knowing that `directory` exists.
+        How one feature sees what happened just before it without knowing who
+        did it. See AGENTS.md, "A chain handler returns bool".
         """
         return self._last_taker.get(chat_id)
 
@@ -344,9 +333,8 @@ class Registry:
                 _check_guard(reg.name, where, spec.guard)
                 _check_parameters(reg.name, where, spec.handler)
                 _claim(buttons, spec.key, reg.name, where, "Rename one.")
-            # Dialog names are scoped to their feature -- the state name is
-            # "<feature>:<name>" -- so two features may both call one "edit"
-            # and only a collision within a feature is a mistake.
+            # Scoped per feature (the state name is "<feature>:<name>"), so
+            # only a collision inside one feature is a mistake.
             dialogs: set[str] = set()
             for spec in reg.dialogs:
                 where = f"Dialog '{spec.name}'"

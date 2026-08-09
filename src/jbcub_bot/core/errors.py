@@ -1,10 +1,8 @@
 """Crash reporting: a failed handler must never look like a hang.
 
-An exception escaping a handler is invisible in Telegram — the person who typed
-the command just never gets a reply. So every unhandled exception goes to two
-places: the host's log, and the log chat with the full traceback, falling back
-to the bootstrap admins' DMs (the ids in BOOTSTRAP_ADMIN_IDS, who are reachable
-even on an empty DB). Choosing between those is `core.oplog`'s job.
+An exception escaping a handler is invisible in Telegram -- whoever typed the
+command just never gets a reply. So it goes to the host's log and, with its
+traceback, wherever `core.oplog` points.
 """
 import logging
 import traceback
@@ -23,9 +21,9 @@ _SUMMARY_LIMIT = 600
 def summarize(exc: BaseException, limit: int = _SUMMARY_LIMIT) -> str:
     """The `Type: message` line of every exception in the chain, cause first.
 
-    /sync wraps failures to name the phase, so the exception that reaches the
-    dispatcher is a RuntimeError and the useful one is its `__cause__`. Kept
-    separate from the traceback because these lines must never be clipped away.
+    A handler that re-raises to add context buries the useful exception in
+    `__cause__`. Kept out of the traceback because these lines must survive the
+    clipping.
     """
     chain: list[str] = []
     seen: set[int] = set()
@@ -41,10 +39,9 @@ def summarize(exc: BaseException, limit: int = _SUMMARY_LIMIT) -> str:
 def format_traceback(exc: BaseException, limit: int = TELEGRAM_LIMIT) -> str:
     """The traceback, with the middle dropped if it won't fit in one message.
 
-    Both ends have to survive: a chained traceback opens with the original cause
-    ("ConnectionResetError: ...") and closes with the exception that reached the
-    dispatcher. Cutting from either end alone loses one of them — and the frames
-    in between are the least interesting part.
+    Both ends have to survive: a chained traceback opens with the original
+    cause and closes with what reached the dispatcher. The frames in between
+    are the least interesting part.
     """
     text = "".join(traceback.format_exception(exc)).strip()
     if len(text) <= limit:
@@ -58,12 +55,9 @@ async def report_exception(oplog, exc: BaseException, context: str) -> None:
     """Log `exc` and send its traceback wherever `oplog` points.
 
     Never raises: this runs on the failure path, and a bad destination must not
-    mask the original error. Delivery -- including the fallback to the bootstrap
-    admins -- belongs to `core.oplog`; this function only formats.
-
-    Every question and every crash land in the same chat, but a crash also
-    pings the admins by name: that is the one entry in this feed that someone
-    has to act on, not just skim.
+    mask the original error. Delivery belongs to `core.oplog`; this only
+    formats. The admin ping is because a crash is one of the few entries in
+    that feed somebody has to act on rather than skim.
     """
     logger.error("%s — %s: %s", context, type(exc).__name__, exc, exc_info=exc)
     if oplog is None:  # a handler called directly, with nothing to send through

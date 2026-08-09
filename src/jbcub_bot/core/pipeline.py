@@ -1,27 +1,15 @@
 """Every incoming message, offered around in one fixed order until something
-takes it.
+takes it: a command, then the sender's own dialog, then the chain in declared
+`at` order, then the last word. The order is the core's and no feature can
+change it -- so a command works inside a dialog, and one open dialog cannot
+silence every other feature the way a global `StateFilter(None)` does.
 
-The order is the core's and no feature can change it: a command, then the
-sender's own dialog, then the chain in declared `at` order, then the last word.
-That is what makes "a command works inside a dialog" a property rather than a
-habit -- `~F.text.startswith("/")` has nowhere left to be needed -- and what
-keeps one feature's open dialog from silencing every other feature, which is
-exactly what a global `StateFilter(None)` does.
+What a feature writes against is in AGENTS.md: "A chain handler returns bool"
+and "/cancel is the core's".
 
-The chain contract: `False` means "not mine" and obliges the handler to have
-answered nothing, since the next handler -- or the last word -- is about to
-answer instead. Anything else, including `None`, counts as taken, so a handler
-that forgets to return cannot go silently unhandled. Two features share the
-chain today and the whole of the routing between them is their `at=`: the
-roster search at `LOOKUP` gets first refusal on every free-text message, and
-the agent at `AGENT` answers what it declined. There is no mode anywhere that
-reorders that.
-
-One thing the order does not do: only *text* reaches a dialog's `on_text`. A
-photo or a document sent while the sender's own dialog is open skips the dialog
-and goes to the chain -- and, with nothing there for it, to "I only read text."
-A dialog that wants an upload needs a rule here first; today none does, and the
-hook is named for what it takes.
+Only *text* reaches a dialog's `on_text`. An upload sent mid-dialog skips it
+and goes to the chain, where nothing wants it. A dialog that needs a file
+requires a rule here first.
 """
 from aiogram.types import Message
 
@@ -36,47 +24,42 @@ from jbcub_bot.core.contract import (
 from jbcub_bot.core.guards import NOT_LINKED, refusal
 from jbcub_bot.core.oplog import format_miss
 
-# Landmarks, so a feature declares where it sits by name and the resolved order
-# is readable without opening five files. Integers rather than an enum: order
-# within a stage would fall back to registration order, and that is the bug
-# this replaces.
+# Landmarks, so a feature declares where it sits by name. Integers rather than
+# an enum, which would leave the order within one stage to fall back on
+# registration order -- that is, on nothing anybody chose.
 LOOKUP = 100   # a name finds a classmate
 AGENT = 200    # the knowledge-base agent answers
 
 NOTHING_MATCHED = "No one found."
 NOTHING_TO_CANCEL = "Nothing to cancel."
-# What the core says when the dialog declared no on_cancel of its own: it knows
-# a dialog ended, not what was on the screen behind it.
+# For a dialog with no on_cancel: the core knows a dialog ended, not what was
+# on the screen behind it.
 CANCELLED = "Cancelled."
 
 
 def command_of(message: Message) -> tuple[str, str] | None:
     """The command a message addresses and its tail, or None for a non-command.
 
-    One reading, in one place. Two would be a silent routing hole -- "is this a
-    command" and "which command is it" disagreeing means an update answered as
-    something nobody typed -- and the pair comes back together so no caller has
-    to parse it twice.
+    The one reading of it. A second one would be a silent routing hole: "is
+    this a command" and "which command is it" disagreeing answers an update as
+    something nobody typed.
     """
-    # aiogram's Command filter matches text *or* caption, so a photo posted
-    # with "/sync 2024" as its caption is just as deliberate an address as
-    # typing the command -- see the same reading in `core/principal.py`.
+    # A caption counts: "/sync 2024" under a photo is as deliberate an address
+    # as typing it, and aiogram's own Command filter reads it that way too.
     text = message.text or message.caption or ""
     if not text.startswith("/"):
         return None
-    # Split on any whitespace, the way aiogram's own Command filter does, so a
-    # command pasted with a trailing newline is still that command. `text`
-    # starts with "/", so there is always a first word.
+    # Any whitespace, like aiogram, so a trailing newline still parses.
     head, *rest = text.split(maxsplit=1)
-    # "/me@jbcub_bot" is the same command: Telegram appends the bot's name to
-    # every command tapped in a group.
+    # Telegram appends the bot's name to a command tapped in a group, and
+    # "/me@jbcub_bot" is the same command.
     return head[1:].split("@")[0], rest[0].strip() if rest else ""
 
 
 async def handle_message(registry: Registry, message: Message, *, principal,
                          session, bot, impersonator, dialog, oplog) -> None:
-    """The whole order for one message: a command, the sender's own dialog, the
-    chain, and then the last word when none of them took it."""
+    """The whole order for one message, with the last word when nothing took
+    it."""
     given = dict(principal=principal, session=session, bot=bot,
                  impersonator=impersonator, dialog=dialog, oplog=oplog)
     if not await take_message(registry, message, **given):
@@ -88,23 +71,18 @@ async def take_message(registry: Registry, message: Message, *, principal,
                        session, bot, impersonator, dialog, oplog) -> bool:
     """Steps 1 to 3. True when something took the message.
 
-    Split from the last word because they answer different questions -- "did
-    anything take this" and "what do we say when nothing did" -- and each is
-    worth asking on its own, which is how `tests/test_pipeline.py` reads.
+    Split from the last word because "did anything take this" and "what do we
+    say when nothing did" are two questions, each worth testing on its own.
     """
     given = dict(principal=principal, session=session, bot=bot,
                  impersonator=impersonator, dialog=dialog, oplog=oplog)
-    # The record is replaced only once this message's fate is settled, and that
+    # The taker record is replaced only once this message is settled, and that
     # is load-bearing: until then it still names what took the *previous* one,
-    # which is what a chain handler reads. `kb` asks it whether a profile was
-    # shown in between two of its questions, and clearing it up front -- which
-    # this used to do -- made the record unreadable from inside the very chain
-    # that has to read it.
+    # which is what a chain handler in the middle of the walk reads.
     #
-    # A command or a dialog taking the message settles it as None: /me shows a
-    # profile too, and nothing downstream may mistake that for the chain having
-    # answered. A handler that crashes leaves None as well, which is the truth
-    # -- nothing took the message -- and is why this is a `finally`.
+    # A command or a dialog settles it as None -- /me shows a profile too, and
+    # nothing downstream may read that as the chain having answered. A crash
+    # leaves None as well, which is the truth, hence the `finally`.
     taker = None
     try:
         command = command_of(message)
@@ -124,22 +102,18 @@ async def dispatch(registry: Registry, message: Message,
                    **injectables) -> MessageSpec | None:
     """Walk the chain in `at` order. Return the spec that took the message.
 
-    A handler is offered the message when its predicate passes and its guard
-    allows the sender. A guard filters here rather than refusing out loud:
-    nothing was addressed to this handler, so "Admins only." would answer a
-    question nobody asked.
+    A guard filters here rather than refusing out loud: nothing was addressed
+    to this handler, so "Admins only." would answer a question nobody asked.
 
-    No `try` around the walk. The crashed handler may already have answered,
-    and trying the next one would answer twice, so the exception aborts the
-    chain and reaches aiogram's `dp.errors`.
+    No `try` around the walk. A crashed handler may already have answered, and
+    the next one would answer twice, so the exception aborts the chain and
+    reaches aiogram's `dp.errors`.
 
-    The walk itself records nothing: `take_message` owns the taker record, so
-    there is one writer and a handler in the middle of the walk still reads the
-    previous message's answer rather than a half-written one.
+    `take_message` owns the taker record, so there is one writer of it.
     """
-    # All seven names, always: `call_handler` injects a declared parameter only
-    # when the core offers it, so a name missing here would silently keep its
-    # default instead of failing.
+    # Every injectable by name, always: `call_handler` passes a declared
+    # parameter only when the core offers it, so a name missing here would
+    # silently keep its default instead of failing.
     given = {name: injectables.get(name) for name in INJECTABLES}
     given["arg"] = ""  # a chain handler is given the message, not a tail of it
     for spec in registry.chain():
@@ -154,41 +128,32 @@ async def dispatch(registry: Registry, message: Message,
 
 async def last_word(message: Message, *, principal, impersonator,
                     oplog) -> None:
-    """Nothing took it, so the core answers. A message with no answer at all
-    looks to the sender exactly like a bot that is down.
+    """Nothing took it, so the core answers -- a message with no answer at all
+    looks like a bot that is down.
 
-    This is also where a stranger is told they are one. The chain is for people
-    the bot knows: a `Guard()` refuses an unlinked caller by default, so an
-    ordinary chain handler is filtered out for them silently -- rightly, since
-    nothing was addressed to it -- and the honest last word left is "I don't
-    know you", not "No one found." Saying it here rather than in a guard is
-    what keeps `public=True` meaning "written for strangers" instead of
-    "willing to turn them away politely", which is what one chain handler was
-    using it for.
+    Also the one place that tells a stranger they are one, rather than any
+    guard: see AGENTS.md, "The chain is for people the bot knows".
     """
-    # Caption as well as text, so an unknown command sent under a photo is
-    # answered as the command it is rather than as an unreadable photo.
+    # Caption too, so an unknown command under a photo is answered as the
+    # command it is rather than as an unreadable photo.
     words = (message.text or message.caption or "").split()
     command = words[0] if words else ""
     if command.startswith("/"):
-        # The bot answered correctly, so this is not a gap worth logging.
+        # No ops-log miss: the bot answered correctly, which is not a gap.
         #
-        # It points at /help rather than listing what this caller may run, and
-        # that is the boundary: rendering the list belongs to `features/help`,
-        # so doing it here would make the core import a feature. If a future
-        # version wants the list inline, the feature has to offer it -- the
-        # import may not run the other way.
+        # It points at /help rather than listing what this caller may run.
+        # Rendering that list belongs to `features/help`, and the core does not
+        # import a feature -- a feature wanting it inline has to offer it.
         await message.answer(
             f"I don't know {command}. /help lists what I can do."
         )
         return
     if principal is None:
-        # After the unknown command above, not before it: /help is public and
-        # is exactly what an unlinked sender should be pointed at. A *known*
-        # command never reaches this at all -- its own guard answers the same
-        # wording in `_run_command`. And no ops-log miss, for the same reason
-        # the branch above sends none: the bot answered correctly. Who it does
-        # not know is not a gap in what it knows.
+        # After the unknown command above, not before: /help is public and is
+        # what an unlinked sender should be pointed at. A *known* command never
+        # gets here -- its own guard says the same in `_run_command`. No miss
+        # logged either: who the bot does not know is not a gap in what it
+        # knows.
         await message.answer(NOT_LINKED)
         return
     if message.text is not None:
@@ -209,8 +174,8 @@ async def _run_command(registry: Registry, message: Message, name: str,
                        arg: str, **given) -> bool:
     """Step 1. False leaves an unknown command to the last word.
 
-    Takes the name and the tail `command_of` already parsed rather than the
-    raw text, so there is nowhere left for a second reading to appear.
+    Takes the name and tail `command_of` already parsed, not the raw text, so
+    there is nowhere for a second reading to appear.
     """
     if name == CANCEL_COMMAND:
         await _cancel(registry, message, **given)
@@ -228,33 +193,27 @@ async def _run_command(registry: Registry, message: Message, name: str,
 
 async def _cancel(registry: Registry, message: Message, **given) -> None:
     """The core's one exit from any dialog, which is why no feature owns a
-    `/cancel` of its own and the collision that pushed `kb` off it is gone."""
+    `/cancel` of its own."""
     dialog = given["dialog"]
     owner = await dialog.owner()
     if owner is None:
         await message.answer(NOTHING_TO_CANCEL)
         return
     spec = registry.dialogs().get(owner)
-    # Ended whatever the state was, and whatever the hook does: a state no
-    # feature claims any more -- one left behind by an older deploy -- is
-    # exactly the one a sender cannot get out of by themselves, and a hook that
-    # raises must not strand them in it either. Hence the `finally`.
+    # `finally`, so the state ends whatever the hook does: a state no feature
+    # claims any more -- one left by an older deploy -- is exactly the one a
+    # sender cannot leave by themselves, and a hook that raises must not strand
+    # them in it either.
     #
-    # The hook runs *before* the end, though, because it is the dialog's last
-    # act and the dialog's data is what it has to work with: `directory`'s
-    # redraws the screen the prompt is on, and the chat and message ids of that
-    # screen are stored nowhere else. The cost of that order, for whoever writes
-    # the second `on_cancel`: a hook that *starts* a dialog has it ended again
-    # the moment it returns. No feature does; one that wants to would have to
-    # ask for a rule here first.
+    # The hook runs *before* the end because the dialog's data is what it works
+    # with: a hook that redraws a screen finds its message id nowhere else. The
+    # cost is that a hook which *starts* a dialog has it ended again on return.
+    # A feature that wants to needs a rule here first.
     #
-    # The dialog's guard decides whether the *hook* runs, and nothing else. Not
-    # whether the exit runs -- refusing that would lock the sender inside a
-    # dialog they cannot leave, which is the opposite of why the core took
-    # `/cancel` off `directory`. What a guard covers is the hook's right to
-    # assume a principal: an in-memory dialog outlives the row behind it, so an
-    # admin resetting somebody's binding mid-`/edit` would otherwise turn that
-    # person's next `/cancel` into a redraw of `render_edit(None, ...)`.
+    # The guard decides whether the *hook* runs, and nothing else -- refusing
+    # the exit itself would lock the sender in. What it covers is the hook's
+    # right to assume a principal: an in-memory dialog outlives the row behind
+    # it, so a binding reset mid-dialog would otherwise redraw for nobody.
     allowed = spec is not None and refusal(spec.guard, given["principal"]) is None
     try:
         if allowed and spec.on_cancel is not None:
@@ -268,9 +227,9 @@ async def _cancel(registry: Registry, message: Message, **given) -> None:
 async def _run_dialog(registry: Registry, message: Message, **given) -> bool:
     """Step 2. The sender's own dialog, if the registry routes one.
 
-    An open state the registry knows nothing about -- one left behind by an
-    older deploy -- is not allowed to stop the chain: that is the whole
-    difference from `StateFilter(None)`.
+    An open state the registry knows nothing about -- one left by an older
+    deploy -- must not stop the chain: that is the difference from
+    `StateFilter(None)`.
     """
     owner = await given["dialog"].owner()
     spec = registry.dialogs().get(owner) if owner is not None else None

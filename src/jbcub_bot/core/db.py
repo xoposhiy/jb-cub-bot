@@ -16,8 +16,8 @@ class Base(DeclarativeBase):
     pass
 
 
-# Lazy: importing this module (e.g. from tests, which use their own in-memory
-# engine) must NOT require a full .env. The engine is built on first real use.
+# Built on first real use, so importing this module -- as tests do, with their
+# own in-memory engine -- does not require a full .env.
 _engine = None
 _maker = None
 
@@ -39,18 +39,13 @@ def get_session() -> Session:
 def init_db() -> None:
     """Bring the schema up to date, creating it from scratch when absent.
 
-    ``upgrade head`` builds a fresh database and applies anything added since
-    the last deploy, so a schema change needs no deployment change. Databases
-    created by the older ``create_all`` have the tables but no
-    ``alembic_version``; alembic would read those as empty and fail trying to
-    re-create ``users``, so they are stamped. Databases from ``create_all``
-    have exactly the schema of revision c72c6d99f0c1, so that specific revision
-    is stamped rather than the moving ``head`` alias; this ensures later
-    migrations apply normally instead of being skipped.
+    ``upgrade head`` does both, so a schema change needs no deployment change.
 
-    The legacy-stamp branch is one-shot: it exists only to migrate databases
-    created before this project had migrations, and can be deleted once the
-    remaining pre-migration databases have been stamped.
+    The stamp is for databases predating migrations: they have the tables but
+    no ``alembic_version``, and alembic would read that as empty and fail
+    re-creating ``users``. They match one specific revision, which is what gets
+    stamped -- ``head`` would skip everything since. Delete this branch once no
+    such database is left.
     """
     inspector = inspect(get_engine())
     ini_path = Path(_ALEMBIC_INI).resolve()

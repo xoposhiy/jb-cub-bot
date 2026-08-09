@@ -14,7 +14,21 @@ decisions that can just as well be made while implementing, code snippets,
 restatements of how a library works, and explanations aimed at teaching the
 reader. Explain those in conversation instead, where they can be skipped.
 
+## Writing comments and docstrings
+
+Comment the *why* — the constraint that forced this shape, the failure the odd
+line prevents. Nothing else. Gist and a pointer, then stop.
+
+- **Don't restate the code.**
+- **Don't write what needs re-syncing.** No counts ("six tools"), no lists of
+  who currently calls a thing.
+- **Don't write what the code used to be.** That's git's. Keep the constraint,
+  drop the war story: not "the two had drifted once", but "a second reading
+  would let the two disagree".
+- **Don't lean on the knowledge of the whole system.** The reader hasn't read them yet.
+
 ## Commands (uv-managed)
+
 - `uv sync` — set up env
 - `uv run pytest` — tests
 - `uv run python -m jbcub_bot` — run the bot (needs `.env`; see `.env.example`)

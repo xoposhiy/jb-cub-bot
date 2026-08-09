@@ -24,31 +24,27 @@ class Settings(BaseSettings):
     # looks like -100…, so this is a str; empty means report to the bootstrap
     # admins' DMs instead.
     log_chat_id: str = ""
-    # Knowledge base search. The API key is what turns the feature on; the rest
-    # defaults to plain OpenAI. Point the base URL at any OpenAI-compatible
-    # endpoint (a LiteLLM proxy, say) to route elsewhere, and name the model
-    # that endpoint routes — empty means OpenAI's own host and small model.
+    # Knowledge base search. The API key turns the feature on; an empty base
+    # URL means OpenAI's own host. Point it at any OpenAI-compatible endpoint
+    # (a LiteLLM proxy, say) and name the model that endpoint routes.
     kb_llm_api_key: str = ""
     kb_llm_base_url: str = ""
     kb_llm_model: str = "gpt-5.6-luna"
-    # The lowest setting this model actually accepts. The API's scale has
-    # "minimal" between "none" and this, and our endpoint rejects it -- do not
-    # step down to it. Anything above "none" is also why the agent talks to the
-    # Responses API: on chat completions this endpoint refuses function tools
-    # with reasoning on at all. Empty omits the parameter for a gateway whose
-    # model has no such notion.
+    # Lowest setting this endpoint accepts: it rejects the "minimal" step below
+    # this one. Also why the agent uses the Responses API -- with reasoning on
+    # at all, chat completions here refuses function tools. Empty omits the
+    # parameter, for a gateway whose model has no such notion.
     kb_llm_reasoning_effort: str = "low"
     kb_repo: str = "xoposhiy/cub-kb"
     kb_ttl_seconds: int = 3600
     # A brake on the agent as a whole, not on any one asker -- see
-    # kb.handlers._budget_spent. 100 an hour is far above what normal use
-    # should ever reach, so tripping it is itself the signal something is off.
+    # kb.handlers._budget_spent. Set far above what normal use reaches, so
+    # tripping it is itself the signal something is off.
     kb_rate_limit: int = 100
     kb_rate_window_seconds: int = 3600
-    # Optional, and only about quota: GitHub's REST API allows 60 calls an hour
-    # per IP unauthenticated, and a host shares one outbound address between
-    # tenants. Any token raises that to 5000 in a bucket of our own; a public
-    # knowledge base needs no permissions on it.
+    # Optional, and only about quota: unauthenticated GitHub API calls are
+    # rationed per IP, and a host shares one outbound address between tenants.
+    # Any token buys a bucket of our own; a public repo needs no permissions.
     kb_github_token: str = ""
 
     @property

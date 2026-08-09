@@ -25,18 +25,15 @@ def find_impersonation_target(session, ref: str) -> User | None:
 def closed_out(user: User | None, bootstrap_ids) -> bool:
     """True when the roster no longer lists this person and nothing exempts them.
 
-    One predicate, two callers, and that is the whole point of it.
-    `ImpersonationMiddleware` asks it of the admin before honouring their `/as`
-    mode -- somebody the roster dropped may not go on using the bot through
-    another person's identity -- and `AccessMiddleware` asks it of whoever ends
-    up being the principal. So the refusal an admin meets under `/as` is not a
-    second check written to resemble the target's; it *is* the target's.
+    One predicate for both callers, and that is the point: asked of the admin
+    before their `/as` mode is honoured, and of whoever ends up the principal.
+    So the refusal an admin meets under `/as` is not a check resembling the
+    target's; it *is* the target's.
 
-    `BOOTSTRAP_ADMIN_IDS` is the exemption, and it belongs to the person rather
-    than to whoever sent the update: a bad `/sync` must not lock out the one
-    who can fix it, and `/as` on such a person must show the bot working,
-    because working is what they get. A target with no `telegram_id` at all is
-    nobody's exemption, which `None not in bootstrap_ids` already says.
+    `BOOTSTRAP_ADMIN_IDS` is the exemption, and it belongs to the person, not
+    to whoever sent the update: a bad `/sync` must not lock out the one who can
+    fix it, and `/as` on them must show the bot working, because working is
+    what they get.
     """
     return (user is not None and bool(user.departed_at)
             and user.telegram_id not in bootstrap_ids)
@@ -45,8 +42,8 @@ def closed_out(user: User | None, bootstrap_ids) -> bool:
 def try_claim_by_handle(session, telegram_id: int, username: str | None) -> User | None:
     if not username:
         return None
-    # A departed row is not claimable: binding it would write a telegram_id on
-    # every message from someone the bot is going to refuse anyway.
+    # A departed row is not claimable: binding it would write a telegram_id for
+    # someone the bot is going to refuse anyway.
     matches = session.scalars(
         select(User).where(
             User.handle_sheet == username, User.telegram_id.is_(None),

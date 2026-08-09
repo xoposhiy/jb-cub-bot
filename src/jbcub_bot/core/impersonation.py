@@ -1,19 +1,15 @@
 """Which student an admin is currently viewing the bot as.
 
 The mode is sticky: `/as` enters it and `/unas` leaves it, so every update in
-between belongs to the target. Deliberately in memory and not on the admin's
-row -- a deploy dropping someone back into their own view is the safe
-direction, and the banner going missing says so. One process and one event
-loop, so the map needs no locking.
+between belongs to the target. In memory rather than on the admin's row -- a
+deploy dropping someone back into their own view is the safe direction, and the
+banner going missing says so. One process and one event loop, so no locking.
 
-The whole mode lives here: the map, the middleware that acts on it (stage 2 of
-the stack described in `core/principal.py`), and the banner. It has to be core
-rather than a feature, because what it changes is *who the principal is*, which
-is the core's own decision and which `PrincipalMiddleware` could not delegate
-to a package it is forbidden to import. What is a feature is the pair of
-commands that flip the switch, `features/impersonate/` -- in this architecture
-every command belongs to some feature, and these two are no exception. So the
-split is not a seam left half-finished; it is the seam.
+The whole mode is here: the map, the middleware acting on it (stage 2 of the
+stack in `core/principal.py`), and the banner. Core rather than a feature
+because it changes *who the principal is*, which the core cannot delegate to a
+package it may not import. The two commands that flip it are a feature like any
+other: `features/impersonate/`.
 """
 
 from aiogram import BaseMiddleware
@@ -68,17 +64,13 @@ TARGET_GONE = (
 def is_exit_command(event) -> bool:
     """True for the message that leaves the mode, which is never impersonated.
 
-    The one exemption stage 2 keeps. A departed target is refused before any
-    handler runs, so without it `/as <departed student>` would be a trap with
-    no way out short of a restart.
+    The one exemption stage 2 keeps: a departed target is refused before any
+    handler runs, so without it `/as <departed student>` is a trap with no way
+    out short of a restart.
 
-    It reads the command through `pipeline.command_of`, the same reading the
-    router will use on this very message a moment later, rather than a second
-    one written here. The two had already drifted: this one looked only at
-    `.text`, so `/unas` sent as a photo caption was routed to `cmd_unas` by the
-    pipeline while the middleware went on impersonating -- and under a departed
-    target that meant a refusal instead of the exit. A callback carries no
-    command at all, which is the one thing `command_of` is not asked.
+    It reads the command through `pipeline.command_of` -- the same reading the
+    router will use on this message a moment later -- rather than a second one
+    of its own, which would let the two disagree about what `/unas` looks like.
     """
     if isinstance(event, CallbackQuery):
         return False
@@ -89,30 +81,23 @@ def is_exit_command(event) -> bool:
 class ImpersonationMiddleware(BaseMiddleware):
     """Stage 2: whose eyes the rest of the update looks through.
 
-    The mode is honoured only for an admin who is themselves let in. Both
-    halves matter, and the second is the reason this runs where it does rather
-    than folded into the refusal below it: an admin the roster dropped must not
-    go on using the bot through somebody else's identity, so `closed_out` --
-    the very predicate stage 4 will apply to whatever principal comes out of
-    here -- also decides whether there is a swap at all. Declining leaves them
-    as themselves, and stage 4 then refuses them, once, as themselves.
+    Honoured only for an admin who is themselves let in: `closed_out` -- the
+    same predicate stage 4 applies to whatever principal comes out of here --
+    also decides whether there is a swap at all, so an admin the roster dropped
+    is refused as themselves rather than let on through someone else.
 
-    Declining is silent. A stale entry can only belong to someone who *was* an
-    admin when they ran `/as` and has since been demoted or dropped, and they
-    did not ask for a view of anyone with this update -- they typed `/me`.
-    Saying "not allowed" on every message in that state would be noise about a
-    request nobody made. The refusal for actually running `/as` without the
-    rank is the command's own guard, and it says so there. The entry is left
-    in place rather than cleared: a middleware that mutates the mode on the way
-    past would turn a transient bad `/sync` into a lost session.
+    Declining is silent, and leaves the entry in place. A stale entry belongs
+    to someone demoted since they ran `/as`, and this update asked for nobody's
+    view -- refusing it every message would be noise about a request nobody
+    made, and clearing it would turn a transient bad `/sync` into a lost
+    session. Running `/as` without the rank is refused by the command's guard.
     """
 
     def __init__(self, bootstrap_ids: set | None = None):
         self.bootstrap_ids = bootstrap_ids or set()
 
     async def __call__(self, handler, event, data):
-        # Stage 1 put the sender here; the swap below is what makes it
-        # somebody else.
+        # Stage 1 put the sender here; the swap below makes it somebody else.
         caller = data.get("principal")
         user = getattr(event, "from_user", None)
         if user is None or not self._honours_the_mode(caller, event):
@@ -122,12 +107,11 @@ class ImpersonationMiddleware(BaseMiddleware):
             return await handler(event, data)
         target = identity.find_impersonation_target(data["session"], ref)
         if target is None:
-            # The row went away under the mode -- a `/sync` that drops a person
-            # entirely, rather than marking them departed. There is nobody left
-            # to be, so end the mode and say so. The update stops here: it was
-            # meant for the target, and answering it as the admin would show
-            # them their own screen with no sign that is not what they asked
-            # for. Their next message is theirs, and runs normally.
+            # The row went away under the mode -- a `/sync` dropping a person
+            # entirely rather than marking them departed. Nobody left to be, so
+            # end the mode and stop here: the update was meant for the target,
+            # and answering it as the admin would show them their own screen
+            # with no sign that is not what they asked for.
             end(user.id)
             await notify(event, TARGET_GONE)
             return None
@@ -145,25 +129,19 @@ class ImpersonationMiddleware(BaseMiddleware):
 class BannerMiddleware(BaseMiddleware):
     """Stage 3: say whose eyes these are, sent before the handler runs.
 
-    Messages only. A button usually edits its own message in place, so a
-    banner per tap would push the screen it just redrew off the top.
+    Messages only -- a button usually edits its own message in place, so a
+    banner per tap would push the screen it just redrew off the top. Most
+    handlers reply with a fresh message, so the banner lands above the answer;
+    a handler that instead edits an older message gets it below, since that
+    message already existed.
 
-    That puts it before most answers, since most handlers reply with a fresh
-    message. It is not before `edit.on_value` or `_reprompt`, though: both go
-    through `_redraw`, which edits a message sent earlier in the chat -- the
-    banner, sent after that message already existed, lands below it instead
-    of above.
+    Before stage 4 on purpose: a departed target's refusal is the student's
+    own, word for word, and this line is what tells the admin why they are
+    reading it and how to stop. The cost is a *tap* under a departed target,
+    which gets the bare notice until the admin's next typed message.
 
-    It is also, deliberately, before stage 4. That is what carries the way out
-    of a departed target's refusal: the refusal itself is the student's own,
-    word for word, and the line above it is what tells the admin why they are
-    reading it and how to stop. The cost is the one case with no banner to
-    stand above it -- a *tap* under a departed target gets the bare notice, and
-    the admin recovers on their next typed message.
-
-    It needs no exceptions: /unas arrives unimpersonated (see
-    `is_exit_command`) and so announces nothing, and a /as refused inside the
-    mode is refused *because* of the mode, which is worth saying.
+    No exceptions needed: `/unas` arrives unimpersonated (`is_exit_command`),
+    and a `/as` refused inside the mode is refused *because* of the mode.
     """
 
     async def __call__(self, handler, event, data):

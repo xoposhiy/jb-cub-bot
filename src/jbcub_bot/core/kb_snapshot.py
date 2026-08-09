@@ -26,20 +26,18 @@ _FRONTMATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
 
 _TIMEOUT = 30
 
-# How long a failed freshness check is left alone. Far below the TTL, because
-# the usual cause is a rate limit that resets within the hour or a blip that is
-# already over, and far above zero, because retrying per question is what turned
-# one 403 into an outage.
+# How long a failed freshness check is left alone. Below the TTL, because the
+# usual cause is a rate limit or a blip that is over within the hour; above
+# zero, because retrying per question turns one 403 into an outage.
 _RETRY_AFTER_FAILURE = 300
 
 
 @dataclass(frozen=True)
 class Source:
-    """Where a note's text came from, as the note itself records it.
+    """Where a note's text came from, as the note's own frontmatter records it.
 
-    The knowledge base is generated with this block in every note, so the bot
-    never parses a PDF and never computes a page number -- it reads one the
-    repository's own tooling wrote.
+    The repository's tooling writes this block, so the bot never parses a PDF
+    and never computes a page number.
     """
     file: str = ""       # sources/policies/bachelor_policies_v8.pdf
     document: str = ""   # "Policies for Bachelor Studies"
@@ -94,8 +92,8 @@ class Snapshot:
 def parse_frontmatter(text: str) -> tuple[dict, str]:
     """`(mapping, body)`. An absent or unparseable block yields `({}, ...)`.
 
-    A person edits these notes, so one bad note must cost that note's metadata
-    and nothing else -- never the whole snapshot.
+    A person edits these notes by hand, so one bad note costs that note's
+    metadata and never the whole snapshot.
     """
     match = _FRONTMATTER.match(text)
     if match is None:
@@ -139,16 +137,14 @@ def notes_from_tarball(blob: bytes) -> dict[str, Note]:
 def render_folder_map(notes: dict[str, Note]) -> str:
     """One line per folder: its path, how many notes it holds, what it covers.
 
-    This goes in the system prompt, and a line per folder rather than a line per
-    note is the whole point: one folder here is one source document, so this map
-    is the list of documents and it grows with the shelf rather than with the
-    page count. A question the base cannot answer is then decided against a few
-    hundred characters instead of every filename in the repository.
+    This goes in the system prompt, and per folder rather than per note is the
+    point: a folder is one source document, so the map grows with the shelf
+    instead of with the page count, and an unanswerable question is decided
+    against a few hundred characters rather than every filename in the repo.
 
-    The description is the folder's own `_index.md` frontmatter, so the map
-    stays honest without anybody maintaining a second copy of it. A folder
-    without one still gets its line -- a folder the agent cannot see is a folder
-    it will never search.
+    The description comes from the folder's own `_index.md`, so nobody
+    maintains a second copy. A folder without one still gets its line -- a
+    folder the agent cannot see is one it will never search.
     """
     folders: dict[str, int] = {}
     for path in notes:
@@ -167,16 +163,15 @@ def render_folder_map(notes: dict[str, Note]) -> str:
 
 def fetch_head_sha(repo: str, opener=urllib.request.urlopen,
                    token: str = "") -> str:
-    """The commit the default branch points at — one cheap call, no download.
+    """The commit the default branch points at -- one cheap call, no download.
 
-    Cheap in bytes, not in quota: this is the only call the bot makes against
-    GitHub's REST API, and that API allows 60 an hour per IP unauthenticated.
-    A host NATs its outbound traffic, so those 60 are shared with strangers.
-    One header moves us to a 5000-an-hour budget of our own; conditional
-    requests would not help, since a 304 is counted the same as a 200.
+    Cheap in bytes, not in quota: GitHub's REST API allows 60 calls an hour per
+    IP unauthenticated, and a host NATs its outbound traffic, so those 60 are
+    shared with strangers. A token buys a bucket of our own. Conditional
+    requests would not help -- a 304 counts the same as a 200.
 
-    The tarball and the PDFs come from codeload and raw.githubusercontent, which
-    are not part of that budget — the megabytes were never what was rationed.
+    The tarball and the PDFs come from codeload and raw.githubusercontent,
+    which are outside that budget; the megabytes were never what was rationed.
     """
     url = f"https://api.github.com/repos/{repo}/commits/HEAD"
     headers = {"Accept": "application/vnd.github+json"}
@@ -197,19 +192,16 @@ def load_snapshot(repo: str, sha: str, opener=urllib.request.urlopen) -> Snapsho
 class SnapshotStore:
     """Holds one snapshot and decides when it is stale.
 
-    Past the TTL it asks GitHub for the head `sha` and only downloads again when
-    that differs, so an hour of questions costs one cheap call rather than a
-    tarball. Both the call and the unpack run in a worker thread: they are
-    blocking I/O, and this bot has one event loop.
+    Past the TTL it asks GitHub for the head `sha` and downloads only when that
+    moved, so an hour of questions costs one cheap call rather than a tarball.
+    Call and unpack run in a worker thread -- blocking I/O, one event loop.
 
-    The lock is not decoration — two staff asking at the same moment would
-    otherwise both download the repository.
+    The lock is not decoration: two people asking at once would otherwise both
+    download the repository.
 
-    A freshness check that fails costs freshness and nothing else: the snapshot
-    already in memory answers the question, and the next check waits out
-    `_RETRY_AFTER_FAILURE`. Serving a note a few minutes old is not a
-    compromise worth an outage — and asking again per question is how a single
-    403 used to keep the whole feature down for an hour.
+    A failed freshness check costs freshness and nothing else -- the snapshot
+    in memory answers, and the next check waits out `_RETRY_AFTER_FAILURE`.
+    Serving a note a few minutes old beats an outage.
     """
 
     def __init__(self, repo: str, ttl_seconds: int, *,
@@ -226,9 +218,9 @@ class SnapshotStore:
 
     async def get(self, *, force: bool = False) -> Snapshot:
         async with self._lock:
-            # A cold start has nothing to serve, and an admin who typed the
-            # reload command is owed the error rather than a silent no-op, so
-            # both of these let the failure through to the crash report.
+            # Neither of these swallows a failure: a cold start has nothing to
+            # serve, and whoever asked for a reload is owed the error rather
+            # than a silent no-op.
             if self._snapshot is None:
                 self._snapshot = await self._fetch()
                 self._recheck_at = self._clock() + self._ttl
@@ -252,7 +244,7 @@ class SnapshotStore:
 
     async def _fetch(self) -> Snapshot:
         """The head snapshot, reusing the one in hand when the sha has not
-        moved — that is the whole point of asking for the sha first."""
+        moved -- which is the point of asking for the sha first."""
         sha = await asyncio.to_thread(fetch_head_sha, self._repo, self._opener,
                                       self._token)
         if self._snapshot is not None and sha == self._snapshot.sha:

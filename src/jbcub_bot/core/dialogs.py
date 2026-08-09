@@ -1,16 +1,14 @@
 """One user's open dialog, and who it belongs to.
 
-The core owns dialog identity: a state name is derived from the feature and the
-dialog's own name, so a feature writes no `StatesGroup` and cannot collide with
-another feature that also calls its dialog "edit". More importantly, `owner()`
-answers *whose* dialog is open rather than whether one is -- which is what lets
-the pipeline hand a message to the dialog waiting for it while still running
-the chain for everybody else. Asking "is anyone in a state?" is what a global
-`StateFilter(None)` does, and it lets any one feature silence all the others.
+The core owns dialog identity: the state name is derived from the feature and
+the dialog's own name, so a feature writes no `StatesGroup` and cannot collide
+with another. `owner()` answers *whose* dialog is open rather than whether one
+is, which is what lets a message reach the dialog waiting for it while the
+chain still runs for everybody else -- the thing a global `StateFilter(None)`
+cannot do.
 
-There is no step graph and no timeout here: the whole bot has one dialog with
-one state, and a multi-step dialog keeps its step in its own data. The FSM is
-in memory, in one process, so a dialog dies on redeploy -- accepted, and not
+No step graph and no timeout: a multi-step dialog keeps its step in its own
+data. The FSM is in memory, so a dialog dies on redeploy -- accepted, and not
 worth a persistence layer.
 """
 from dataclasses import dataclass
@@ -28,9 +26,8 @@ def state_name(feature: str, dialog: str) -> str:
 class Dialog:
     """Façade over one user's `FSMContext`. Injected as `dialog`.
 
-    Deliberately five methods and no more. A feature reaches its own dialog
-    through the `DialogHandle` that `bot.dialog(...)` handed back, so nothing
-    here needs to know which feature is calling.
+    A feature reaches its own dialog through the `DialogHandle` that
+    `bot.dialog(...)` handed back, so nothing here knows who is calling.
     """
 
     def __init__(self, state: FSMContext):
@@ -41,13 +38,12 @@ class Dialog:
         return await self._state.get_state()
 
     async def start(self, name: str, /, **data) -> None:
-        """Open `name` -- a state name, which `DialogHandle.start` is the way
-        to get -- with `data` as its whole contents.
+        """Open `name` (a state name -- `DialogHandle.start` is how to get one)
+        with `data` as its whole contents.
 
-        Whatever was open is replaced: one FSM per user means there is no
-        second slot, and carrying the previous dialog's data over would hand a
-        feature values it never stored. `name` is positional-only so a dialog
-        may store a value under that key.
+        Whatever was open is replaced: one FSM per user, and carrying the
+        previous dialog's data over would hand a feature values it never
+        stored. `name` is positional-only so a dialog may use that key itself.
         """
         await self._state.set_state(name)
         await self._state.set_data(data)
@@ -60,9 +56,8 @@ class Dialog:
         await self._state.update_data(**data)
 
     async def end(self) -> None:
-        """Close the dialog and forget its data -- both, because a state left
-        behind with stale data is how a dialog reopens holding somebody's old
-        answer."""
+        """Close the dialog and forget its data -- leaving the data is how a
+        dialog reopens holding somebody's old answer."""
         await self._state.clear()
 
 
@@ -84,12 +79,11 @@ class DialogHandle:
 class DialogMiddleware(BaseMiddleware):
     """Puts a `Dialog` in `data["dialog"]` for messages and callbacks.
 
-    aiogram has already resolved the caller's `FSMContext` into `data["state"]`
-    by the time an inner middleware runs, keyed per user-in-chat; wrapping that
-    rather than building storage here is what keeps a button tap and the
-    message that follows it looking at the same dialog. A missing key would
-    mean this was mounted somewhere aiogram resolves no FSM context at all, and
-    the KeyError says so loudly.
+    It wraps the `FSMContext` aiogram already resolved into `data["state"]`,
+    keyed per user-in-chat, rather than building storage of its own -- that is
+    what keeps a tap and the message after it looking at the same dialog. A
+    missing key means this was mounted where aiogram resolves no FSM context,
+    and the KeyError says so.
     """
 
     async def __call__(self, handler, event, data):

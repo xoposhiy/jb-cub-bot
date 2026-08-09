@@ -1,9 +1,9 @@
-"""Where an operational report goes, and what an unanswered request looks like.
+"""Where an operational report goes, and what one looks like.
 
-A crash or a dead end is invisible in Telegram: the person who typed it just
-gets nothing useful. Both go to one private staff chat -- and if that chat is
-unset, or the bot was removed from it, to the bootstrap admins' DMs, which work
-even on an empty database.
+A crash or a dead end is invisible in Telegram: whoever typed it just gets
+nothing useful. Reports go to one private staff chat -- or, if it is unset or
+the bot was thrown out of it, to the bootstrap admins' DMs, which work even on
+an empty database.
 """
 import logging
 from collections.abc import Iterable
@@ -50,12 +50,10 @@ class OpsLog:
 def describe_sender(principal, tg_user) -> str:
     """Who asked, from both sides: the roster row and Telegram itself.
 
-    The handle goes in bare, without its `@`. Written with one, Telegram reads
-    it as a mention and notifies that person -- so an admin watching this chat
-    was pinged by their own every question. A ping in this feed is reserved for
-    the entries someone has to act on, which are crashes and the rate limit,
-    and those are `admin_mention`'s doing rather than a side effect of naming
-    the sender.
+    The handle goes in bare. With an `@` Telegram reads it as a mention and
+    notifies that person, so an admin watching this chat is pinged by their own
+    every question. Pinging is `admin_mention`'s job, for the entries somebody
+    has to act on.
     """
     parts: list[str] = []
     if principal is not None:
@@ -73,9 +71,8 @@ def format_miss(query: str, answer: str, principal=None, tg_user=None,
                 impersonator=None) -> str:
     """One entry for a request the bot could not serve.
 
-    While /as is on, `principal` is the target and the human who typed this is
-    the impersonator, so the credit goes to them and the target gets its own
-    line.
+    Under `/as` the human who typed it is the impersonator, not the principal,
+    so the credit goes to them and the target gets its own line.
     """
     actor = impersonator if impersonator is not None else principal
     lines = ["🔍 Nothing matched", f"from: {describe_sender(actor, tg_user)}"]
@@ -90,9 +87,8 @@ def format_miss(query: str, answer: str, principal=None, tg_user=None,
 def admin_mention(admin_ids: Iterable[int]) -> tuple[str, list]:
     """A line that pings every admin, without needing any of their usernames.
 
-    Built as `text_mention` entities passed alongside plain text rather than
-    parsed from markup, so nothing here can turn into the thing that fails to
-    send -- the same reason `render.trace_message` stays plain text.
+    `text_mention` entities alongside plain text rather than parsed markup, so
+    a report can never be the message that fails to send.
     """
     from aiogram.types import MessageEntity
     from aiogram.types import User as TgUser
@@ -115,9 +111,7 @@ def admin_mention(admin_ids: Iterable[int]) -> tuple[str, list]:
 def format_kb_feedback(good: bool, principal=None, tg_user=None) -> str:
     """One entry per rating a reader leaves on their way out of a session.
 
-    The icon is what makes this skimmable in a chat that also carries every
-    question and its cost: a thumb reads at a glance, no need to open the
-    entry to know which way it went.
+    A thumb reads at a glance, which is what keeps this feed skimmable.
     """
     icon = "👍" if good else "👎"
     return "\n".join([
@@ -127,11 +121,10 @@ def format_kb_feedback(good: bool, principal=None, tg_user=None) -> str:
 
 
 def format_kb_rate_limited(limit: int, principal=None, tg_user=None) -> str:
-    """The one entry that says the shared AI budget ran out for the hour.
+    """The shared AI budget ran out for the hour.
 
-    Nobody is meant to hit this in normal use, so unlike a plain question it
-    carries the caller's admin mention -- the same treatment a crash gets --
-    because this is something to go and look at, not just skim past.
+    Nobody should reach this in normal use, so it gets the admin ping a crash
+    gets: something to go and look at, not skim past.
     """
     return "\n".join([
         f"🚨 Knowledge base hit its hourly limit ({limit} questions)",
@@ -142,9 +135,8 @@ def format_kb_rate_limited(limit: int, principal=None, tg_user=None) -> str:
 def format_kb_question(question: str, principal=None, tg_user=None) -> str:
     """The head of one entry per question put to the knowledge base.
 
-    Who asked and what they asked, which is the whole point of watching this
-    chat while the bot is out with the team. The caller appends the same trace
-    an admin sees, so the cost of the answer sits directly under the question.
+    The caller appends the trace, so the cost of an answer sits under the
+    question that caused it.
     """
     return "\n".join([
         "📚 Knowledge base question",

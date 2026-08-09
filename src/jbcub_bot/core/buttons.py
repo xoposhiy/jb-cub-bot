@@ -1,10 +1,9 @@
 """A tap on an inline button, and which handler it belongs to.
 
 `callback_data` is a key exactly one handler wants, so unlike the message chain
-there is no order to settle here -- only how much of the data is the key and how
+there is no order to settle -- only how much of the data is the key and how
 much is the payload. The longest registered key that prefixes the data wins,
-which is what lets `dir:admin` and `dir:admin:page` coexist and replaces the
-hand-written `cb.data[len(PREFIX):]` slicing in every feature.
+which is what lets `dir:admin` and `dir:admin:page` coexist.
 
 Telegram keeps the button spinning until the callback is answered, so a tap
 nothing matched -- a keyboard left over from an older deploy, usually -- is
@@ -19,10 +18,9 @@ from jbcub_bot.core.guards import refusal
 def match(buttons: list[ButtonSpec], data: str) -> tuple[ButtonSpec, str] | None:
     """The longest registered key that prefixes `data`, and the rest as `arg`.
 
-    Pure, so the whole prefix question is testable without a bot. A key is
-    written without its trailing separator (`bot.button("dir:link")`), so the
-    ":" that follows it belongs to neither side and is dropped: the handler
-    asked for the matriculation, not for ":30000001".
+    Pure, so the prefix question is testable without a bot. A key is written
+    without its trailing separator (`bot.button("dir:link")`), so the ":" that
+    follows belongs to neither side and is dropped.
     """
     candidates = [spec for spec in buttons if data.startswith(spec.key)]
     if not candidates:
@@ -47,16 +45,9 @@ async def take_callback(registry: Registry, callback: CallbackQuery, *,
                         oplog) -> bool:
     """True when the tap was taken or refused -- either way it was answered.
 
-    False means no registered key matched it *and* nothing was said, which is
-    the case the caller above turns into a bare `answer()`. Split out for the
-    same reason as `pipeline.take_message`: "did anything take this" and "what
-    happens when nothing did" are two questions, and each is worth asking on
-    its own.
-
-    Every injectable is passed by name, including the ones that are nobody --
-    `impersonator=None` outside /as, `principal=None` for an unlinked caller.
-    `call_handler` injects a name only when the core offered it, so supplying
-    all seven here is what keeps "declared ⇒ injected" true without exception.
+    False means no registered key matched *and* nothing was said, which the
+    caller above turns into a bare `answer()`. Split out for the same reason as
+    `pipeline.take_message`.
     """
     found = match(registry.buttons(), callback.data or "")
     if found is None:
@@ -64,8 +55,8 @@ async def take_callback(registry: Registry, callback: CallbackQuery, *,
     spec, arg = found
     refused = refusal(spec.guard, principal)
     if refused is not None:
-        # An alert rather than a toast: the tap did nothing, and a toast on a
-        # screen that did not change is easy to miss.
+        # An alert, not a toast: the screen did not change, and a toast on an
+        # unchanged screen is easy to miss.
         await callback.answer(refused, show_alert=True)
         return True
     await call_handler(spec.handler, callback, principal=principal,

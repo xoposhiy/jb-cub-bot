@@ -39,8 +39,7 @@ class User(Base):
     primary_cohort: Mapped[str | None] = mapped_column(String, index=True)
     past_cohorts: Mapped[list] = mapped_column(JSON, default=list)
     # The sheet row this profile came from: a Cohorts 'Link' for a cohort
-    # student, the Rights spreadsheet's id/URL for a Rights-only row. Set by
-    # /sync the way primary_cohort already is.
+    # student, the Rights spreadsheet's id/URL for a Rights-only row.
     source_link: Mapped[str | None] = mapped_column(String)
     visibility: Mapped[dict] = mapped_column(JSON, default=dict)
     # ISO date the roster stopped naming them; NULL means active. A date rather

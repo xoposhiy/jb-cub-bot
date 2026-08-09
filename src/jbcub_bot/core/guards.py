@@ -1,23 +1,16 @@
 """Whether a declaration is open to the caller -- one decision for all of them.
 
-A command, a chain handler, a button and a dialog all carry the same `Guard`,
-so they all refuse the same way and with the same wording. `/help` filters on
-exactly this and nothing else, which is why a guard here is also a visibility
-rule: anything that should stay listed while it refuses (the bootstrap-admin
-check, a profile with no saved row) is ordinary code inside its feature, not a
-guard.
+Commands, chain handlers, buttons and dialogs all carry the same `Guard`, so
+they refuse alike, and `/help` filters on exactly this. A guard is therefore
+also a visibility rule: anything that should stay listed while it refuses is
+ordinary code inside its feature, not a guard.
 
-One kind refuses quietly: on the chain the wording is thrown away and the
-handler is simply skipped, because nothing was addressed to it. So `NOT_LINKED`
-for a stranger who just types something comes from `pipeline.last_word`
-instead, and no feature needs to be `public` in order to say it.
-
-Note what the default does. `Guard()` is `public=False`, and `refusal` turns
-away a `None` principal for it -- so a declaration with no guard at all is
-closed to strangers, and only an explicit `public=True` opens one. That is why
-there is no second, earlier check for "not linked": an unlinked caller has to
-reach `/start` somehow, and the declaration is the only thing that knows
-whether this is it.
+`Guard()` is closed to strangers and only `public=True` opens one, so a
+forgotten guard is fail-closed. That per-declaration check is also why no
+middleware refuses an unlinked caller -- one would close `/start`, the only way
+to get linked. On the chain the wording is thrown away and the handler is just
+skipped, so `pipeline.last_word` is what tells a stranger they are one. See
+AGENTS.md, "The chain is for people the bot knows".
 """
 from jbcub_bot.core.contract import Guard
 from jbcub_bot.core.models import Role, User
@@ -35,8 +28,8 @@ _ROLE_REFUSAL = {Role.ADMIN: ADMIN_REFUSAL, Role.TEACHER: STAFF_REFUSAL}
 def refusal(guard: Guard, principal: User | None) -> str | None:
     """None when allowed; the wording to answer with when refused.
 
-    The core answers it -- a message with the text, a callback with an alert --
-    so a handler never sees a caller it should not have.
+    The core is what answers it, so a handler never sees a caller it should
+    not have.
     """
     if principal is None:
         return None if guard.public else NOT_LINKED
