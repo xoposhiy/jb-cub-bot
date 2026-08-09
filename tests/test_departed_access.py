@@ -158,9 +158,11 @@ async def test_impersonating_a_departed_student_shows_their_block():
 
 
 async def test_impersonating_a_departed_student_points_to_unas():
-    # Finding: the refusal runs before any handler, so BannerMiddleware never
-    # gets to say who the admin is viewing as. Without a pointer here, the
-    # admin sees a bare refusal with no sign /unas is still the way out.
+    # The banner is stage 3 and the refusal stage 4, in that order, and that
+    # order is what carries the way out. The notice is the student's own, word
+    # for word -- so on its own it would tell the admin "the bot is closed to
+    # you", with no sign that /unas is still the way back. The line above it is
+    # where the hint lives now, which is why nothing is appended below.
     factory = _session_factory()
     _seed(factory)
     await _admin(factory)
@@ -168,17 +170,27 @@ async def test_impersonating_a_departed_student_points_to_unas():
     await dp.feed_update(bot, _message_update(bot, 999, f"/as {DEPARTED_TID}"))
     await dp.feed_update(bot, _message_update(bot, 999, "/me"))
     said = _texts(bot)
-    assert any("Eve Expelled" in text and "/unas" in text for text in said)
+    banner = next(i for i, text in enumerate(said)
+                  if "Eve Expelled" in text and "/unas" in text)
+    refusal = next(i for i, text in enumerate(said) if DEPARTED_NOTICE in text)
+    assert banner < refusal
 
 
-async def test_the_impersonated_callback_alert_stays_under_telegrams_cap():
-    # Regression: the combined DEPARTED_NOTICE + hint used to run 198 +
-    # len(name) chars -- past Telegram's 200-char cap on
-    # answerCallbackQuery.text for any name longer than "Ann Li". aiogram
-    # 3.30 does not validate that client-side, so it would have reached the
-    # API as a TelegramBadRequest and the tap would look dead instead of
-    # refusing. Assert length, not just content: content-only assertions
-    # let this exact bug through 722 times.
+async def test_a_tap_under_a_departed_target_gets_the_students_bare_notice():
+    # The accepted cost of moving the hint into the banner. The banner is
+    # message-only -- one per tap would scroll away the screen the tap just
+    # redrew -- so a tap has nothing above it and gets the notice alone; the
+    # admin recovers on their next typed message, which does get one.
+    #
+    # Assert the length as well as the wording. What used to answer here
+    # appended the target's name and ran 198 + len(name) chars, past Telegram's
+    # 200-char cap on answerCallbackQuery.text for any name longer than
+    # "Ann Li". aiogram 3.30 does not validate that client-side, so it reached
+    # the API as a TelegramBadRequest and the tap looked dead instead of
+    # refusing. Nothing appends a name now, and the seeded name below is long
+    # enough that anything which starts to again fails here rather than in
+    # production -- content-only assertions let this exact bug through 722
+    # times.
     factory = _session_factory()
     _seed(factory)
     await _admin(factory)
@@ -199,6 +211,7 @@ async def test_the_impersonated_callback_alert_stays_under_telegrams_cap():
     await dp.feed_update(bot, _callback_update(bot, 999, "dir:privacy"))
     alerts = [m for m in bot.sent if isinstance(m, AnswerCallbackQuery)]
     assert len(alerts) == 1
+    assert alerts[0].text == DEPARTED_NOTICE
     assert len(alerts[0].text) <= 200
 
 

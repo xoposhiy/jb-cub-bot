@@ -22,6 +22,26 @@ def find_impersonation_target(session, ref: str) -> User | None:
     return None
 
 
+def closed_out(user: User | None, bootstrap_ids) -> bool:
+    """True when the roster no longer lists this person and nothing exempts them.
+
+    One predicate, two callers, and that is the whole point of it.
+    `ImpersonationMiddleware` asks it of the admin before honouring their `/as`
+    mode -- somebody the roster dropped may not go on using the bot through
+    another person's identity -- and `AccessMiddleware` asks it of whoever ends
+    up being the principal. So the refusal an admin meets under `/as` is not a
+    second check written to resemble the target's; it *is* the target's.
+
+    `BOOTSTRAP_ADMIN_IDS` is the exemption, and it belongs to the person rather
+    than to whoever sent the update: a bad `/sync` must not lock out the one
+    who can fix it, and `/as` on such a person must show the bot working,
+    because working is what they get. A target with no `telegram_id` at all is
+    nobody's exemption, which `None not in bootstrap_ids` already says.
+    """
+    return (user is not None and bool(user.departed_at)
+            and user.telegram_id not in bootstrap_ids)
+
+
 def try_claim_by_handle(session, telegram_id: int, username: str | None) -> User | None:
     if not username:
         return None

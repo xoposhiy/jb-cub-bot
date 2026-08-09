@@ -15,7 +15,7 @@ from jbcub_bot.core import oplog as oplog_mod
 from jbcub_bot.core.dialogs import DialogMiddleware
 from jbcub_bot.core.errors import report_exception
 from jbcub_bot.core.loader import load_features
-from jbcub_bot.core.principal import PrincipalMiddleware
+from jbcub_bot.core.principal import AccessMiddleware, PrincipalMiddleware
 
 _log = logging.getLogger(__name__)
 
@@ -52,13 +52,40 @@ def describe_update(update: Update) -> str:
 def build_dispatcher(session_factory, bootstrap_ids: set | None = None,
                      log_chat_id: str = "") -> Dispatcher:
     dp = Dispatcher()
+    # Authentication is four stages, and the order is the design. No stage
+    # knows where it sits; this is the only place that does, so it is the only
+    # place that can be wrong about it.
+    #
+    # 1. `PrincipalMiddleware` -- where we are, who is writing, and a session
+    #    for the rest of the update. It refuses a non-private chat (the bot
+    #    answers where it was addressed, and would otherwise post one person's
+    #    profile into a group), and does so before the identity lookup, so a
+    #    busy group costs no query per line. It refuses nothing else.
+    # 2. `ImpersonationMiddleware` -- whose eyes the rest of the update looks
+    #    through: it may replace `principal` with an `/as` target.
+    # 3. `BannerMiddleware` -- says whose eyes those are.
+    # 4. `AccessMiddleware` -- the one `departed_at` refusal, asked of whatever
+    #    principal stage 2 settled on.
+    #
+    # Refusing *after* the swap is what makes `/as <departed student>` show the
+    # admin that student's own refusal, from that student's own line of code,
+    # rather than an impersonation-flavoured copy free to drift away from it.
+    # Announcing before it is what leaves them a way out: the notice carries no
+    # hint of its own, so the banner directly above it is what says /unas still
+    # works. Move stage 4 up and the special case comes back; move stage 3 down
+    # and the admin reads "the bot is closed to you" with nothing to explain it.
+    #
+    # Inner middlewares, all of them: aiogram resolves the parent chain's for a
+    # sub-router's handler, and runs them once, for the handler that matched.
     dp.message.middleware(PrincipalMiddleware(session_factory, bootstrap_ids))
     dp.callback_query.middleware(PrincipalMiddleware(session_factory, bootstrap_ids))
-    # After PrincipalMiddleware, which is what puts the impersonator in `data`.
-    # Inner middleware, like the one above: aiogram resolves the parent chain's
-    # inner middlewares for a sub-router's handler, and runs them once, for the
-    # handler that actually matched.
+    dp.message.middleware(impersonation.ImpersonationMiddleware(bootstrap_ids))
+    dp.callback_query.middleware(
+        impersonation.ImpersonationMiddleware(bootstrap_ids))
+    # Messages only, so the callback chain simply goes without a stage 3.
     dp.message.middleware(impersonation.BannerMiddleware())
+    dp.message.middleware(AccessMiddleware(bootstrap_ids))
+    dp.callback_query.middleware(AccessMiddleware(bootstrap_ids))
     # `dialog` for both kinds, because a tap opens the prompt the next message
     # answers and the two must see the same FSM context. aiogram resolves that
     # context into `data["state"]` in an outer middleware at update level, so it

@@ -48,8 +48,17 @@ async def test_middleware_bootstrap_admin(session):
     assert captured["principal"].role is Role.ADMIN
 
 
-async def test_middleware_swaps_the_principal_for_an_admin_in_the_mode(session):
-    from jbcub_bot.core.models import User
+async def test_stage_one_identifies_the_sender_and_knows_nothing_of_the_mode(
+        session):
+    """The swap is stage 2's, and asking stage 1 for it is how a test goes
+    vacuous: `tests/test_impersonation_middleware.py` owns those now.
+
+    The absent key is the assertion, not an oversight. `principal` is set
+    unconditionally because `route_message` declares it without a default;
+    `impersonator` is not set at all, because every reader of it has a default
+    or uses `.get`, and a stage that knows nothing about the mode should not be
+    the one announcing there is none.
+    """
     session.add(User(last_name="Admin", telegram_id=777, role=Role.ADMIN))
     session.add(User(last_name="Stud", matriculation="30000001",
                      telegram_id=111, role=Role.STUDENT))
@@ -59,34 +68,33 @@ async def test_middleware_swaps_the_principal_for_an_admin_in_the_mode(session):
 
     async def handler(event, data):
         captured["principal_tid"] = data["principal"].telegram_id
-        captured["impersonator_tid"] = data["impersonator"].telegram_id
+        captured["keys"] = set(data)
 
     impersonation.begin(777, "30000001")
     event = SimpleNamespace(from_user=SimpleNamespace(id=777, username="a"))
     await mw(handler, event, {})
 
-    assert captured == {"principal_tid": 111, "impersonator_tid": 777}
+    assert captured["principal_tid"] == 777  # the sender, not the target
+    assert "impersonator" not in captured["keys"]
 
 
-async def test_a_students_own_mode_entry_is_ignored(session):
-    # Belt and braces: only /as writes the map and only an admin may run it,
-    # but the swap must not depend on that being true.
-    from jbcub_bot.core.models import User
-    session.add(User(last_name="Stud", telegram_id=777, role=Role.STUDENT))
-    session.add(User(last_name="Other", matriculation="30000001",
-                     telegram_id=111, role=Role.STUDENT))
+async def test_stage_one_refuses_nobody_the_roster_dropped(session):
+    """Departed is stage 4's question, and it has to stay stage 4's: stage 2
+    runs in between and may hand it somebody else entirely."""
+    session.add(User(last_name="Gone", telegram_id=777, role=Role.STUDENT,
+                     departed_at="2026-07-28"))
     session.commit()
     mw = PrincipalMiddleware(lambda: session)
-    captured = {}
+    ran = False
 
     async def handler(event, data):
-        captured["principal_tid"] = data["principal"].telegram_id
+        nonlocal ran
+        ran = True
 
-    impersonation.begin(777, "30000001")
-    event = SimpleNamespace(from_user=SimpleNamespace(id=777, username="s"))
+    event = SimpleNamespace(from_user=SimpleNamespace(id=777, username="g"))
     await mw(handler, event, {})
 
-    assert captured["principal_tid"] == 777  # not swapped
+    assert ran is True
 
 
 # --- the bot serves private chats only ----------------------------------
