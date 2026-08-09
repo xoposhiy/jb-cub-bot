@@ -1,11 +1,10 @@
 """End-to-end /help through a real dispatcher: admin vs student vs unlinked.
 
-`help` is the first migrated feature, so this file is also the proof that the
-legacy bridge (`core/legacy.py`'s `_declare`) works: `features/help` reads the
-contract registry and nothing else, and three of the four features here are
-still legacy. Every heading and every line below a `📒`, `🕵️` or `📚` comes
-from a `Manifest` republished as a real declaration -- which is what makes
-tasks 8 and 10 judgeable as behaviour-preserving.
+`features/help` reads the contract registry and nothing else, so what is asked
+here is that every feature's block reads the way it always has. That was the
+bar each migration in turn was judged against -- a heading and its lines are
+the same before and after -- and `kb`'s, the last of them, is the reason the
+`📚` block below is worth pinning down line by line.
 """
 from datetime import datetime, timezone
 
@@ -97,9 +96,9 @@ async def test_unlinked_help_shows_notice():
     assert "You're not linked yet — ask a program admin for a one-time link." in out
 
 
-# --- the bridge: a legacy feature reads like a migrated one -------------------
+# --- every feature's block, line by line --------------------------------------
 
-async def test_an_admin_sees_every_legacy_feature_bridged_into_the_registry():
+async def test_an_admin_sees_every_line_every_feature_declared():
     out = await _run_help(_with_admin(), 777)
 
     assert "❓ Help — Commands you can use." in out
@@ -120,11 +119,9 @@ async def test_an_admin_sees_every_legacy_feature_bridged_into_the_registry():
     assert "  /ask [question] — Ask the knowledge base a question." in out
     assert "  /kb_reload — Re-download the knowledge base now. (admin)" in out
     assert "  💬 ask the knowledge base a question" in out
-    # The shim's own chain slot is not a feature anybody can use.
-    assert "Legacy" not in out
 
 
-async def test_a_student_sees_the_legacy_lines_their_role_allows():
+async def test_a_student_sees_the_lines_their_role_allows():
     out = await _run_help(_with_student(), 222)
 
     assert "📒 Directory — Find classmates and manage your own profile." in out
@@ -164,10 +161,9 @@ async def test_an_unlinked_caller_sees_the_public_commands_and_the_notice():
 
 async def test_the_features_are_listed_in_discovery_order():
     """Alphabetical by package name, which is what `pkgutil.iter_modules`
-    yields -- and what phases C to E broke while a migrated feature claimed its
-    slot during `load_features` and a bridged one only during `adopt`. With
-    `directory` migrated, `kb` is the last one left and it also sorts last, so
-    the order is right again before the bridge is deleted."""
+    yields. It was briefly not, while a migrated feature claimed its registry
+    slot during `load_features` and an unmigrated one only afterwards; with one
+    shape left there is one pass, and the order is the walk's."""
     out = await _run_help(_with_admin(), 777)
 
     headings = [line for line in out.splitlines() if not line.startswith("  ")

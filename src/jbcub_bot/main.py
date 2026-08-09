@@ -3,11 +3,11 @@ import logging
 import sys
 import threading
 
-from aiogram import Bot, Dispatcher, Router
+from aiogram import Bot, Dispatcher
 from aiogram.types import CallbackQuery, ErrorEvent, Message, Update
 
 import jbcub_bot.features as features_pkg
-from jbcub_bot.core import buttons, impersonation, legacy, pipeline
+from jbcub_bot.core import buttons, impersonation, pipeline
 from jbcub_bot.core.config import get_settings
 from jbcub_bot.core.contract import Registry
 from jbcub_bot.core.db import get_session, init_db
@@ -106,24 +106,20 @@ def build_dispatcher(session_factory, bootstrap_ids: set | None = None,
     # that was reset -- appended the whole chain again on every call, because
     # only one half of it was ever cleared.
     registry = Registry()
-    # Until phase F: the legacy features' intents live in the chain at LEGACY,
-    # after every landmark. Claimed before loading so `load_features` validates
-    # and logs the slot beside every real feature's, and filled from the
-    # manifests once they exist. Phase F deletes core/legacy.py and these lines.
-    shim = legacy.install(registry)
-    loaded = load_features(features_pkg, registry)
-    shim.adopt(loaded)
-    for feature in loaded:
-        if feature.legacy:
-            dp.include_router(feature.router)
+    load_features(features_pkg, registry)
     # Where a test -- or anything else wanting to see the resolved contract --
     # finds it, since there is deliberately no module global holding it.
     dp["registry"] = registry
 
-    # The core routes every message it can prove is its own, and declines the
-    # rest to the legacy routers below. The filter is what decides; see
-    # core/legacy.py for why that decision cannot live inside the handler.
-    @dp.message(legacy.core_owns_message(registry, loaded))
+    # Two entry points, no filters and no sub-routers: every update is the
+    # core's, and what to do with one is `pipeline`'s decision rather than
+    # aiogram's. The filters that used to sit here asked the registry whether a
+    # legacy router still owned an update; nothing is legacy any more, and the
+    # fallback router they fed -- which existed because a Dispatcher runs its
+    # own handlers before its sub-routers -- went with them. `handle_message`
+    # gives the last word itself, to every message, which is the one copy of it
+    # left.
+    @dp.message()
     async def route_message(message: Message, principal, session, bot: Bot,
                             dialog, impersonator=None):
         await pipeline.handle_message(
@@ -131,30 +127,13 @@ def build_dispatcher(session_factory, bootstrap_ids: set | None = None,
             impersonator=impersonator, dialog=dialog, oplog=ops_log(bot),
         )
 
-    @dp.callback_query(legacy.core_owns_callback(registry, loaded))
+    @dp.callback_query()
     async def route_callback(callback: CallbackQuery, principal, session,
                              bot: Bot, dialog, impersonator=None):
         await buttons.handle_callback(
             registry, callback, principal=principal, session=session, bot=bot,
             impersonator=impersonator, dialog=dialog, oplog=ops_log(bot),
         )
-
-    # Last word: a message no handler took must still get an answer. Sub-routers
-    # run after the Dispatcher's own handlers, so this router is included last
-    # and only sees what everything above it declined — unknown commands, and
-    # anything that isn't text. The wording and the ops-log miss are
-    # `pipeline.last_word`'s now, which is also what answers a message the entry
-    # point above took nothing from; phase F leaves only that one.
-    fallback = Router(name="fallback")
-
-    @fallback.message()
-    async def nothing_understood(message: Message, bot: Bot, principal=None,
-                                 impersonator=None):
-        await pipeline.last_word(message, principal=principal,
-                                 impersonator=impersonator,
-                                 oplog=ops_log(bot))
-
-    dp.include_router(fallback)
 
     @dp.errors()
     async def on_unhandled_error(event: ErrorEvent, bot: Bot) -> bool:

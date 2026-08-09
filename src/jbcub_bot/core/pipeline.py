@@ -8,13 +8,14 @@ habit -- `~F.text.startswith("/")` has nowhere left to be needed -- and what
 keeps one feature's open dialog from silencing every other feature, which is
 exactly what a global `StateFilter(None)` does.
 
-The chain contract survives from `core/intents.py` verbatim: `False` means "not
-mine" and obliges the handler to have answered nothing, since the next handler
--- or the last word -- is about to answer instead. Anything else, including
-`None`, counts as taken, so a handler that forgets to return cannot go silently
-unhandled. What changed is that the walk is ordered by the declared position
-rather than by registration, the match test is a predicate rather than a regex,
-and the taker comes back rather than a bool.
+The chain contract: `False` means "not mine" and obliges the handler to have
+answered nothing, since the next handler -- or the last word -- is about to
+answer instead. Anything else, including `None`, counts as taken, so a handler
+that forgets to return cannot go silently unhandled. Two features share the
+chain today and the whole of the routing between them is their `at=`: the
+roster search at `LOOKUP` gets first refusal on every free-text message, and
+the agent at `AGENT` answers what it declined. There is no mode anywhere that
+reorders that.
 
 One thing the order does not do: only *text* reaches a dialog's `on_text`. A
 photo or a document sent while the sender's own dialog is open skips the dialog
@@ -41,7 +42,6 @@ from jbcub_bot.core.oplog import format_miss
 # this replaces.
 LOOKUP = 100   # a name finds a classmate
 AGENT = 200    # the knowledge-base agent answers
-LEGACY = 900   # until phase F: where the legacy-intent shim sits. Dies with it.
 
 NOTHING_MATCHED = "No one found."
 NOTHING_TO_CANCEL = "Nothing to cancel."
@@ -53,11 +53,10 @@ CANCELLED = "Cancelled."
 def command_of(message: Message) -> tuple[str, str] | None:
     """The command a message addresses and its tail, or None for a non-command.
 
-    One reading, in one place, because two would be a silent routing hole:
-    `core/legacy.py`'s filter returning True is a promise that `_run_command`
-    will find the same name, and a divergence between them would take the
-    update off the legacy router that owned it only to answer "I don't know
-    /x." The pair comes back together so neither caller parses twice.
+    One reading, in one place. Two would be a silent routing hole -- "is this a
+    command" and "which command is it" disagreeing means an update answered as
+    something nobody typed -- and the pair comes back together so no caller has
+    to parse it twice.
     """
     # aiogram's Command filter matches text *or* caption, so a photo posted
     # with "/sync 2024" as its caption is just as deliberate an address as
@@ -89,26 +88,36 @@ async def take_message(registry: Registry, message: Message, *, principal,
                        session, bot, impersonator, dialog, oplog) -> bool:
     """Steps 1 to 3. True when something took the message.
 
-    Split from the last word so a caller can offer the message somewhere else
-    before anything answers -- which is what the legacy routers need while they
-    still exist.
+    Split from the last word because they answer different questions -- "did
+    anything take this" and "what do we say when nothing did" -- and each is
+    worth asking on its own, which is how `tests/test_pipeline.py` reads.
     """
     given = dict(principal=principal, session=session, bot=bot,
                  impersonator=impersonator, dialog=dialog, oplog=oplog)
-    # The record describes *this* message from here on. A command or a dialog
-    # taking it therefore reads as None: /me shows a profile too, and nothing
-    # downstream may mistake that for the chain having answered. A handler that
-    # crashes mid-walk leaves None as well, which is the truth -- nothing took
-    # the message.
-    registry.record_taker(message.chat.id, None)
-    command = command_of(message)
-    if command is not None:
-        # An unknown command falls to the last word rather than into the chain:
-        # the sender addressed the bot, not the room.
-        return await _run_command(registry, message, *command, **given)
-    if TEXT(message) and await _run_dialog(registry, message, **given):
-        return True
-    return await dispatch(registry, message, **given) is not None
+    # The record is replaced only once this message's fate is settled, and that
+    # is load-bearing: until then it still names what took the *previous* one,
+    # which is what a chain handler reads. `kb` asks it whether a profile was
+    # shown in between two of its questions, and clearing it up front -- which
+    # this used to do -- made the record unreadable from inside the very chain
+    # that has to read it.
+    #
+    # A command or a dialog taking the message settles it as None: /me shows a
+    # profile too, and nothing downstream may mistake that for the chain having
+    # answered. A handler that crashes leaves None as well, which is the truth
+    # -- nothing took the message -- and is why this is a `finally`.
+    taker = None
+    try:
+        command = command_of(message)
+        if command is not None:
+            # An unknown command falls to the last word rather than into the
+            # chain: the sender addressed the bot, not the room.
+            return await _run_command(registry, message, *command, **given)
+        if TEXT(message) and await _run_dialog(registry, message, **given):
+            return True
+        taker = await dispatch(registry, message, **given)
+        return taker is not None
+    finally:
+        registry.record_taker(message.chat.id, taker)
 
 
 async def dispatch(registry: Registry, message: Message,
@@ -123,23 +132,24 @@ async def dispatch(registry: Registry, message: Message,
     No `try` around the walk. The crashed handler may already have answered,
     and trying the next one would answer twice, so the exception aborts the
     chain and reaches aiogram's `dp.errors`.
+
+    The walk itself records nothing: `take_message` owns the taker record, so
+    there is one writer and a handler in the middle of the walk still reads the
+    previous message's answer rather than a half-written one.
     """
     # All seven names, always: `call_handler` injects a declared parameter only
     # when the core offers it, so a name missing here would silently keep its
     # default instead of failing.
     given = {name: injectables.get(name) for name in INJECTABLES}
     given["arg"] = ""  # a chain handler is given the message, not a tail of it
-    taker = None
     for spec in registry.chain():
         if not spec.when(message):
             continue
         if refusal(spec.guard, given["principal"]) is not None:
             continue
         if await call_handler(spec.handler, message, **given) is not False:
-            taker = spec
-            break
-    registry.record_taker(message.chat.id, taker)
-    return taker
+            return spec
+    return None
 
 
 async def last_word(message: Message, *, principal, impersonator,
@@ -258,9 +268,9 @@ async def _cancel(registry: Registry, message: Message, **given) -> None:
 async def _run_dialog(registry: Registry, message: Message, **given) -> bool:
     """Step 2. The sender's own dialog, if the registry routes one.
 
-    An open state the registry knows nothing about -- a legacy feature's own
-    FSM, or one left behind by an older deploy -- is not allowed to stop the
-    chain: that is the whole difference from `StateFilter(None)`.
+    An open state the registry knows nothing about -- one left behind by an
+    older deploy -- is not allowed to stop the chain: that is the whole
+    difference from `StateFilter(None)`.
     """
     owner = await given["dialog"].owner()
     spec = registry.dialogs().get(owner) if owner is not None else None

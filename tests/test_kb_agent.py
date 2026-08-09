@@ -4,6 +4,7 @@ The framework owns the tool loop, so the seam is the model: a stub that returns
 scripted responses proves the wiring without a network call or an API key.
 """
 import re
+from datetime import UTC, datetime
 
 import pytest
 from agents import ModelResponse, OpenAIResponsesModel, RunContextWrapper
@@ -102,7 +103,8 @@ async def test_a_tool_call_sequence_reaches_an_answer():
 
     assert out.text == _CLEAN, "the agent's words, unedited"
     assert model.calls == 4, "two turns to answer, two to name the source"
-    assert out.history, "the run's input list carries the session forward"
+    assert out.question.endswith("How many retakes?"), \
+        "the stamped question, which is what the conversation keeps"
     assert out.complaints == (), "no complaint, so no reconsidering"
     assert out.stats.steps == 4
     assert out.stats.tool_calls == 2
@@ -161,7 +163,6 @@ async def test_a_model_that_never_stops_is_cut_and_says_so():
 
     assert out.text == kb_agent.CUT_SHORT
     assert model.calls == kb_agent.MAX_TURNS
-    assert out.history == [], "an abandoned run must not pollute the session"
     assert out.stats.tool_calls > 0, "a cut-short run still reports its burn"
 
 
@@ -325,6 +326,102 @@ async def test_an_anonymous_run_says_nothing_about_the_asker():
     ctx = RunContextWrapper(kb_agent.Ask(snapshot=_snapshot()))
 
     assert "The person asking" not in kb_agent.instructions(ctx, None)
+
+
+# --- the verdict: this was a name, not a question ------------------------------
+
+def _declines(name: str) -> StubModel:
+    return StubModel([
+        [_call("looks_like_a_person_name", '{"name": "%s"}' % name)],
+        # Scripted but never reached when the verdict takes: the run ends at
+        # the call. It is here so the test can tell "ended" from "answered".
+        [_text("I looked and found nothing.")],
+    ])
+
+
+async def test_a_name_the_roster_does_not_carry_is_declined_not_answered():
+    out = await kb_agent.ask(_agent(_declines("Егоров")), _snapshot(),
+                             "Егоров", [])
+
+    assert out.person_name == "Егоров"
+    assert out.text == "", "a verdict is not an answer"
+
+
+async def test_the_verdict_ends_the_run_before_the_checking_and_the_sources():
+    """`ask` short-circuits: there is nothing to check in an answer that was
+    never written, and nothing to attach to it."""
+    model = _declines("Егоров")
+
+    out = await kb_agent.ask(_agent(model), _sourced(), "Егоров", [])
+
+    assert model.calls == 1, "the tool call was the whole run"
+    assert (out.sources, out.complaints) == ((), ())
+
+
+async def test_a_verdict_still_reports_what_it_cost():
+    out = await kb_agent.ask(_agent(_declines("Егоров")), _snapshot(),
+                             "Егоров", [])
+
+    assert out.stats.tool_calls == 1
+    assert out.stats.input_tokens == 600
+
+
+async def test_ask_turns_the_check_off_and_the_run_goes_on_to_answer():
+    """`/ask` is the only way to ask the agent *about* a person by name, and
+    that works by refusing the tool rather than by hiding it: the tool list is
+    part of the prefix the provider caches on."""
+    model = _declines("Dr Weber")
+
+    out = await kb_agent.ask(_agent(model), _snapshot(), "who is Dr Weber?", [],
+                             check_names=False)
+
+    assert out.person_name == "", "refused, so no verdict"
+    assert out.text == "I looked and found nothing.", "and it answered instead"
+    assert model.calls == 2
+
+
+def test_the_prompt_says_what_a_bare_name_is_and_what_it_is_not():
+    """Each line of this is a way the verdict goes wrong: a question with a
+    name in it, an unfamiliar course code, or a guess made under doubt."""
+    rules = " ".join(kb_agent.SYSTEM_RULES.split())
+
+    assert "looks_like_a_person_name when the whole message is nothing but a " \
+        "person's name" in rules
+    assert "A question with a name inside it is a question" in rules
+    assert "naming a course, a document, a place or a programme is not a " \
+        "person" in rules
+    assert "When you are unsure, answer" in rules
+
+
+# --- the stamp on every question ------------------------------------------------
+
+async def test_a_question_reaches_the_model_with_the_time_it_was_asked():
+    model = StubModel([[_text("Yes.")]])
+
+    out = await kb_agent.ask(_agent(model), _snapshot(),
+                             "is the deadline past?", [],
+                             now=datetime(2026, 8, 9, 14, 3, tzinfo=UTC))
+
+    assert out.question == ("[Asked Sunday, 09 August 2026, 14:03 UTC]\n"
+                            "is the deadline past?")
+
+
+def test_the_stamp_is_written_by_the_same_code_as_the_clock_tool():
+    """One format for both, so the agent has one thing to understand rather
+    than two that drift."""
+    at = datetime(2026, 8, 9, 14, 3, tzinfo=UTC)
+
+    assert tools.current_datetime(at) in kb_agent.stamp("q", at)
+
+
+def test_the_prompt_says_the_stamp_is_the_bots_line_and_the_current_time():
+    """Otherwise the agent spends a turn fetching a clock it is holding."""
+    rules = " ".join(kb_agent.SYSTEM_RULES.split())
+
+    assert "That line is the bot's, not part of what the reader wrote" in rules
+    assert "the stamp on the question you are answering now is the current " \
+        "time" in rules
+    assert "current_datetime" in rules, "and it still exists for the rest"
 
 
 # --- the one round of feedback ------------------------------------------------
@@ -521,13 +618,15 @@ async def test_a_broken_sources_turn_costs_the_attachments_and_not_the_answer():
     assert out.sources == ()
 
 
-async def test_the_sources_question_stays_out_of_the_session_history():
-    """The next question inherits the answer, not the bookkeeping that followed
-    it."""
+async def test_nothing_of_the_run_itself_comes_back_to_be_carried_forward():
+    """The next question inherits the question and the answer, and nothing
+    else -- not the tool calls, not the note texts, not the bookkeeping that
+    followed the answer. `features/kb/history.py` is what carries them."""
     out = await kb_agent.ask(_agent(_reads_then_picks("kb/p.md", "[1]")),
                              _sourced(), "q", [])
 
-    assert not any("choose_sources" in str(item) for item in out.history)
+    assert not hasattr(out, "history")
+    assert "choose_sources" not in out.question + out.text
 
 
 def test_the_notes_offered_are_the_ones_read_in_order_without_repeats():

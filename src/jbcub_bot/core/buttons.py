@@ -47,10 +47,11 @@ async def take_callback(registry: Registry, callback: CallbackQuery, *,
                         oplog) -> bool:
     """True when the tap was taken or refused -- either way it was answered.
 
-    False means no registered key matched it *and* nothing was said, so a
-    caller can offer the tap somewhere else: answering here as well as in a
-    router that still owns the key would answer one tap twice. Same seam as
-    `pipeline.take_message`, for the same reason.
+    False means no registered key matched it *and* nothing was said, which is
+    the case the caller above turns into a bare `answer()`. Split out for the
+    same reason as `pipeline.take_message`: "did anything take this" and "what
+    happens when nothing did" are two questions, and each is worth asking on
+    its own.
 
     Every injectable is passed by name, including the ones that are nobody --
     `impersonator=None` outside /as, `principal=None` for an unlinked caller.

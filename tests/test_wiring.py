@@ -1,24 +1,22 @@
 """What `build_dispatcher` mounts, proved by feeding real updates through it.
 
-Phase B put the new pipeline in front of routers that still owned their own
-commands, callbacks and FSM states, so the two questions here are "does a
-legacy feature still work" and "does anything answer twice". Both are asked of
-a real `Dispatcher` built by `jbcub_bot.main`, because the wiring is the thing
-under test -- a unit test of the entry points would prove the parts task 3
-already proved. Since task 10 only `kb` is legacy, so the same two questions
-are now asked of it and of a `directory` that answers through the core.
+Two entry points and nothing else: every update is the core's, and the question
+here is whether the whole of it -- a command, a button, a dialog, the chain, the
+last word -- reaches a handler through a real `Dispatcher` built by
+`jbcub_bot.main`. A unit test of the entry points would prove the parts
+`tests/test_pipeline.py` already proves; what only this file can show is the
+mounting and the middleware order behind it.
 
 The probe feature (`_probe`) registers itself into the *live* registry after the
 dispatcher was built. That it takes effect at all is the point: the entry points
-read the registry per update, which is why migrating `help`, `impersonate` and
-`directory` needs no edit to `main.py`.
+read the registry per update, which is why every feature migration in turn
+needed no edit to `main.py`.
 """
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
-from aiogram import Router
 from aiogram.methods import AnswerCallbackQuery, EditMessageText
 from aiogram.types import CallbackQuery, Chat, Message, PhotoSize, Update
 from aiogram.types import User as TgUser
@@ -27,18 +25,14 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import jbcub_bot.features as features_pkg
-from jbcub_bot.core import legacy
-from jbcub_bot.core.commands import CommandSpec as LegacyCommandSpec
-from jbcub_bot.core.contract import ContractError, Registry, TEXT
+from jbcub_bot.core.contract import Registry, TEXT
 from jbcub_bot.core.db import Base
 from jbcub_bot.core.dialogs import Dialog
-from jbcub_bot.core.intents import Intent
-from jbcub_bot.core.loader import LoadedFeature, Manifest, load_features
+from jbcub_bot.core.loader import load_features
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.core.oplog import OpsLog
-from jbcub_bot.core.pipeline import LEGACY, LOOKUP
+from jbcub_bot.core.pipeline import AGENT, LOOKUP
 from jbcub_bot.features.directory import accounts, render
-from jbcub_bot.features.kb import handlers as kb_handlers
 from jbcub_bot.features.directory.accounts import Verdict
 from jbcub_bot.main import build_dispatcher
 
@@ -80,18 +74,6 @@ def _factory():
     return maker
 
 
-def _detach() -> None:
-    """Un-parent every legacy router so `build_dispatcher` may run again.
-
-    Feature routers are module-level singletons and aiogram refuses to
-    re-attach one; `tests/conftest.py` does this before every test, and a test
-    that builds twice has to do it in between as well.
-    """
-    for feature in load_features(features_pkg, Registry()):
-        if feature.router is not None:
-            feature.router._parent_router = None
-
-
 def _build(**kwargs):
     return build_dispatcher(_factory(), bootstrap_ids=set(), **kwargs)
 
@@ -129,44 +111,30 @@ def _edits(bot) -> list[str]:
     return [m.text for m in bot.sent if isinstance(m, EditMessageText)]
 
 
-# --- what is still legacy -----------------------------------------------------
+# --- every feature declares itself --------------------------------------------
 
-def test_kb_is_the_last_legacy_feature():
-    """Moved here from `tests/test_registry.py`, which asked the same question
-    of the module-global manifest list `main.py` used to publish to.
-
-    It is the assertion that fires when a contributor adds a package of the old
-    shape, and the one that will fail when `kb` finally migrates -- at which
-    point the shim, `core/intents.py` and `core/commands.py` go with it.
+def test_every_feature_registers_through_the_contract():
+    """The assertion that fires when a contributor adds a package of the old
+    `router` + `manifest` shape. Nothing hosts one any more: the shim,
+    `core/intents.py` and `core/commands.py` went with `kb`'s migration.
     """
-    still_legacy = {feature.name
-                    for feature in load_features(features_pkg, Registry())
-                    if feature.legacy}
-    assert still_legacy == {"kb"}
+    registry = Registry()
+    loaded = load_features(features_pkg, registry)
+
+    assert {feature.name for feature in loaded} == \
+        {reg.name for reg in registry.features()}
 
 
 # --- the registry belongs to the build ----------------------------------------
 
-async def test_building_twice_does_not_double_the_chain(caplog):
-    with caplog.at_level(logging.INFO):
-        first = _build()
-        _detach()
-        second = _build()
+async def test_building_twice_does_not_double_the_chain():
+    first, second = _build(), _build()
 
     assert len(first["registry"].chain()) == len(second["registry"].chain()) == 2
-    # And the shim in the later of those two slots hosts the same one intent
-    # both times, rather than two: it is built per call, like everything else
-    # here.
-    hosted = [record.getMessage() for record in caplog.records
-              if "legacy shim" in record.getMessage()]
-    assert hosted == [
-        f"legacy shim at={LEGACY} hosts 1 intents: kb.offer",
-    ] * 2
 
 
 async def test_building_twice_does_not_inherit_the_taker_record():
     first = _build()
-    _detach()
     second = _build()
     bot = FakeBot()
 
@@ -256,9 +224,9 @@ async def test_text_in_a_registered_dialog_is_answered_once_by_its_on_text(
         monkeypatch):
     """A dialog takes the text meant for it, and nothing else answers.
 
-    `directory:edit` is a registered dialog since task 10, so the pipeline
-    routes the value to `on_value` itself and never walks the chain -- which is
-    what stops the shim's `.+` intent answering the value as well.
+    `directory:edit` is a registered dialog, so the pipeline routes the value to
+    `on_value` itself and never walks the chain -- which is what stops the name
+    search answering the value as well.
     """
     _no_network(monkeypatch)
     factory = _factory()
@@ -284,16 +252,15 @@ async def test_text_in_a_registered_dialog_is_answered_once_by_its_on_text(
 
 # --- the startup log ----------------------------------------------------------
 
-async def test_the_resolved_chain_and_the_shim_are_logged_at_startup(caplog):
+async def test_the_resolved_chain_is_logged_at_startup(caplog):
+    """Both slots and their order, so a misplaced `at=` is visible in the
+    deploy log rather than only in what the bot answers."""
     with caplog.at_level(logging.INFO):
         _build()
 
     messages = [record.getMessage() for record in caplog.records]
-    # The shim is a chain entry like any other, and it says it is the shim.
-    assert f"chain at={LEGACY}: legacy.offer" in messages
     assert f"chain at={LOOKUP}: directory.name_search" in messages
-    assert any("legacy shim" in message and "kb.offer" in message
-               for message in messages)
+    assert f"chain at={AGENT}: kb.answer_question" in messages
 
 
 # --- a migrated feature needs no change here ----------------------------------
@@ -364,17 +331,12 @@ async def test_a_command_registered_after_the_mount_is_dispatched(probe):
     ("/probe\ntail", "tail"),
     ("/probe\n", ""),
 ])
-async def test_the_filter_and_the_dispatcher_read_a_command_the_same_way(
+async def test_a_command_is_read_the_same_way_however_it_was_written(
         probe, written, arg):
-    """Both sides call `pipeline.command_of`, and this is why they must.
-
-    The filter answering True is a promise that `_run_command` will find the
-    same name. Two readings that drifted apart would fail silently and only on
-    the awkward forms: the entry point takes the update off the legacy router
-    that owned it, finds nothing under its own name for it, and answers
-    "I don't know /probe." So the handler running *at all* here is the
-    assertion -- it means both readings agreed -- and `arg` is the second one.
-    """
+    """`pipeline.command_of` is the one reading, and these are the forms that
+    would break a second one: the bot's own name appended, whitespace that is
+    not a space, a trailing newline off a pasted wiki page. The handler running
+    *at all* is half the assertion, and `arg` is the other half."""
     dp = _build()
     probe.install(dp)
     bot = FakeBot()
@@ -387,8 +349,9 @@ async def test_the_filter_and_the_dispatcher_read_a_command_the_same_way(
 
 
 async def test_a_command_in_a_caption_reads_the_same_way_too(probe):
-    """The one form that is not text at all. `nl_fallback` never saw it; both
-    the filter and the pipeline read `message.caption` when `text` is None."""
+    """The one form that is not text at all: a photo posted with "/probe tail"
+    as its caption is as deliberate an address as typing it, so `command_of`
+    reads `message.caption` when `text` is None."""
     dp = _build()
     probe.install(dp)
     bot = FakeBot()
@@ -461,130 +424,17 @@ async def test_a_photo_is_still_answered_once_the_registry_owns_the_chain(probe)
     assert probe.seen == []
 
 
-async def test_an_unmatched_callback_is_left_to_the_legacy_routers(probe):
-    """A tap the registry does not know is declined while anything is legacy:
-    answering it here as well as in the router that owns the key would answer
-    one tap twice. `kb`'s keys are the last such, `directory`'s having all
-    become registered ones in task 10."""
+async def test_a_tap_no_registered_key_matches_is_answered_rather_than_left(
+        probe):
+    """Telegram spins the button until the callback is answered, and there is
+    nobody left to decline to: with no legacy router owning unknown keys, the
+    core answers a leftover keyboard itself."""
     dp = _build()
     probe.install(dp)
     bot = FakeBot()
 
-    await dp.feed_update(bot, _callback(bot, kb_handlers.START_CALLBACK))
+    await dp.feed_update(bot, _callback(bot, "gone:with:an:older:deploy"))
 
     assert probe.seen == []
-    # kb's own handler answered it -- with "not configured", since the suite
-    # runs with no agent runtime installed.
-    [alert] = [m for m in bot.sent if isinstance(m, AnswerCallbackQuery)]
-    assert "KB_LLM_API_KEY" in alert.text
-
-
-# --- what the filters will say once the migrations are done -------------------
-# The dispatcher-level tests above can only show the filters as today's four
-# legacy features leave them. These ask them what they will say in tasks 7, 8
-# and 10 -- which is the claim that `main.py` needs no edit then, and the one
-# claim a green suite today cannot make on its own.
-
-def _legacy(name: str, *command_names: str, intents=()) -> LoadedFeature:
-    return LoadedFeature(
-        name=name, module=object(), router=Router(name=name),
-        manifest=Manifest(name=name, commands=[
-            LegacyCommandSpec(command, "Whatever.") for command in command_names
-        ], intents=list(intents)),
-    )
-
-
-async def test_the_core_takes_cancel_once_no_legacy_feature_owns_one():
-    """`/cancel` is the core's; `directory` only borrows it until task 10.
-
-    Nothing may register `cancel` -- `validate()` refuses it -- so a filter that
-    just asked `registry.commands()` would decline `/cancel` for ever and the
-    fallback router would answer "I don't know /cancel." the day `directory`
-    hands it back.
-    """
-    registry = Registry()
-    still_borrowed = legacy.core_owns_message(registry, [_legacy("d", "cancel")])
-    handed_back = legacy.core_owns_message(registry, [_legacy("d", "me")])
-    bot = FakeBot()
-
-    assert await still_borrowed(_message(bot, "/cancel").message) is False
-    assert await handed_back(_message(bot, "/cancel").message) is True
-
-
-async def test_a_command_the_registry_learns_stops_being_the_routers():
-    """One filter over one registry, asked twice: the answer changes because
-    the registry did. That is the whole of "task 7 edits no main.py"."""
-    registry = Registry()
-    owned = legacy.core_owns_message(registry, [_legacy("help")])
-    bot = FakeBot()
-    message = _message(bot, "/help").message
-
-    assert await owned(message) is False
-
-    api = registry.api_for("help")
-    api.command("help", "What I can do.")(lambda m: None)
-
-    assert await owned(message) is True
-
-
-async def test_the_last_legacy_router_leaving_gives_the_core_every_tap():
-    """An unmatched tap is declined only because a legacy router may own the
-    key. With none left there is nobody to decline to, and
-    `buttons.handle_callback` answers it rather than leaving it spinning."""
-    registry = Registry()
-    bot = FakeBot()
-    tap = _callback(bot, "nothing:registered").callback_query
-
-    assert await legacy.core_owns_callback(registry, [_legacy("d")])(tap) is False
-    assert await legacy.core_owns_callback(registry, [])(tap) is True
-
-
-# --- the bridge: a legacy manifest, declared like a real feature --------------
-# `features/help` reads the registry and knows nothing about legacy, so `adopt`
-# republishes every manifest through a real `BotApi`. What that must not do is
-# take the update off the router that still owns the handler.
-
-def _adopted(*loaded: LoadedFeature) -> Registry:
-    registry = Registry()
-    shim = legacy.install(registry)
-    shim.adopt(list(loaded))
-    return registry
-
-
-async def test_a_bridged_command_is_declared_but_still_left_to_its_router():
-    loaded = [_legacy("directory", "me")]
-    registry = _adopted(*loaded)
-    bot = FakeBot()
-
-    # Declared, so /help lists it under directory's own heading...
-    assert registry.commands()["me"].feature == "directory"
-    # ...and declined, because the handler is on the router, not in the spec.
-    owned = legacy.core_owns_message(registry, loaded)
-    assert await owned(_message(bot, "/me").message) is False
-
-
-async def test_a_legacy_intent_is_bridged_as_a_note_not_a_second_chain_entry():
-    """A `bot.message` would be offered the text a second time, on top of the
-    shim that already routes it -- so an intent becomes a bare `💬` line."""
-    intent = Intent("d.search", r".+", handler=None, description="type a name")
-    registry = _adopted(_legacy("directory", intents=[intent]))
-
-    assert len(registry.chain()) == 1  # the shim's slot, and only it
-    notes = [note.text for reg in registry.features() for note in reg.notes]
-    assert notes == ["💬 type a name"]
-
-
-async def test_the_bridge_refuses_a_name_a_migrated_feature_already_declared():
-    """The one thing the bridge validates for itself: `registry.validate()` ran
-    before these declarations existed, and re-running it would refuse a legacy
-    `/cancel` that `directory` legitimately still owns."""
-    registry = Registry()
-    api = registry.api_for("directory")
-    api.command("me", "Show your profile.")(lambda message: None)
-    shim = legacy.install(registry)
-
-    with pytest.raises(ContractError) as raised:
-        shim.adopt([_legacy("relic", "me")])
-
-    assert "/me" in str(raised.value)
-    assert "directory" in str(raised.value) and "relic" in str(raised.value)
+    [answered] = [m for m in bot.sent if isinstance(m, AnswerCallbackQuery)]
+    assert answered.text is None, "answered, and with nothing to say"

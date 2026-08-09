@@ -1,21 +1,22 @@
-"""/ask, the session that keeps free text flowing to the agent, and /kb_reload.
+"""The Telegram face of the knowledge base: one chain slot, /ask and /kb_reload.
 
-A feature that waits for free text must own an FSM state: the Dispatcher's own
-nl_fallback runs before every sub-router and only steps aside while the sender
-is in a state.
+There is no mode to be in and no button in between. The roster search runs
+first on every free-text message -- `directory` at `pipeline.LOOKUP` -- and
+this feature sits behind it at `pipeline.AGENT`, so a name shows a person and
+everything else becomes a question, whether or not a conversation is already
+going. The one case code cannot separate is a name the roster does not carry,
+which looks exactly like a one-word question; that one is the agent's to
+decline, through `looks_like_a_person_name`, and the reader gets the same
+"No one found." the search itself would have given.
 
-Leaving that state is the one thing a reader has to be able to find, so there is
-always exactly one pair of exit buttons in the chat -- rating the last answer
-doubles as leaving -- and it is always under the newest thing the bot said. It
-is not redrawn on every message -- that would pepper the chat with buttons --
-but moved: after each exchange it is attached to the last message sent and
-stripped from wherever it was before. `button_at` in the FSM data remembers
-where that is.
+`/ask` is the way past all of that: it drops the conversation and bypasses both
+the search and the name check, which makes it the only way to ask the agent
+*about* a person by name.
 
-Note what is *not* here: /cancel. `directory.edit` already registers it and
-`directory` precedes `kb` in the loader's alphabetical walk, so that name is
-taken. A session ends with a rating, with a fresh /ask, or on the last allowed
-answer.
+Both refusals on the chain -- an unconfigured runtime, an exhausted hourly
+budget -- decline rather than explain. Someone who mistyped a surname is not
+helped by "the knowledge base is busy"; they get "No one found." and the admins
+get the ping. `/ask` is explicit, so it gets the honest reason.
 """
 from __future__ import annotations
 
@@ -23,11 +24,8 @@ import logging
 import time
 from collections import deque
 
-from aiogram import Bot, F, Router
+from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
-from aiogram.filters import CommandObject
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -36,10 +34,10 @@ from aiogram.types import (
 )
 
 from jbcub_bot.core import oplog as oplog_mod
-from jbcub_bot.core.commands import CommandRegistrar
 from jbcub_bot.core.config import get_settings
-from jbcub_bot.core.intents import Intent
 from jbcub_bot.core.models import Role, User
+from jbcub_bot.core.pipeline import NOTHING_MATCHED
+from jbcub_bot.features.kb import history
 from jbcub_bot.features.kb import pdf as pdf_mod
 from jbcub_bot.features.kb import render as render_mod
 from jbcub_bot.features.kb.agent import (
@@ -48,31 +46,20 @@ from jbcub_bot.features.kb.agent import (
     build_runtime,
 )
 
-router = Router(name="kb")
-cmd = CommandRegistrar(router)
+FEATURE = "kb"
 
-MAX_QUESTIONS = 12
-IDLE_SECONDS = 900
-
-START_CALLBACK = "kb:start"
-EXIT_GOOD_CALLBACK = "kb:exit:good"
-EXIT_BAD_CALLBACK = "kb:exit:bad"
-EXIT_THINKING_CALLBACK = "kb:exit:thinking"
-GOOD_TEXT = "✅ Good answer, exit"
-BAD_TEXT = "❌ Bad answer, exit"
-THINKING_EXIT_TEXT = "🚪 Exit AI chat"
+# One key with the verdict as its payload, so `core/buttons.py` splits it.
+RATE_CALLBACK = "kb:rate"
+GOOD_TEXT = "👍"
+BAD_TEXT = "👎"
 
 _NOT_CONFIGURED = ("Knowledge base search is not configured on this bot. "
                    "An admin needs to set KB_LLM_API_KEY.")
-_OPENED = ("Ask me anything about the program and I'll answer from the "
-           "knowledge base. Rate an answer when you're done to end the "
-           "session.")
-_CLOSED = "Knowledge base session closed."
-_EXHAUSTED = ("That was the last question in this session — send /ask to start "
-              "a fresh one.")
-_IDLE = "That knowledge base session went idle. Send /ask to start a new one."
-_OFFER = "I didn't find anyone by that name. Ask AI instead?"
-_THINKING = "AI is thinking…"
+# Neutral on purpose: it is edited into the answer or into "No one found.", and
+# somebody who typed a surname should not be told an AI is thinking about it.
+_LOOKING = "🔎 Looking…"
+_ASK_ALONE = ("Ask me anything about the program — just type it, or put the "
+              "question right after /ask.")
 _RATE_LIMITED = ("The knowledge base is getting a lot of questions right now — "
                  "try again in a few minutes.")
 
@@ -90,7 +77,7 @@ async def _answer_html(message: Message, text: str):
 
     Telegram rejects a whole message over one bad tag. Losing the answer to a
     stray `</b>` would be far worse than losing the bold. Returns whichever
-    message landed, so the caller can hang the Exit button off it.
+    message landed, so the caller can hang the rating buttons off it.
     """
     try:
         return await message.answer(text, parse_mode="HTML")
@@ -99,30 +86,29 @@ async def _answer_html(message: Message, text: str):
         return await message.answer(render_mod.plain(text))
 
 
-async def _reveal_answer(bot: Bot, target: Message, thinking: Message,
-                         text: str):
-    """Turn the "AI is thinking" placeholder into the answer, in place.
+async def _reveal(bot: Bot, target: Message, placeholder: Message, text: str):
+    """Turn "🔎 Looking…" into whatever came back, in place.
 
-    Editing it rather than sending a second message keeps the "thinking" line
-    from lingering in the chat once there is something to read. Bad markup
-    gets the same plain-text retry `_answer_html` uses; if the edit itself
-    fails -- the placeholder was deleted, say -- a fresh message still gets
-    the answer through.
+    Editing it rather than sending a second message keeps the placeholder from
+    lingering in the chat once there is something to read. Bad markup gets the
+    same plain-text retry `_answer_html` uses; if the edit itself fails -- the
+    placeholder was deleted, say -- a fresh message still gets the answer
+    through.
     """
-    chat_id, message_id = target.chat.id, thinking.message_id
+    chat_id, message_id = target.chat.id, placeholder.message_id
     try:
         return await bot.edit_message_text(chat_id=chat_id, message_id=message_id,
                                            text=text, parse_mode="HTML")
     except TelegramBadRequest:
         logger.warning("Telegram rejected an HTML edit; retrying as plain")
     except TelegramAPIError:
-        logger.warning("could not edit the thinking placeholder", exc_info=True)
+        logger.warning("could not edit the Looking placeholder", exc_info=True)
         return await _answer_html(target, text)
     try:
         return await bot.edit_message_text(chat_id=chat_id, message_id=message_id,
                                            text=render_mod.plain(text))
     except TelegramAPIError:
-        logger.warning("could not edit the thinking placeholder as plain text",
+        logger.warning("could not edit the Looking placeholder as plain text",
                        exc_info=True)
         return await _answer_html(target, text)
 
@@ -148,7 +134,7 @@ async def _send_trace(target: Message, principal, stats, complaints=()):
 async def _attach_sources(bot, message: Message, live, snapshot,
                           sources, already: list[str]) -> tuple[list[str],
                                                                 object]:
-    """Give the reader each source the agent named, once per session.
+    """Give the reader each source the agent named, once per conversation.
 
     A PDF is uploaded; a web page is linked, because its frontmatter carries the
     address and a 100 KB scrape of the page would be no use to anybody. The
@@ -206,33 +192,33 @@ def reset_runtime() -> None:
     _runtime, _built = None, False
 
 
-# The question that earned the offer button, kept until the tap. Without it the
-# button opens an empty session and the person has to type the question again,
-# which is the whole reason they were offered a button.
-#
-# Keyed by chat, so a second unanswered question replaces the first: the tap is
-# always about the most recent thing they said. Process-wide like the runtime,
-# and cleared wholesale if it ever grows -- a convenience, not a record.
-_PENDING: dict[int, str] = {}
-_PENDING_MAX = 500
+# What `register` hands over, and the only thing this feature knows about the
+# rest of the bot. Asked one question -- what took the last message in this
+# chat -- which is how a conversation learns a profile was shown in between two
+# of its questions without `kb` knowing that `directory` exists.
+_registry = None
 
 
-def remember_question(chat_id: int, text: str) -> None:
-    if len(_PENDING) >= _PENDING_MAX:
-        _PENDING.clear()
-    _PENDING[chat_id] = text
+def set_registry(value) -> None:
+    global _registry
+    _registry = value
 
 
-def take_question(chat_id: int) -> str:
-    return _PENDING.pop(chat_id, "")
+def _subject_changed(chat_id: int) -> bool:
+    """Whether something other than this feature answered the last message.
 
-
-def reset_pending() -> None:
-    _PENDING.clear()
+    A command or a dialog taking it reads as no taker at all, and that is
+    deliberate: `/ask` is a command, and it has already dropped the
+    conversation on its own terms by the time anything reads this.
+    """
+    if _registry is None:
+        return False
+    taker = _registry.last_taker(chat_id)
+    return taker is not None and taker.feature != FEATURE
 
 
 # When each of the last window's questions went to the agent. Process-wide
-# like `_PENDING` above, and for the same reason: there is one bot, so one
+# like the runtime above, and for the same reason: there is one bot, so one
 # clock is enough. A deque rather than a count that resets on the hour, so the
 # window always looks back from now instead of resetting on a schedule nobody
 # chose. `limit`/`window_seconds` come from the runtime -- see
@@ -273,27 +259,29 @@ def describe_asker(principal) -> str:
     return " · ".join(bits)
 
 
-class KbChat(StatesGroup):
-    active = State()
+# --- the rating pair ----------------------------------------------------------
+# It rates the last answer and does nothing else -- there is no session for it
+# to close any more. Still one pair in the chat, walking forward under the
+# newest thing the bot said, because an inline button scrolls away with its
+# message and drawing a fresh pair every time would fill the chat with them.
+
+# Where that pair is sitting, per chat. Outside the conversation on purpose:
+# dropping a conversation must not leave a second live pair behind, and the
+# rating is about the answer on the screen rather than about the thread.
+_RATING_AT: dict[int, int] = {}
+_RATING_MAX = 500
 
 
-def _session_keyboard() -> InlineKeyboardMarkup:
+def reset_ratings() -> None:
+    _RATING_AT.clear()
+
+
+def _rating_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=GOOD_TEXT, callback_data=EXIT_GOOD_CALLBACK),
-        InlineKeyboardButton(text=BAD_TEXT, callback_data=EXIT_BAD_CALLBACK),
-    ]])
-
-
-def _offer_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Ask AI", callback_data=START_CALLBACK)
-    ]])
-
-
-def _thinking_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=THINKING_EXIT_TEXT,
-                             callback_data=EXIT_THINKING_CALLBACK)
+        InlineKeyboardButton(text=GOOD_TEXT,
+                             callback_data=f"{RATE_CALLBACK}:good"),
+        InlineKeyboardButton(text=BAD_TEXT,
+                             callback_data=f"{RATE_CALLBACK}:bad"),
     ]])
 
 
@@ -310,176 +298,27 @@ async def _set_markup(bot, chat_id: int, message_id: int, markup) -> bool:
                                             message_id=message_id,
                                             reply_markup=markup)
     except TelegramAPIError:
-        logger.debug("could not move the knowledge base Exit button",
+        logger.debug("could not move the knowledge base rating buttons",
                      exc_info=True)
         return False
     return True
 
 
-async def _park_exit_button(bot, chat_id: int, state: FSMContext,
-                            message) -> None:
-    """Move the one Exit button so that it sits under `message`.
-
-    An inline button scrolls away with the message that carries it, and drawing
-    a fresh one on every message would fill the chat with them. So there is
-    exactly one, and it walks forward: attached to the last thing the bot said,
-    stripped from wherever it was before.
-    """
+async def _park_rating(bot, chat_id: int, message) -> None:
+    """Move the one rating pair so that it sits under `message`."""
     new_id = getattr(message, "message_id", 0) or 0
-    data = await state.get_data()
-    previous = data.get("button_at") or 0
+    previous = _RATING_AT.get(chat_id, 0)
     if not new_id or new_id == previous:
         return
-    if not await _set_markup(bot, chat_id, new_id, _session_keyboard()):
-        return  # the old button is still live; better there than nowhere
+    if not await _set_markup(bot, chat_id, new_id, _rating_keyboard()):
+        return  # the old pair is still live; better there than nowhere
     if previous:
         await _set_markup(bot, chat_id, previous, None)
-    await state.update_data(button_at=new_id)
-
-
-async def _clear_exit_button(bot, chat_id: int, data: dict) -> None:
-    """Take the button down for good: the session it belonged to is over."""
-    previous = data.get("button_at") or 0
-    if bot is not None and previous:
-        await _set_markup(bot, chat_id, previous, None)
-
-
-async def _open(state: FSMContext, bot, chat_id: int) -> None:
-    """Start a session, first taking down any button the last one left."""
-    await _clear_exit_button(bot, chat_id, await state.get_data())
-    await state.set_state(KbChat.active)
-    await state.set_data({"asked": 0, "last_at": now(), "history": [],
-                          "sent_pdfs": [], "button_at": 0})
-
-
-async def _greet(target: Message, state: FSMContext) -> None:
-    """The opening line, carrying the session's first Exit button."""
-    opened = await target.answer(_OPENED, reply_markup=_session_keyboard())
-    await state.update_data(button_at=getattr(opened, "message_id", 0) or 0)
-
-
-async def _close(state: FSMContext, bot: Bot | None, chat_id: int,
-                 data: dict) -> None:
-    """End the session and take its button down.
-
-    Nothing is reported: the ops log now carries every question as it is asked,
-    which says everything a closing tally used to and says it while the team is
-    still typing.
-    """
-    await _clear_exit_button(bot, chat_id, data)
-    await state.clear()
-
-
-async def _log_question(bot, live, principal, tg_user, question,
-                        result) -> None:
-    """Put the question, and what it cost, in the ops chat.
-
-    Sent after the answer, for the same reason the admin trace is: whoever
-    asked is waiting on the answer, and a report is never worth delaying it.
-    `OpsLog` swallows its own delivery failures, so there is nothing to guard.
-    """
-    head = oplog_mod.format_kb_question(question, principal, tg_user)
-    room = render_mod.CLIP_LIMIT - len(head) - 1
-    trace = render_mod.trace_message(result.stats, result.complaints,
-                                     limit=room)
-    log = oplog_mod.OpsLog(bot, live.log_chat_id, live.admin_ids)
-    await log.send(f"{head}\n{trace}")
-
-
-async def _log_rate_limit(bot, live, principal, tg_user) -> None:
-    """Ping the admins by name: the hourly AI budget just ran out.
-
-    Nobody is meant to hit this in normal use, so it gets the same treatment
-    as a crash -- a mention, not just another line in the question feed --
-    because someone should go find out why rather than let it pass.
-    """
-    ping, entities = oplog_mod.admin_mention(live.admin_ids)
-    prefix = f"{ping}\n" if ping else ""
-    text = prefix + oplog_mod.format_kb_rate_limited(live.rate_limit, principal,
-                                                      tg_user)
-    log = oplog_mod.OpsLog(bot, live.log_chat_id, live.admin_ids)
-    await log.send(text, entities=entities)
-
-
-@cmd.command("ask", "Ask the knowledge base a question.", usage="[question]")
-async def cmd_ask(message: Message, principal: User, session, bot: Bot,
-                  command: CommandObject, state: FSMContext):
-    if runtime() is None:
-        await message.answer(_NOT_CONFIGURED)
-        return
-    question = (command.args or "").strip()
-    await _open(state, bot, message.chat.id)
-    if question:
-        await _answer_question(message, principal, state, bot, question,
-                               message.from_user)
-    else:
-        await _greet(message, state)
-
-
-@cmd.command("kb_reload", "Re-download the knowledge base now.",
-             min_role=Role.ADMIN)
-async def cmd_kb_reload(message: Message, principal: User, session):
-    live = runtime()
-    if live is None:
-        await message.answer(_NOT_CONFIGURED)
-        return
-    snapshot = await live.store.get(force=True)
-    await message.answer(
-        f"Knowledge base reloaded: {len(snapshot.notes)} notes at "
-        f"{snapshot.sha[:7]}."
-    )
-
-
-async def kb_offer(message: Message, principal, session) -> bool:
-    """Offer a knowledge base search for staff text nothing else took.
-
-    Registered after the directory feature, so the name search keeps its right
-    of first refusal. Answers with a line and a button; tokens are spent only
-    after the tap.
-    """
-    if runtime() is None:
-        return False
-    remember_question(message.chat.id, (message.text or "").strip())
-    await message.answer(_OFFER, reply_markup=_offer_keyboard())
-    return True
-
-
-kb_offer_intent = Intent(
-    name="kb.offer",
-    pattern=r".+",
-    handler=kb_offer,
-    description="ask the knowledge base a question",
-)
-
-
-@router.callback_query(F.data == START_CALLBACK)
-async def cb_start(cb: CallbackQuery, principal: User, session,
-                   state: FSMContext, bot: Bot):
-    if principal is None:
-        await cb.answer("You are not linked yet. Contact an admin.",
-                        show_alert=True)
-        return
-    if runtime() is None:
-        await cb.answer(_NOT_CONFIGURED, show_alert=True)
-        return
-    if not isinstance(cb.message, Message):
-        await _open(state, bot, cb.from_user.id)
-        await cb.answer()
-        return
-    # Tapped once, its job is done -- leaving it up invites a second, empty tap.
-    await _set_markup(bot, cb.message.chat.id, cb.message.message_id, None)
-    await _open(state, bot, cb.message.chat.id)
-    pending = take_question(cb.message.chat.id)
-    if not pending:
-        # A question is already on its way to the agent -- greeting the person
-        # again would just repeat what the offer already told them.
-        await _greet(cb.message, state)
-    # Answered before the agent runs: the button would otherwise spin for the
-    # whole search.
-    await cb.answer()
-    if pending:
-        await _answer_question(cb.message, principal, state, bot, pending,
-                               cb.from_user)
+    if len(_RATING_AT) >= _RATING_MAX:
+        # A convenience, not a record: whichever chats lose their position get
+        # a fresh pair under their next answer rather than a moved one.
+        _RATING_AT.clear()
+    _RATING_AT[chat_id] = new_id
 
 
 async def _log_feedback(bot, good: bool, principal, tg_user) -> None:
@@ -496,103 +335,168 @@ async def _log_feedback(bot, good: bool, principal, tg_user) -> None:
     await log.send(oplog_mod.format_kb_feedback(good, principal, tg_user))
 
 
-_RATING = {EXIT_GOOD_CALLBACK: True, EXIT_BAD_CALLBACK: False}
+async def cb_rate(cb: CallbackQuery, principal: User, bot: Bot, arg: str):
+    """A tap on ✅ or ❌. Logs it, takes the pair down, and nothing else.
 
-
-@router.callback_query(F.data.in_({EXIT_GOOD_CALLBACK, EXIT_BAD_CALLBACK,
-                                   EXIT_THINKING_CALLBACK}))
-async def cb_exit(cb: CallbackQuery, principal: User, session,
-                  state: FSMContext, bot: Bot):
-    # None while the agent hasn't answered yet -- "Exit AI chat" leaves without
-    # rating anything, because there is nothing yet to rate.
-    rating = _RATING.get(cb.data)
-    data = await state.get_data()
-    if not isinstance(cb.message, Message):
-        await _close(state, bot, cb.from_user.id, data)
-        if rating is not None:
-            await _log_feedback(bot, rating, principal, cb.from_user)
-        await cb.answer()
-        return
-    # The tapped button is the one the session was tracking, so taking the
-    # markup off that very message is what `_close` is about to do anyway.
-    await _close(state, bot, cb.message.chat.id, data)
-    await cb.message.answer(_CLOSED)
-    if rating is not None:
-        await _log_feedback(bot, rating, principal, cb.from_user)
-    await cb.answer()
-
-
-async def _answer_question(target: Message, principal: User, state: FSMContext,
-                           bot: Bot, question: str, tg_user) -> None:
-    """Put one question to the agent and send back what it says.
-
-    `target` is whatever message the reply hangs off -- the person's own message
-    in a session, or the bot's offer message when the button was tapped -- so
-    this serves both entry points without either duplicating the other.
+    The conversation is untouched: rating the answer on the screen is not a way
+    of saying the subject has changed.
     """
-    data = await state.get_data()
+    good = arg == "good"
+    if isinstance(cb.message, Message):
+        await _set_markup(bot, cb.message.chat.id, cb.message.message_id, None)
+        _RATING_AT.pop(cb.message.chat.id, None)
+    await _log_feedback(bot, good, principal, cb.from_user)
+    await cb.answer("Thanks.")
+
+
+# --- what the ops chat is told -------------------------------------------------
+
+async def _log_question(bot, live, principal, tg_user, question,
+                        result) -> None:
+    """Put the question, and what it cost, in the ops chat.
+
+    Sent after the answer, for the same reason the admin trace is: whoever
+    asked is waiting on the answer, and a report is never worth delaying it.
+    `OpsLog` swallows its own delivery failures, so there is nothing to guard.
+    """
+    head = oplog_mod.format_kb_question(question, principal, tg_user)
+    await _send_with_trace(bot, live, head, result)
+
+
+async def _log_miss(bot, live, principal, tg_user, impersonator, question,
+                    result) -> None:
+    """The name verdict, in the same feed the core's last word writes to.
+
+    The reader saw "No one found.", which is exactly what text nothing matched
+    has always produced, so the entry reads the same -- what is added is the
+    run's cost, because a miss that spent a model turn is the one worth
+    counting.
+    """
+    head = oplog_mod.format_miss(query=question, answer=NOTHING_MATCHED,
+                                 principal=principal, tg_user=tg_user,
+                                 impersonator=impersonator)
+    await _send_with_trace(bot, live, head, result)
+
+
+async def _send_with_trace(bot, live, head: str, result) -> None:
+    room = render_mod.CLIP_LIMIT - len(head) - 1
+    trace = render_mod.trace_message(result.stats, result.complaints,
+                                     limit=room)
+    log = oplog_mod.OpsLog(bot, live.log_chat_id, live.admin_ids)
+    await log.send(f"{head}\n{trace}")
+
+
+async def _log_rate_limit(bot, live, principal, tg_user) -> None:
+    """Ping the admins by name: the hourly AI budget just ran out.
+
+    Nobody is meant to hit this in normal use, so it gets the same treatment
+    as a crash -- a mention, not just another line in the question feed --
+    because someone should go find out why rather than let it pass. It matters
+    more now than it did: on the chain the reader is told nothing at all, so
+    this entry is the only place an exhausted budget shows up.
+    """
+    ping, entities = oplog_mod.admin_mention(live.admin_ids)
+    prefix = f"{ping}\n" if ping else ""
+    text = prefix + oplog_mod.format_kb_rate_limited(live.rate_limit, principal,
+                                                     tg_user)
+    log = oplog_mod.OpsLog(bot, live.log_chat_id, live.admin_ids)
+    await log.send(text, entities=entities)
+
+
+# --- the two ways in -----------------------------------------------------------
+
+async def answer_question(message: Message, principal: User, bot: Bot,
+                          impersonator) -> bool:
+    """The chain slot at `AGENT`: whatever the roster search declined.
+
+    `False` back means nothing here answered and the core's last word gets to,
+    which is what both refusals want: "No one found." is the right thing to
+    tell somebody who mistyped a surname, and explaining the knowledge base to
+    them would answer a question they never asked.
+    """
     live = runtime()
-    if live is None:  # redeployed without the settings while a session was open
-        await _close(state, bot, target.chat.id, data)
-        await target.answer(_NOT_CONFIGURED)
+    if live is None:
+        return False
+    chat_id = message.chat.id
+    if _subject_changed(chat_id):
+        history.drop(chat_id)
+    if _budget_spent(live.rate_limit, live.rate_window_seconds):
+        await _log_rate_limit(bot, live, principal, message.from_user)
+        return False
+    await _put(message, principal, bot, live, message.text, message.from_user,
+               impersonator, check_names=True)
+    return True
+
+
+async def cmd_ask(message: Message, principal: User, bot: Bot, arg: str,
+                  impersonator):
+    """Start clean. The conversation goes, and so does the name check.
+
+    Bypassing the check is what makes this the only way to ask the agent about
+    a person by name: on the chain, "Dr Weber" would be declined as a name the
+    roster does not carry.
+    """
+    live = runtime()
+    if live is None:
+        await message.answer(_NOT_CONFIGURED)
+        return
+    history.drop(message.chat.id)
+    question = arg.strip()
+    if not question:
+        await message.answer(_ASK_ALONE)
         return
     if _budget_spent(live.rate_limit, live.rate_window_seconds):
-        # Closed rather than left open: nothing here draws a fresh Exit
-        # button, and leaving the session active would strand the asker in it
-        # with no way out until the budget frees up.
-        await _close(state, bot, target.chat.id, data)
-        await target.answer(_RATE_LIMITED)
-        await _log_rate_limit(bot, live, principal, tg_user)
+        # Told outright rather than declined: this caller asked the knowledge
+        # base a question in so many words, so the honest reason is the useful
+        # answer.
+        await message.answer(_RATE_LIMITED)
+        await _log_rate_limit(bot, live, principal, message.from_user)
+        return
+    await _put(message, principal, bot, live, question, message.from_user,
+               impersonator, check_names=False)
+
+
+async def cmd_kb_reload(message: Message, principal: User):
+    live = runtime()
+    if live is None:
+        await message.answer(_NOT_CONFIGURED)
+        return
+    snapshot = await live.store.get(force=True)
+    await message.answer(
+        f"Knowledge base reloaded: {len(snapshot.notes)} notes at "
+        f"{snapshot.sha[:7]}."
+    )
+
+
+async def _put(target: Message, principal: User, bot: Bot, live, question: str,
+               tg_user, impersonator, *, check_names: bool) -> None:
+    """One question to the agent, and whatever it says back."""
+    chat_id = target.chat.id
+    chat = history.conversation(chat_id)
+    looking = await target.answer(_LOOKING)
+    snapshot = await live.store.get()
+    result = await ask(live.agent, snapshot, question, history.as_input(chat),
+                       about=describe_asker(principal),
+                       check_names=check_names)
+
+    if result.person_name:
+        # Not an answer, so nothing here attaches, traces or remembers: the
+        # reader asked about a person and the roster does not have them.
+        await _reveal(bot, target, looking, NOTHING_MATCHED)
+        history.drop(chat_id)
+        await _log_miss(bot, live, principal, tg_user, impersonator, question,
+                        result)
         return
 
-    thinking = await target.answer(_THINKING, reply_markup=_thinking_keyboard())
-    snapshot = await live.store.get()
-    result = await ask(live.agent, snapshot, question, data.get("history", []),
-                       about=describe_asker(principal))
-    asked = data.get("asked", 0) + 1
     # The agent's own words, clipped only if it wrote past what Telegram takes.
-    # Each of these may or may not be the last word of the exchange; the Exit
-    # button goes under whichever one actually was.
-    last = await _reveal_answer(bot, target, thinking, render_mod.clip(result.text))
-    # "Exit AI chat" was only ever meant for the wait -- an attachment or the
-    # admin trace may yet become the message the rating buttons land on below,
-    # so this message must not be left carrying a button of its own.
-    await _set_markup(bot, target.chat.id, thinking.message_id, None)
-    sent_pdfs, attached = await _attach_sources(bot, target, live, snapshot,
-                                                result.sources,
-                                                data.get("sent_pdfs", []))
+    # Each of these may or may not be the last word of the exchange; the rating
+    # pair goes under whichever one actually was.
+    last = await _reveal(bot, target, looking, render_mod.clip(result.text))
+    chat.sent_sources, attached = await _attach_sources(
+        bot, target, live, snapshot, result.sources, chat.sent_sources)
     last = attached or last
     last = await _send_trace(target, principal, result.stats,
                              result.complaints) or last
     await _log_question(bot, live, principal, tg_user, question, result)
-    history = result.history
-
-    if asked >= MAX_QUESTIONS:
-        # No button to move: the session ends here, so the one it had goes.
-        await _close(state, bot, target.chat.id, data)
-        await target.answer(_EXHAUSTED)
-        return
-    await state.update_data(asked=asked, last_at=now(), history=history,
-                            sent_pdfs=sent_pdfs)
-    await _park_exit_button(bot, target.chat.id, state, last)
-
-
-@router.message(KbChat.active, F.text & ~F.text.startswith("/"))
-async def on_question(message: Message, principal: User, session,
-                      state: FSMContext, bot: Bot):
-    """One question in an open session.
-
-    Commands are excluded rather than intercepted, so /ask and every other
-    command still work while a session is open.
-    """
-    data = await state.get_data()
-    if runtime() is None:
-        await _close(state, bot, message.chat.id, data)
-        await message.answer(_NOT_CONFIGURED)
-        return
-    if now() - data.get("last_at", 0.0) > IDLE_SECONDS:
-        await _close(state, bot, message.chat.id, data)
-        await message.answer(_IDLE)
-        return
-    await _answer_question(message, principal, state, bot, message.text,
-                           message.from_user)
+    history.remember(chat_id, result.question, result.text)
+    await _park_rating(bot, chat_id, last)

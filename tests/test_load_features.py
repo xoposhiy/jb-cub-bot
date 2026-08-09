@@ -22,35 +22,21 @@ def _logged(caplog) -> list[str]:
             if record.name == LOADER]
 
 
-# --- the two shapes -----------------------------------------------------------
+# --- what a loaded feature is --------------------------------------------------
 
-def test_a_migrated_feature_registers_through_its_own_api():
+def test_a_feature_registers_through_its_own_api():
     registry = Registry()
     loaded = load_features(mixed_pkg, registry)
     alpha = next(feature for feature in loaded if feature.name == "alpha")
-    assert alpha.legacy is False
-    assert (alpha.router, alpha.manifest) == (None, None)
     assert alpha.module is mixed_pkg.alpha
     # Declared under the package name, with nothing for the feature to repeat.
     assert registry.commands()["alpha"].feature == "alpha"
     assert registry.features()[0].description.title == "Alpha"
 
 
-def test_a_legacy_feature_is_recorded_and_never_registers():
-    registry = Registry()
-    loaded = load_features(mixed_pkg, registry)
-    relic = next(feature for feature in loaded if feature.name == "relic")
-    assert relic.legacy is True
-    assert relic.router is mixed_pkg.relic.router
-    assert relic.manifest.name == "relic"
-    # No slot in the registry at all: `register` was never called for it, which
-    # is also why a legacy feature's missing describe() is not an error.
-    assert [feature.name for feature in registry.features()] == ["alpha", "zulu"]
-
-
 def test_discovery_order_is_alphabetical():
     loaded = load_features(mixed_pkg, Registry())
-    assert [feature.name for feature in loaded] == ["alpha", "relic", "zulu"]
+    assert [feature.name for feature in loaded] == ["alpha", "zulu"]
 
 
 # --- the startup log ----------------------------------------------------------
@@ -68,7 +54,7 @@ def test_the_resolved_chain_is_logged_in_at_order(caplog):
 
 # --- what crashes the boot ----------------------------------------------------
 
-def test_a_package_of_neither_shape_crashes_and_names_itself():
+def test_a_package_with_no_register_crashes_and_names_itself():
     with pytest.raises(ContractError) as raised:
         load_features(no_shape_pkg, Registry())
     message = str(raised.value)

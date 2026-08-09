@@ -1,8 +1,11 @@
-"""The agent: four tools, a map of the base, and a hard turn budget.
+"""The agent: tools, a map of the base, and a hard turn budget.
 
 The framework owns the tool cycle and the schemas it derives from these
 functions' signatures, so this module holds the tools, the prompts and the two
 follow-up questions — nothing else.
+
+The agent is given a way to decline the response if it looks like a person's name rather than a question 
+`looks_like_a_person_name` — and calling it ends the run.
 
 What the agent writes is what the reader gets. There is no rendering step and
 nothing here edits its prose: the prompt says how to cite and `validate` says
@@ -16,19 +19,7 @@ resolved from frontmatter by the code. Both are separate turns on purpose: this
 agent, asked to answer and to manage its own attachments at the same time, did
 the first and skipped the second three times out of four.
 
-Separate turns, but the same agent, the same system prompt and the same tool
-list throughout. Providers cache on an exact prefix match, so sameness is what
-makes the extra turns nearly free; a leaner prompt for the last one would save
-a couple of thousand tokens and forfeit the discount on the whole history.
-
-Two of the framework's defaults are deliberately not used. The model is pinned
-to the Responses class over our own client rather than left to the framework's
-own default plumbing. Chat completions would be the more portable choice --
-it is the surface every OpenAI-compatible gateway has -- but our endpoint
-refuses function tools there unless reasoning is switched off entirely, and this
-agent is nothing but function tools. Reasoning is worth more than the
-portability. And tracing is switched off: otherwise every run is exported to
-OpenAI, which is both a leak and an error when the key belongs to a proxy.
+New Models work better with Responses API.
 """
 from __future__ import annotations
 
@@ -45,6 +36,7 @@ from agents import (
     Runner,
     ToolCallItem,
     ToolCallOutputItem,
+    ToolsToFinalOutputResult,
     function_tool,
     set_tracing_disabled,
 )
@@ -77,10 +69,24 @@ CUT_SHORT = ("I had to stop searching before I found a grounded answer — the "
 # rules that are about *this* caller rather than about the base.
 SYSTEM_RULES = """\
 You answer questions about the university programs from a knowledge base you \
-read through three tools: list_notes, search_notes and read_note. Two more are \
-not about the base: current_datetime, for when the answer turns on what day it \
-is, and choose_sources, which belongs to a question that comes after your \
-answer — leave that one alone until you are asked.
+read through three tools: list_notes, search_notes and read_note. Three more \
+are not about the base: current_datetime, for when the answer turns on what \
+day it is; looks_like_a_person_name, for the rare message that is somebody's \
+name rather than a question; and choose_sources, which belongs to a question \
+that comes after your answer — leave that one alone until you are asked.
+
+When the message is a name and not a question:
+- The same box the reader types a question into also finds people by name, and \
+a name nobody on the roster carries reaches you instead. Call \
+looks_like_a_person_name when the whole message is nothing but a person's \
+name. That ends your turn; you are not answering that one, and the reader is \
+told the roster has nobody by that name.
+- A question with a name inside it is a question, and so is a request about \
+somebody. Only a bare name qualifies.
+- A bare word naming a course, a document, a place or a programme is not a \
+person, however unfamiliar it looks. Search for it.
+- When you are unsure, answer. A wrong verdict costs the reader their answer, \
+where a needless search costs a few seconds.
 
 Finding things:
 - You are given the base's folders. Call list_notes on the one that looks \
@@ -90,11 +96,14 @@ whole base.
 - Not recognizing a name, an institution or a term is a reason to search for \
 it. Before you tell the reader the base does not \
 cover something, search_notes for the term itself across the whole base.
-- You are not told what day it is. When the question leaves the dates implied \
-— "this semester", "next year", "has the deadline passed" — call \
-current_datetime first. Then work out which term or academic year that falls \
-in from the calendar in the notes rather than assuming one, and say which one \
-you took it to mean.
+- Every question opens with a bracketed line saying when it was asked. That \
+line is the bot's, not part of what the reader wrote, and the stamp on the \
+question you are answering now is the current time — so do not spend a call \
+asking for a clock you are already holding. When the dates are left implied — \
+"this semester", "next year", "has the deadline passed" — work out which term \
+or academic year that falls in from the calendar in the notes rather than \
+assuming one, and say which one you took it to mean. current_datetime is for \
+the rest: an answer that turns on a date the stamp does not settle.
 
 Answering:
 - Answer only from notes you actually read in this conversation. Never answer \
@@ -157,7 +166,7 @@ The program documents say nothing about that.
 """
 
 
-@dataclass(frozen=True)
+@dataclass
 class Ask:
     """What one run is given: the base to read, and who is asking.
 
@@ -171,11 +180,21 @@ class Ask:
     goes to this same agent, so there is only ever one context to be in.
     `options` is empty until the question is put, which is what tells
     choose_sources that it has been called too early.
+
+    `check_names` is how /ask switches the name check off. Through the context
+    rather than through a second set of instructions, which is the same trick
+    the empty `options` above plays: the prompt is the prefix the provider
+    caches on, and two versions of it would be two prefixes to pay for.
+    `person_name` is where the verdict lands, and the reason this dataclass is
+    not frozen -- the two lists above are mutated in place, but a string cannot
+    be.
     """
     snapshot: Snapshot
     about: str = ""
     options: list[str] = field(default_factory=list)
     chosen: list[tools.SourceRef] = field(default_factory=list)
+    check_names: bool = True
+    person_name: str = ""
 
 
 @function_tool(strict_mode=False)
@@ -218,6 +237,47 @@ def current_datetime() -> str:
     passed. It says nothing about the knowledge base.
     """
     return tools.current_datetime(datetime.now(UTC))
+
+
+VERDICT_TAKEN = ("Understood — that is a name, not a question. Nothing further "
+                 "is needed from you; the reader is being told the roster has "
+                 "nobody by it.")
+VERDICT_REFUSED = ("That does not apply here: this message was put to you as a "
+                   "question, whatever it looks like. Answer it from the base.")
+
+
+@function_tool(strict_mode=False)
+def looks_like_a_person_name(ctx: RunContextWrapper[Ask], name: str) -> str:
+    """Say this message is somebody's name rather than a question. Ends the run.
+
+    Only for a message that is nothing but a person's name. A question with a
+    name inside it is a question, and a bare word naming a course, a document,
+    a place or a programme is not a person. When unsure, answer instead.
+
+    Args:
+        name: the name, as the message wrote it.
+    """
+    if not ctx.context.check_names:
+        return VERDICT_REFUSED
+    # A verdict with no name in it is still a verdict: the caller answers "no
+    # one found" either way, and only the ops log ever reads this string.
+    ctx.context.person_name = name.strip() or "(unnamed)"
+    return VERDICT_TAKEN
+
+
+async def _stop_on_a_name(ctx: RunContextWrapper[Ask],
+                          results) -> ToolsToFinalOutputResult:
+    """End the run the moment the agent declines, and never otherwise.
+
+    A verdict is not an answer, so there is nothing left to write: letting the
+    loop go round once more would buy a closing sentence nobody reads. It has
+    to be this rather than the framework's `StopAtTools`, which stops on the
+    call and cannot see that /ask turned the check off — the refusal above has
+    to leave the run going.
+    """
+    if ctx.context.person_name:
+        return ToolsToFinalOutputResult(is_final_output=True, final_output="")
+    return ToolsToFinalOutputResult(is_final_output=False)
 
 
 @function_tool(strict_mode=False)
@@ -315,10 +375,11 @@ def build_agent(model_name: str, client, model=None,
         name="kb-search",
         instructions=instructions,
         tools=[list_notes, search_notes, read_note, current_datetime,
-               choose_sources],
+               looks_like_a_person_name, choose_sources],
         model=model or OpenAIResponsesModel(model=model_name,
                                             openai_client=client),
         model_settings=_model_settings(reasoning_effort),
+        tool_use_behavior=_stop_on_a_name,
     )
 
 
@@ -395,12 +456,32 @@ class Answer:
     them: the checks in `validate` describe problems back to the agent and it
     decides, which is why the second pass can legitimately hand back the same
     answer again.
+
+    `question` is the stamped text that actually went to the model, which is
+    what the conversation has to keep -- an old question's stamp is the time it
+    was asked, not the time it is read back.
+
+    `person_name` is non-empty when the agent declined instead of answering.
+    Then `text` is empty and there is nothing else here to use: the caller says
+    "No one found." and drops the conversation.
     """
     text: str
-    history: list
+    question: str
     stats: AskStats
     sources: tuple[tools.SourceRef, ...] = ()
     complaints: tuple[str, ...] = ()  # what the check said, for the admin trace
+    person_name: str = ""
+
+
+def stamp(question: str, now: datetime | None = None) -> str:
+    """The question as the model sees it: when it was asked, then what was said.
+
+    `tools.current_datetime` formats it, so the stamp and the clock tool read
+    identically and the agent has one format to understand rather than two. The
+    bracket is what the prompt tells it to discount as the bot's own line.
+    """
+    when = tools.current_datetime(now or datetime.now(UTC))
+    return f"[Asked {when}]\n{question}"
 
 
 def notes_read(calls: tuple[ToolCall, ...]) -> list[str]:
@@ -420,7 +501,8 @@ def notes_read(calls: tuple[ToolCall, ...]) -> list[str]:
 
 
 async def ask(agent: Agent, snapshot: Snapshot, question: str, history: list,
-              about: str = "") -> Answer:
+              about: str = "", check_names: bool = True,
+              now: datetime | None = None) -> Answer:
     """One question, checked once, taken as it stands, then asked what it used.
 
     A first answer that trips a check is handed the complaint and asked again,
@@ -434,16 +516,28 @@ async def ask(agent: Agent, snapshot: Snapshot, question: str, history: list,
     same conversation, so the provider's cache carries the history for nearly
     nothing.
 
-    An exhausted turn budget answers with a fixed line and leaves the history
-    untouched: the run was abandoned rather than concluded, so there is nothing
-    coherent to carry. Its statistics still come back -- an answer that cost
-    every turn and produced nothing is exactly the one worth counting.
+    A verdict short-circuits both of those. There is nothing to check in an
+    answer that was never written and nothing to attach to it, so the run ends
+    at the tool call and its cost is the whole of what comes back.
+
+    An exhausted turn budget answers with a fixed line. Its statistics still
+    come back -- a run that cost every turn and produced nothing is exactly the
+    one worth counting.
+
+    `history` is the conversation as message dicts; `features/kb/history.py`
+    builds it out of question/answer pairs. What comes back is deliberately not
+    the run's own input list: tool calls and note texts dwarf everything else
+    in it, and none of that is worth carrying to the next question.
     """
-    context = Ask(snapshot=snapshot, about=about)
+    context = Ask(snapshot=snapshot, about=about, check_names=check_names)
+    asked = stamp(question, now)
     first = await _run(agent, list(history) + [{"role": "user",
-                                               "content": question}], context)
+                                               "content": asked}], context)
+    if context.person_name:
+        return Answer("", asked, first.stats,
+                      person_name=context.person_name)
     if first.cut_short:
-        return Answer(CUT_SHORT, history, first.stats)
+        return Answer(CUT_SHORT, asked, first.stats)
 
     found = validate.complaints(first.text)
     settled, stats = first, first.stats
@@ -458,7 +552,7 @@ async def ask(agent: Agent, snapshot: Snapshot, question: str, history: list,
 
     picked_stats = await _pick_sources(agent, context, settled.conversation,
                                        stats)
-    return Answer(settled.text, settled.conversation,
+    return Answer(settled.text, asked,
                   _merge(stats, picked_stats) if picked_stats else stats,
                   tuple(context.chosen), tuple(found))
 

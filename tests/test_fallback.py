@@ -76,7 +76,7 @@ async def test_a_photo_gets_an_answer_too():
     assert "/help" in _replies(bot), "a non-text message went unanswered"
 
 
-async def test_plain_text_still_reaches_the_search_intent():
+async def test_plain_text_still_reaches_the_name_search():
     """The catch-all must sit behind everything, not in front of it."""
     dp = build_dispatcher(_factory(), bootstrap_ids=set())
     bot = FakeBot()

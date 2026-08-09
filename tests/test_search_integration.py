@@ -6,6 +6,7 @@ that text which is not a name gets the fallback instead of a wrong person.
 """
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from aiogram.types import Chat, Message, Update
 from aiogram.types import User as TgUser
@@ -16,6 +17,7 @@ from sqlalchemy.pool import StaticPool
 from jbcub_bot.core.db import Base
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.core.pipeline import NOTHING_MATCHED
+from jbcub_bot.features.kb import handlers as kb
 from jbcub_bot.main import build_dispatcher
 
 
@@ -90,5 +92,39 @@ async def test_a_tie_lists_everyone_close():
 
 
 async def test_text_that_is_not_a_name_gets_the_fallback():
+    """With no agent runtime configured the slot behind the search declines,
+    so this is the core's last word rather than anything the agent said."""
     fake_bot = await _say("как дела")
     assert fake_bot.sent[0].text == NOTHING_MATCHED
+
+
+async def test_unmatched_text_offers_no_button_to_press():
+    """It used to answer "I didn't find anyone by that name. Ask AI instead?"
+    with a button, and the tap opened a mode in which the next name typed was
+    read as a question. Both halves of that are gone: the agent is simply next
+    in the chain."""
+    fake_bot = await _say("как дела")
+
+    assert all(getattr(m, "reply_markup", None) is None for m in fake_bot.sent)
+    assert not any("Ask AI" in (getattr(m, "text", "") or "")
+                   for m in fake_bot.sent)
+
+
+async def test_a_found_name_is_never_put_to_the_agent(monkeypatch):
+    """The search has first refusal on every free-text message, and taking one
+    ends the chain -- so the agent behind it is never asked, configured or
+    not."""
+    asked = []
+
+    async def never(*args, **kwargs):
+        asked.append(args)
+
+    monkeypatch.setattr(kb, "ask", never)
+    kb.set_runtime(SimpleNamespace(agent=object(), store=None,
+                                   repo="", log_chat_id="", admin_ids=(),
+                                   rate_limit=100, rate_window_seconds=3600))
+
+    fake_bot = await _say("Ярослав")
+
+    assert "Iaroslav Belozerov" in fake_bot.sent[0].text
+    assert asked == []

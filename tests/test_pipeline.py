@@ -583,9 +583,9 @@ async def test_text_in_the_senders_own_dialog_reaches_its_on_text():
 async def test_text_while_a_dialog_nobody_registered_is_open_still_runs_the_chain():
     """A dialog must not silence other features.
 
-    An open state the registry does not route -- a legacy feature's own FSM,
-    or one left behind by an older deploy -- is exactly what `StateFilter(None)`
-    used to turn into a bot that answers nothing.
+    An open state the registry does not route -- one left behind by an older
+    deploy -- is exactly what `StateFilter(None)` used to turn into a bot that
+    answers nothing.
     """
     calls = []
 
@@ -803,6 +803,55 @@ async def test_a_dialog_taking_the_message_is_not_a_chain_taker():
     await dialog.start("directory:edit")
     await _handle(registry, _message(fake_bot, "xoposhiy"), dialog=dialog)
     assert registry.last_taker(777) is None
+
+
+async def test_a_chain_handler_reads_what_took_the_previous_message():
+    """The whole reason the record exists, and the reason it is not cleared up
+    front: `kb` asks it whether a profile was shown between two of its
+    questions. Clearing it before the walk -- which this used to do -- left
+    every chain handler reading None about itself.
+    """
+    seen = []
+
+    async def name_search(message):
+        return False if message.text == "a question" else None
+
+    async def agent(message):
+        seen.append(registry.last_taker(777))
+
+    registry = Registry()
+    _api(registry, "directory").message(at=LOOKUP)(name_search)
+    _api(registry, "kb").message(at=AGENT)(agent)
+    fake_bot = FakeBot()
+
+    await _handle(registry, _message(fake_bot, "a question"))
+    await _handle(registry, _message(fake_bot, "Ivanov"))
+    await _handle(registry, _message(fake_bot, "a question"))
+
+    assert [None if spec is None else spec.feature for spec in seen] == \
+        [None, "directory"]
+
+
+async def test_a_command_in_between_reads_as_no_taker_at_all():
+    """A command is settled as None, and only once it has run: /ask is a
+    command, and it has already dealt with the conversation on its own terms by
+    the time the next message reads this."""
+    seen = []
+
+    async def agent(message):
+        seen.append(registry.last_taker(777))
+
+    registry = Registry()
+    bot = _api(registry, "kb")
+    bot.message(at=AGENT)(agent)
+    bot.command("ask", "Ask the knowledge base.")(_noop)
+    fake_bot = FakeBot()
+
+    await _handle(registry, _message(fake_bot, "a question"))
+    await _handle(registry, _message(fake_bot, "/ask"))
+    await _handle(registry, _message(fake_bot, "another question"))
+
+    assert seen == [None, None]
 
 
 async def test_a_crash_in_the_chain_leaves_no_stale_taker():
