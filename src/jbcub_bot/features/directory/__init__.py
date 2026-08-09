@@ -46,10 +46,7 @@ def register(bot) -> None:
     bot.command("edit", "Edit your profile fields.")(edit.cmd_edit)
     bot.command("cohort", "List the people in your cohort.")(cohort.cmd_cohort)
 
-    # public=True, and `name_search` checks the principal itself: an unlinked
-    # sender is told to contact an admin rather than filtered out of the chain
-    # and left reading "No one found."
-    bot.message(at=LOOKUP, when=TEXT, public=True,
+    bot.message(at=LOOKUP, when=TEXT,
                 description="just type a name — search people",
                 )(handlers.name_search)
 

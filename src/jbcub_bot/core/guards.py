@@ -6,6 +6,18 @@ exactly this and nothing else, which is why a guard here is also a visibility
 rule: anything that should stay listed while it refuses (the bootstrap-admin
 check, a profile with no saved row) is ordinary code inside its feature, not a
 guard.
+
+One kind refuses quietly: on the chain the wording is thrown away and the
+handler is simply skipped, because nothing was addressed to it. So `NOT_LINKED`
+for a stranger who just types something comes from `pipeline.last_word`
+instead, and no feature needs to be `public` in order to say it.
+
+Note what the default does. `Guard()` is `public=False`, and `refusal` turns
+away a `None` principal for it -- so a declaration with no guard at all is
+closed to strangers, and only an explicit `public=True` opens one. That is why
+there is no second, earlier check for "not linked": an unlinked caller has to
+reach `/start` somehow, and the declaration is the only thing that knows
+whether this is it.
 """
 from jbcub_bot.core.contract import Guard
 from jbcub_bot.core.models import Role, User

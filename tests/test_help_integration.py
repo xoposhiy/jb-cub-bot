@@ -141,21 +141,19 @@ async def test_a_student_sees_the_legacy_lines_their_role_allows():
 
 
 async def test_an_unlinked_caller_sees_the_public_commands_and_the_notice():
-    """The one path `PrincipalMiddleware` lets through with `principal=None`.
+    """The one path the middleware stack lets through with `principal=None`.
 
-    `kb`'s intent is bridged as a *non-public* note whatever its `min_role`,
-    because the old renderer hid every `💬` line from an unlinked caller while
-    it showed a public command -- so this is also where that survives.
-    `directory`'s own chain line is public and does show, which is the one
-    difference migration made: typing a name while unlinked really does answer,
-    and what it answers is what to do about being unlinked.
+    Public commands and nothing else. `/help` filters on exactly the guard that
+    would refuse you, so what a stranger reads here is what actually works for
+    them -- no `💬` line, because the chain is for people the bot knows and
+    every chain handler is filtered out for a stranger. Listing the name search
+    would advertise the one thing that answers them "you are not linked".
     """
     out = await _run_help(_factory(), 999)
 
     assert out == (
         "📒 Directory — Find classmates and manage your own profile.\n"
         "  /start — Start / link your account.\n"
-        "  💬 just type a name — search people\n"
         "\n"
         "❓ Help — Commands you can use.\n"
         "  /help — List the commands you can use.\n"

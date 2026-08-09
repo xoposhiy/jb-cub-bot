@@ -32,7 +32,7 @@ from jbcub_bot.core.contract import (
     Registry,
     call_handler,
 )
-from jbcub_bot.core.guards import refusal
+from jbcub_bot.core.guards import NOT_LINKED, refusal
 from jbcub_bot.core.oplog import format_miss
 
 # Landmarks, so a feature declares where it sits by name and the resolved order
@@ -145,7 +145,17 @@ async def dispatch(registry: Registry, message: Message,
 async def last_word(message: Message, *, principal, impersonator,
                     oplog) -> None:
     """Nothing took it, so the core answers. A message with no answer at all
-    looks to the sender exactly like a bot that is down."""
+    looks to the sender exactly like a bot that is down.
+
+    This is also where a stranger is told they are one. The chain is for people
+    the bot knows: a `Guard()` refuses an unlinked caller by default, so an
+    ordinary chain handler is filtered out for them silently -- rightly, since
+    nothing was addressed to it -- and the honest last word left is "I don't
+    know you", not "No one found." Saying it here rather than in a guard is
+    what keeps `public=True` meaning "written for strangers" instead of
+    "willing to turn them away politely", which is what one chain handler was
+    using it for.
+    """
     # Caption as well as text, so an unknown command sent under a photo is
     # answered as the command it is rather than as an unreadable photo.
     words = (message.text or message.caption or "").split()
@@ -161,6 +171,15 @@ async def last_word(message: Message, *, principal, impersonator,
         await message.answer(
             f"I don't know {command}. /help lists what I can do."
         )
+        return
+    if principal is None:
+        # After the unknown command above, not before it: /help is public and
+        # is exactly what an unlinked sender should be pointed at. A *known*
+        # command never reaches this at all -- its own guard answers the same
+        # wording in `_run_command`. And no ops-log miss, for the same reason
+        # the branch above sends none: the bot answered correctly. Who it does
+        # not know is not a gap in what it knows.
+        await message.answer(NOT_LINKED)
         return
     if message.text is not None:
         query, answer = message.text, NOTHING_MATCHED

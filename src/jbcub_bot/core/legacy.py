@@ -125,10 +125,13 @@ def install(registry: Registry) -> LegacyIntents:
     shim = LegacyIntents(registry)
     bot = registry.api_for(FEATURE)
     bot.describe("🧩", "Legacy", "Features that still route themselves.")
-    # public=True because `main.py`'s `nl_fallback` ran the intent router for an
-    # unlinked caller too, and each intent checks its own `min_role` inside the
-    # walk. A guard here would filter the whole slot instead.
-    bot.message(at=LEGACY, when=TEXT, public=True)(shim.offer)
+    # Guarded like any other slot. It was `public=True` because `main.py`'s
+    # `nl_fallback` ran the intent router for an unlinked caller too -- a habit
+    # of the shape this shim is here to retire, not a rule worth keeping: the
+    # chain is for people the bot knows, and a stranger gets the core's last
+    # word before reaching any of it. Roles *within* the slot are still each
+    # intent's own business, via `intent_allowed` in `offer`.
+    bot.message(at=LEGACY, when=TEXT)(shim.offer)
     return shim
 
 

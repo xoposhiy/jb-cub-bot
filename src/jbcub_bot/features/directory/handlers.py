@@ -210,16 +210,12 @@ async def name_search(message: Message, principal: User, session) -> bool:
     Returning False leaves the message unanswered on purpose: the chain moves
     on, and whatever ends it gets to reply.
 
-    Registered `public=True` and checking `principal` itself, which is the
-    spec's own pattern for a refusal that has something to say: a contract
-    guard would filter this handler out of the chain silently, and the unlinked
-    sender would read "No one found." instead of what to do about it.
+    An ordinary guarded handler, so `principal` is always somebody: this used
+    to be declared `public=True` and answer the unlinked caller itself, purely
+    because being filtered out silently left them reading "No one found."
+    Telling a stranger they are one is the core's last word now, and searching
+    the roster is all this does.
     """
-    if principal is None:
-        # Answering here rather than declining: an unlinked user gets told what
-        # to do instead of a puzzling "No one found."
-        await message.answer("You are not linked yet. Contact an admin.")
-        return True
     ranked = rank_users(session, (message.text or "").strip(),
                         include_departed=is_admin(principal))
     if not ranked:

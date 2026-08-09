@@ -148,15 +148,23 @@ async def test_a_staff_button_refuses_a_student_and_admits_a_teacher(data):
 
 # --- one meaning of `public`, whichever kind declares it -----------------------
 
-async def test_public_lets_an_unlinked_caller_through_on_a_command_and_the_chain():
+async def test_public_lets_an_unlinked_caller_through_on_a_command():
     registry = _registry()
     assert await _send(registry, "/start", None) == [
         "I couldn't recognize you. Ask a program admin for a one-time link."]
 
-    # The same guard on the chain handler, and the reason it is public: an
-    # unlinked caller who types a name is told what to do rather than left with
-    # "No one found."
-    assert await _send(registry, "Ivanov", None) == [NOT_LINKED]
+
+async def test_the_chain_declines_an_unlinked_caller_without_answering():
+    """`directory` declares nothing public on the chain, so its search is
+    filtered out for a stranger and answers them nothing at all.
+
+    It used to be `public=True` and answer `NOT_LINKED` itself, which is the
+    one thing `public` must not come to mean -- it says "written for
+    strangers", not "willing to turn them away politely". Telling a stranger
+    they are one is the core's last word now; that it happens is asserted in
+    `tests/test_fallback.py`, and that it is not asserted here is the point.
+    """
+    assert await _send(_registry(), "Ivanov", None) == []
 
 
 async def test_no_public_refuses_an_unlinked_caller_on_a_command_button_dialog():

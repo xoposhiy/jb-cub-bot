@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from jbcub_bot.core.db import Base
+from jbcub_bot.core.guards import NOT_LINKED
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.main import build_dispatcher
 
@@ -44,11 +45,11 @@ def _factory():
     return maker
 
 
-def _update(bot, **message_kwargs):
+def _update(bot, telegram_id: int = 777, **message_kwargs):
     message = Message(
         message_id=1, date=datetime.now(timezone.utc),
-        chat=Chat(id=777, type="private"),
-        from_user=TgUser(id=777, is_bot=False, first_name="t"),
+        chat=Chat(id=telegram_id, type="private"),
+        from_user=TgUser(id=telegram_id, is_bot=False, first_name="t"),
         **message_kwargs,
     ).as_(bot)
     return Update(update_id=9, message=message).as_(bot)
@@ -91,6 +92,63 @@ async def test_a_known_command_is_not_second_guessed():
     await dp.feed_update(bot, _update(bot, text="/me"), dispatcher=dp)
     replies = _replies(bot)
     assert "I don't know" not in replies
+
+
+# --- and the sender the bot does not know -------------------------------------
+# The chain is for people the bot knows: a default `Guard()` filters every chain
+# handler out for an unlinked caller, silently, because nothing was addressed to
+# them. So the last word is where a stranger has to be told they are one --
+# `directory` used to declare its search `public=True` and say it there, which
+# made "public" mean "willing to turn strangers away politely" rather than
+# "written for strangers".
+
+UNKNOWN_TID = 999
+
+
+async def test_an_unlinked_sender_is_told_so_rather_than_no_one_found():
+    dp = build_dispatcher(_factory(), bootstrap_ids=set())
+    bot = FakeBot()
+    await dp.feed_update(bot, _update(bot, text="Ivan", telegram_id=UNKNOWN_TID),
+                         dispatcher=dp)
+    replies = _replies(bot)
+    assert NOT_LINKED in replies
+    # Not the search's answer, and not the catch-all's either: "No one found."
+    # is a fact about the roster, and this sender never got to ask about it.
+    assert "No one found." not in replies
+
+
+async def test_an_unlinked_sender_gets_the_same_answer_for_a_photo():
+    dp = build_dispatcher(_factory(), bootstrap_ids=set())
+    bot = FakeBot()
+    photo = [PhotoSize(file_id="f", file_unique_id="u", width=1, height=1)]
+    await dp.feed_update(bot, _update(bot, photo=photo, telegram_id=UNKNOWN_TID),
+                         dispatcher=dp)
+    # "I only read text." would answer the wrong question -- the problem is not
+    # what they sent.
+    assert NOT_LINKED in _replies(bot)
+
+
+async def test_an_unlinked_sender_still_gets_the_unknown_command_answer():
+    """Ahead of the check, deliberately: /help is public and is exactly where
+    an unlinked sender should be pointed."""
+    dp = build_dispatcher(_factory(), bootstrap_ids=set())
+    bot = FakeBot()
+    await dp.feed_update(bot,
+                         _update(bot, text="/nosuchthing",
+                                 telegram_id=UNKNOWN_TID),
+                         dispatcher=dp)
+    replies = _replies(bot)
+    assert "/nosuchthing" in replies
+    assert NOT_LINKED not in replies
+
+
+async def test_an_unlinked_sender_is_not_logged_as_a_miss():
+    """Who the bot does not know is not a gap in what the bot knows."""
+    dp = build_dispatcher(_factory(), bootstrap_ids=set(), log_chat_id=LOG_CHAT)
+    bot = FakeBot()
+    await dp.feed_update(bot, _update(bot, text="Ivan", telegram_id=UNKNOWN_TID),
+                         dispatcher=dp)
+    assert bot.logged == []
 
 
 # --- what reaches the log chat ------------------------------------------------
