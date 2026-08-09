@@ -3,6 +3,8 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from jbcub_bot.core import guards, impersonation
 from jbcub_bot.core.contract import Registry, call_handler
 from jbcub_bot.features.help.render import render_help
@@ -61,6 +63,40 @@ async def test_as_is_denied_for_an_unlinked_caller(session):
     msg.answer.assert_awaited_once_with(
         "You are not linked yet. Contact an admin.")
     assert impersonation.ref_for(777) is None
+
+
+# --- what the exit's guard has to be, and what it must not be ----------------
+# It carries no `role`, because inside the mode `principal` *is* the target and
+# any rank would refuse the one command that gets you out of a student's view.
+# It is not `public` either, though it used to be: that was the only way to say
+# "no role check" before it was noticed the default guard already says exactly
+# that. `public` means "written for strangers", and this is not.
+
+
+@pytest.mark.parametrize("role", [Role.STUDENT, Role.TEACHER, Role.ADMIN])
+async def test_unas_is_refused_to_no_rank(role, session):
+    impersonation.begin(777, "30000001")
+    spec = _registry().commands()["unas"]
+    msg = _msg()
+
+    await _dispatch(spec, msg, principal=User(last_name="T", role=role),
+                    dialog=_dialog())
+
+    # The principal here is the *target* -- a student under /as on a student.
+    assert impersonation.ref_for(777) is None
+    assert "own view" in msg.answer.await_args.args[0]
+
+
+async def test_unas_is_refused_to_a_stranger_like_anything_else(session):
+    """Regression: `public=True` let anybody who had never been seen before
+    send it and be told "You are not viewing as anyone." -- a reply confirming
+    the command exists, to someone the bot has no business answering."""
+    spec = _registry().commands()["unas"]
+    msg = _msg(telegram_id=999)
+
+    await _dispatch(spec, msg, principal=None, dialog=_dialog())
+
+    msg.answer.assert_awaited_once_with(guards.NOT_LINKED)
 
 
 async def test_as_without_a_reference_shows_usage(session):

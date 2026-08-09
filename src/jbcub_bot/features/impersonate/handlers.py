@@ -38,14 +38,18 @@ async def cmd_as(message: Message, principal: User, session, dialog: Dialog,
 async def cmd_unas(message: Message, dialog: Dialog):
     """Leave the mode.
 
-    Declared `public=True` and `listed=False` rather than an ordinary
-    role-guarded command, for the two reasons that used to force dodging the
-    command registrar entirely before the contract could split them apart:
-    inside the mode the principal is the target, so a role guard would refuse
-    the one command that gets you out of a student's view -- `public=True`
-    fixes that, since it refuses nobody. And listing it in /help would put a
-    command in that view no student has -- `listed=False` fixes that, without
-    leaving it undocumented. Every banner prints it instead.
+    Declared with no `role` and `listed=False`, for the two reasons that used
+    to force dodging the command registrar entirely before the contract could
+    split them apart: inside the mode the principal is the target, so any rank
+    would refuse the one command that gets you out of a student's view -- the
+    default guard asks for none. And listing it in /help would put a command in
+    that view no student has -- `listed=False` fixes that, without leaving it
+    undocumented. Every banner prints it instead.
+
+    It was `public=True` for a while, which is a third thing entirely and was
+    never wanted: it meant a stranger the bot had never seen could send /unas
+    and be told "You are not viewing as anyone." The default guard says "any
+    rank, but somebody we know", which is what this always meant.
 
     It reads the map rather than `impersonator` because the middleware
     deliberately does not impersonate this command -- see `is_exit_command`.

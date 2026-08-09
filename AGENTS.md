@@ -39,17 +39,40 @@ One memorized form for the job means there is nothing left to pick wrong.
 - **Features may import each other.** This reverses the older rule, and it is what lets the core stay small: code two features share stays with whichever one owns it instead of being pushed into `core/`.
 - **Google Sheets are a read-only source of truth; the bot never writes to one.**
 - **Profile reads go through `features/directory/visibility.py`** — read a column off the model and you leak whatever its owner hid.
-- **Access is refused in `PrincipalMiddleware`, before any lookup** `core/principal.py`.
+- **Authentication is four middleware stages, and the order is the design.**
+  `PrincipalMiddleware` (who is writing, plus the session; refuses a non-private
+  chat before any lookup) → `ImpersonationMiddleware` (may replace `principal`
+  with an `/as` target) → `BannerMiddleware` → `AccessMiddleware` (the one
+  `departed_at` refusal). Because the refusal runs *after* the swap, an admin in
+  `/as` on a departed student meets that student's own refusal, from that
+  student's own line of code — there is no impersonation-flavoured copy of it to
+  drift. `identity.closed_out` is the shared predicate, and it carries the
+  `BOOTSTRAP_ADMIN_IDS` exemption for target and caller alike. No stage knows
+  where it sits — `build_dispatcher` in `main.py` owns the order and is the one
+  place that explains it. Don't reorder them without reading that comment.
+- **The chain is for people the bot knows, and `public=True` means "written for
+  strangers".** An unlinked caller is not refused by a middleware — that would
+  close `/start`, the only way to ever get linked. The default `Guard()` refuses
+  them per declaration instead, so forgetting a guard is fail-closed and only an
+  explicit `public=True` opens anything. On the chain a guard *filters* rather
+  than refuses (nothing was addressed to that handler), so the one who tells a
+  stranger they are one is `pipeline.last_word`. Don't answer `NOT_LINKED` from
+  a feature: declaring a handler public just to say it is how that ends up
+  meaning "willing to turn strangers away politely".
 - **`/as` is a sticky mode, not a wrapper.** While an admin is in it,
   `principal` *is* the target, so commands run with *their* role — a student
   target refuses admin commands, a staff target doesn't. The real admin is
-  `impersonator`. `/unas` is declared `public=True, listed=False`, and both
-  halves are load-bearing: any role guard would refuse the one command that
-  exits the mode, and being listed would put it in a student's `/help`. It is
-  also exempt from the departed refusal in `PrincipalMiddleware`, which runs
-  before any handler — without that exemption `/as <departed student>` would
-  trap the admin until a restart (the mode lives only in memory,
-  `core/impersonation.py`, so a restart is the other way out).
+  `impersonator`. `/unas` is declared with no `role` and `listed=False`, and
+  both halves are load-bearing: any rank would refuse the one command that
+  exits the mode (inside it, the rank is the target's), and being listed would
+  put it in a student's `/help`. Not `public` — that would also open it to
+  strangers, which is a different claim and was never the intent. Stage 2
+  also never impersonates it (`is_exit_command`, which reads the command through
+  `pipeline.command_of` so both sides agree on what `/unas` looks like) —
+  without that, `/as <departed student>` would trap the admin until a restart
+  (the mode lives only in memory, `core/impersonation.py`, so a restart is the
+  other way out). The mode is core because it decides who the principal is; the
+  two commands are a feature, like every other command.
 - **The core owns dialog identity.** A feature declares `bot.dialog(name, on_text=..., on_cancel=...)` and writes no `StatesGroup`; the state name is derived from the feature and the dialog, so two features cannot collide. Text goes to the dialog's owner and *only* to them — someone else's open dialog must not silence your chain handler.
 - **`/cancel` is the core's, one for every dialog, and commands beat dialogs.** A feature never registers `/cancel` (the loader refuses it) and never filters commands out of its own text handler. `on_cancel` is the hook for whatever the feature wants to say or redraw afterwards.
 - **A chain handler returns `bool`.** `False` means "not mine" and obliges it to have answered nothing, because something else is about to answer; anything else, `None` included, counts as taken. Order is the `at=` you declare, not the alphabet of package names. `dispatch` returns the `MessageSpec` that took the message, or `None` — but that return is the core's own business; what a feature reads is `bot.registry.last_taker(chat_id)`, which the core records from it per chat. That is how a later turn learns a profile was just shown without knowing that `directory` exists. `core/pipeline.py`, `core/contract.py`.
