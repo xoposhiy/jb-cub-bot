@@ -10,6 +10,7 @@ behaviour from that table, so adding a field is one line in one place.
 import enum
 from dataclasses import dataclass
 
+from jbcub_bot.core import identity
 from jbcub_bot.core.models import Role, User
 
 
@@ -111,6 +112,10 @@ def field_value(user: User, name: str, *, merged: bool = True):
     `telegram` is the one field that isn't a column: it picks the observed
     handle over the sheet's hint and prefixes the @.
 
+    A provisional row's `matriculation` comes back empty whoever asks. Callers
+    already skip an empty value, so the profile line disappears and an export
+    keeps the column with an empty cell.
+
     A field with `sources` has two: what its owner told the bot and what the
     roster says. The owner's wins, but when both are set and disagree the
     roster's is shown alongside it -- a profile that silently drops one of two
@@ -125,6 +130,12 @@ def field_value(user: User, name: str, *, merged: bool = True):
     if name == "telegram":
         handle = user.handle_observed or user.handle_sheet
         return f"@{handle}" if handle else None
+    if name == "matriculation" and identity.is_provisional(user):
+        # The key this row carries was invented by one /sync and is discarded
+        # by the next, so showing it would offer a number to write down. Here
+        # rather than in the renderer: a profile read that goes around this
+        # module leaks whatever its owner hid.
+        return None
     spec = BY_NAME[name]
     if spec.sources:
         own, roster = (getattr(user, column) or None for column in spec.sources)

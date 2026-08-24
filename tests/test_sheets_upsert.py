@@ -60,83 +60,6 @@ def test_upsert_clears_the_departed_mark_when_the_roster_names_them_again(sessio
     assert session.query(User).filter_by(matriculation="1").one().departed_at is None
 
 
-def test_mark_departed_marks_the_member_this_roster_no_longer_names(session):
-    session.add_all([
-        User(matriculation="1", last_name="Stays", primary_cohort="2024"),
-        User(matriculation="2", first_name="Eve", last_name="Expelled",
-             primary_cohort="2024"),
-    ])
-    session.commit()
-
-    marked = sheets.mark_departed(session, "2024", [{"matriculation": "1"}],
-                                  "2026-07-28")
-
-    assert marked == [
-        sheets.DepartedUser(matriculation="2", full_name="Eve Expelled")
-    ]
-    stays, left = (session.query(User).filter_by(matriculation=m).one()
-                   for m in ("1", "2"))
-    assert stays.departed_at is None
-    assert left.departed_at == "2026-07-28"
-
-
-def test_mark_departed_leaves_a_rights_only_admin_alone(session):
-    from jbcub_bot.core.models import Role
-
-    # Admins and teachers come from the Rights tab: no cohort, keyed on their
-    # handle. Every cohort roster is missing them, so a sync that swept up
-    # whoever it could not find would hide the program's own staff.
-    session.add(User(handle_sheet="boss", last_name="Boss", role=Role.ADMIN))
-    session.commit()
-
-    marked = sheets.mark_departed(session, "2024", [{"matriculation": "1"}],
-                                  "2026-07-28")
-
-    assert marked == []
-    assert session.query(User).filter_by(handle_sheet="boss").one().departed_at is None
-
-
-def test_mark_departed_never_reaches_into_another_cohort(session):
-    # 2023's students are absent from 2024's roster by definition.
-    session.add(User(matriculation="9", last_name="Older", primary_cohort="2023"))
-    session.commit()
-
-    marked = sheets.mark_departed(session, "2024", [{"matriculation": "1"}],
-                                  "2026-07-28")
-
-    assert marked == []
-    assert session.query(User).filter_by(matriculation="9").one().departed_at is None
-
-
-def test_mark_departed_spares_a_member_who_has_no_matriculation_yet(session):
-    # The roster is keyed on matriculation, so a row without one was never
-    # matched against it and its absence there says nothing.
-    session.add(User(matriculation=None, last_name="Pending",
-                     primary_cohort="2024"))
-    session.commit()
-
-    marked = sheets.mark_departed(session, "2024", [{"matriculation": "1"}],
-                                  "2026-07-28")
-
-    assert marked == []
-    assert session.query(User).filter_by(last_name="Pending").one().departed_at is None
-
-
-def test_mark_departed_keeps_the_date_of_the_sync_that_first_missed_them(session):
-    # The date answers "when did they leave the roster?" -- a later sync
-    # overwriting it with today would turn the answer into "just now, always".
-    session.add(User(matriculation="2", last_name="Left", primary_cohort="2024"))
-    session.commit()
-    sheets.mark_departed(session, "2024", [{"matriculation": "1"}], "2026-07-01")
-
-    marked = sheets.mark_departed(session, "2024", [{"matriculation": "1"}],
-                                  "2026-07-28")
-
-    assert marked == []  # nothing new to report on a repeat sync
-    assert session.query(User).filter_by(matriculation="2").one().departed_at == \
-        "2026-07-01"
-
-
 def test_reconcile_reports_duplicate_keys_once_with_row_count(session):
     session.add(User(matriculation="2", last_name="Petrov"))
     session.commit()
@@ -192,3 +115,96 @@ def test_reconcile_ignores_a_field_only_one_side_filled(session):
 
     assert report.differences == []
     assert report.duplicates == []
+
+
+# --- the key a record carries: injected when missing, stripped always -------
+
+def test_an_unkeyed_record_gets_a_provisional_key_and_a_keyed_one_keeps_its(session):
+    records = [
+        {"matriculation": "", "last_name": "Nova"},
+        {"matriculation": "30000001", "last_name": "Real"},
+    ]
+
+    sheets.assign_provisional_keys(records, lambda: "TMP-AAA")
+
+    assert [record["matriculation"] for record in records] == [
+        "TMP-AAA", "30000001",
+    ]
+
+
+def test_each_unkeyed_record_gets_its_own_key(session):
+    # Two first-years must not merge into one row, whatever they are called.
+    keys = iter(["TMP-AAA", "TMP-BBB"])
+    records = [{"matriculation": ""}, {"matriculation": ""}]
+
+    sheets.assign_provisional_keys(records, lambda: next(keys))
+
+    assert [record["matriculation"] for record in records] == [
+        "TMP-AAA", "TMP-BBB",
+    ]
+
+
+def test_upsert_inserts_a_record_the_sheet_left_unkeyed_once_a_key_is_injected(session):
+    records = [{"matriculation": "", "first_name": "Nina", "last_name": "Nova",
+                "handle_sheet": "nina", "primary_cohort": "2026"}]
+    sheets.assign_provisional_keys(records, lambda: "TMP-AAA")
+
+    sheets.upsert_users(session, records)
+
+    u = session.query(User).filter_by(matriculation="TMP-AAA").one()
+    assert u.full_name == "Nina Nova"
+    assert u.handle_sheet == "nina"
+
+
+def test_a_key_with_surrounding_whitespace_matches_the_stripped_row(session):
+    session.add(User(matriculation="30000001", last_name="Old"))
+    session.commit()
+
+    sheets.upsert_users(session, [
+        {"matriculation": " 30000001 ", "last_name": "New"},
+    ])
+
+    assert [u.last_name for u in session.query(User).all()] == ["New"]
+
+
+def test_a_provisional_row_is_rebuilt_under_a_new_key_by_the_next_sync(session):
+    def sheet_row():
+        return {"matriculation": "", "first_name": "Nina", "last_name": "Nova",
+                "handle_sheet": "nina", "primary_cohort": "2026"}
+
+    for key in ("TMP-AAA", "TMP-BBB"):
+        records = [sheet_row()]
+        sheets.assign_provisional_keys(records, lambda: key)
+        sheets.upsert_users(session, records)
+        sheets.settle_absentees(session, "2026", records, "2026-09-01")
+        session.commit()
+
+    assert [u.matriculation for u in session.query(User).all()] == ["TMP-BBB"]
+
+
+def test_the_rebuilt_row_is_claimed_again_by_the_same_handle(session):
+    from jbcub_bot.core import identity
+
+    def sheet_row():
+        return {"matriculation": "", "first_name": "Nina", "last_name": "Nova",
+                "handle_sheet": "nina", "primary_cohort": "2026"}
+
+    records = [sheet_row()]
+    sheets.assign_provisional_keys(records, lambda: "TMP-AAA")
+    sheets.upsert_users(session, records)
+    session.commit()
+    assert identity.resolve(session, 555, "nina").matriculation == "TMP-AAA"
+
+    # The binding dies with the row, and nobody has to put it back: the
+    # replacement arrives with the handle set and no telegram_id, so the next
+    # message claims it.
+    records = [sheet_row()]
+    sheets.assign_provisional_keys(records, lambda: "TMP-BBB")
+    sheets.upsert_users(session, records)
+    sheets.settle_absentees(session, "2026", records, "2026-09-01")
+    session.commit()
+
+    rebuilt = session.query(User).one()
+    assert (rebuilt.matriculation, rebuilt.telegram_id) == ("TMP-BBB", None)
+    assert identity.resolve(session, 555, "nina").id == rebuilt.id
+    assert session.query(User).one().telegram_id == 555

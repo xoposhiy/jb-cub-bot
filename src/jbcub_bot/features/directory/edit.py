@@ -7,8 +7,9 @@ value lands in all come from `FIELDS` -- this module lists no field names.
 
 Only the caller's own row is ever written, so there is nothing to authorize
 beyond being linked -- which the contract's default guard does. What is left
-here is the one caller being linked cannot cover: a bootstrap admin whose
-principal was never saved, refused where a write happens and nowhere else.
+here is the callers being linked cannot cover: a bootstrap admin whose
+principal was never saved, and a first-year whose row is a placeholder the next
+/sync rebuilds. Both are refused where a write happens and nowhere else.
 """
 
 from aiogram.exceptions import TelegramBadRequest
@@ -20,6 +21,7 @@ from aiogram.types import (
     Message,
 )
 
+from jbcub_bot.core import identity
 from jbcub_bot.core.dialogs import DialogHandle
 from jbcub_bot.core.models import User
 from jbcub_bot.features.directory import accounts
@@ -29,6 +31,7 @@ from jbcub_bot.features.directory.screens import (
     EMPTY,
     EXPIRED,
     NO_ROW,
+    PROVISIONAL,
     UNKNOWN_FIELD,
     short_value,
 )
@@ -222,6 +225,10 @@ async def on_value(message: Message, principal: User, session, dialog):
         await dialog.end()
         await message.answer(NO_ROW)
         return
+    if identity.is_provisional(principal):
+        await dialog.end()
+        await message.answer(PROVISIONAL)
+        return
     data = await dialog.data()
     spec = editable_spec(data.get("field", ""))
     if spec is None:
@@ -276,6 +283,9 @@ async def cb_clear_do(cb: CallbackQuery, principal: User, session, dialog,
     # too: see `privacy.cb_cycle` for why that is not a contract guard.
     if principal.id is None:
         await cb.answer(NO_ROW, show_alert=True)
+        return
+    if identity.is_provisional(principal):
+        await cb.answer(PROVISIONAL, show_alert=True)
         return
     spec = editable_spec(arg)
     if spec is None:

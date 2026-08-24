@@ -3,8 +3,9 @@
 One cycling button per configurable field; a tap advances that field's level
 and redraws this same message. Only the caller's own row is ever written, so
 there is nothing to authorize beyond being linked -- which the contract's
-default guard does. What is left here is the one caller being linked cannot
-cover: a bootstrap admin whose principal was never saved, refused by the tap
+default guard does. What is left here are the two callers being linked cannot
+cover: a bootstrap admin whose principal was never saved, and a first-year
+whose row is a placeholder the next /sync rebuilds. Both are refused by the tap
 that writes and by nothing else.
 """
 
@@ -15,6 +16,7 @@ from aiogram.types import (
     Message,
 )
 
+from jbcub_bot.core import identity
 from jbcub_bot.core.models import User
 from jbcub_bot.features.directory.render import (
     PROFILE_CALLBACK,
@@ -25,6 +27,7 @@ from jbcub_bot.features.directory.render import (
 from jbcub_bot.features.directory.screens import (
     EXPIRED,
     NO_ROW,
+    PROVISIONAL,
     UNKNOWN_FIELD,
     short_value,
 )
@@ -118,6 +121,12 @@ async def cb_cycle(cb: CallbackQuery, principal: User, session, arg: str):
     # the button from exactly the person who needs to be told.
     if principal.id is None:
         await cb.answer(NO_ROW, show_alert=True)
+        return
+    # The other row a tap must not write: a placeholder built from the cohort
+    # sheet, which the next /sync deletes and builds again. Refused here rather
+    # than hidden, for the same reason as above.
+    if identity.is_provisional(principal):
+        await cb.answer(PROVISIONAL, show_alert=True)
         return
     name = arg
     spec = BY_NAME.get(name)

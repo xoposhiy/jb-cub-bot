@@ -91,3 +91,41 @@ def test_find_impersonation_target_not_found(session):
     _add(session, matriculation="30000001", telegram_id=777)
     assert identity.find_impersonation_target(session, "nope") is None
     assert identity.find_impersonation_target(session, "999") is None
+
+
+# --- rows the sheet has not numbered yet ------------------------------------
+
+def test_is_provisional_reads_the_prefix_whatever_case_it_is_typed_in():
+    for value in ("TMP-A1B2", "tmp-a1b2", "Tmp-Typed"):
+        assert identity.is_provisional(User(matriculation=value)) is True
+
+
+def test_is_provisional_is_false_for_a_real_number_and_for_no_number():
+    assert identity.is_provisional(User(matriculation="30000001")) is False
+    assert identity.is_provisional(User(matriculation=None)) is False
+    assert identity.is_provisional(None) is False
+
+
+def test_a_new_provisional_key_carries_the_prefix_and_is_not_reused():
+    keys = {identity.new_provisional_key() for _ in range(50)}
+    assert len(keys) == 50
+    assert all(key.startswith(identity.PROVISIONAL_PREFIX) for key in keys)
+
+
+def test_a_provisional_row_is_claimed_by_its_handle_like_any_other(session):
+    # A handle is the only way in for these people: an invite needs a real
+    # number, and the sheet carries the handle.
+    u = _add(session, matriculation="TMP-A1B2", handle_sheet="nina")
+    got = identity.resolve(session, 555, "nina")
+    assert got.id == u.id
+    assert got.telegram_id == 555
+
+
+def test_no_invite_is_issued_for_a_provisional_target(session):
+    from jbcub_bot.core.tokens import issue_link_token
+    import pytest
+
+    # The token would be keyed on a value the next /sync discards.
+    _add(session, matriculation="TMP-A1B2", handle_sheet="nina")
+    with pytest.raises(ValueError):
+        issue_link_token(session, "TMP-A1B2", "secret")

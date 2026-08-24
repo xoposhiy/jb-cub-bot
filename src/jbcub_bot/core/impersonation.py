@@ -43,7 +43,14 @@ def reset() -> None:
 
 
 def canonical_ref(user: User) -> str:
-    """A stable-enough short reference that the existing resolver accepts."""
+    """A stable-enough short reference that the existing resolver accepts.
+
+    A provisional key lasts one `/sync`, so a linked first-year is referred to
+    by `telegram_id` instead -- otherwise a sync in the middle of the mode
+    would end it, which is the case the middleware below already names.
+    """
+    if identity.is_provisional(user) and user.telegram_id is not None:
+        return str(user.telegram_id)
     if user.matriculation:
         return user.matriculation
     if user.telegram_id is not None:

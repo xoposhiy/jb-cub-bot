@@ -371,3 +371,26 @@ def test_unmerged_value_drops_the_roster_note():
     assert visibility.field_value(target, "github", merged=False) == "mine"
     admin = _u(role=Role.ADMIN)
     assert visible_fields(admin, target, merged=False)["github"] == "mine"
+
+
+# --- a provisional key is withheld here and nowhere else -------------------
+
+def test_field_value_withholds_a_provisional_matriculation():
+    # The key was invented by one /sync and is discarded by the next, so
+    # showing it would offer a number to write down.
+    assert field_value(_u(matriculation="TMP-A1B2"), "matriculation") is None
+    assert field_value(_u(matriculation="30000001"), "matriculation") == "30000001"
+
+
+def test_field_value_withholds_a_hand_typed_provisional_prefix_too():
+    assert field_value(_u(matriculation="tmp-typed"), "matriculation") is None
+
+
+def test_a_staff_viewer_still_gets_the_matriculation_key_for_a_first_year():
+    # The key stays in the mapping with an empty value: an export builds its
+    # header from these keys, so the column has to survive the empty cell.
+    viewer = _u(role=Role.TEACHER)
+    target = _u(role=Role.STUDENT, matriculation="TMP-A1B2")
+    fields = visible_fields(viewer, target)
+    assert "matriculation" in fields
+    assert fields["matriculation"] is None

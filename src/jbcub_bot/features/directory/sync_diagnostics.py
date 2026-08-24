@@ -29,6 +29,7 @@ class CohortOutcome:
     gradebook_error: str | None
     issues: tuple[IssueGroup, ...]
     source_url: str
+    provisional: sheets.ProvisionalReport | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ def build_issue_groups(
     roster: sheets.ReconcileReport,
     grades_report: grades.GradesSyncReport | None,
     departed: list[sheets.DepartedUser],
+    provisional: sheets.ProvisionalReport | None = None,
 ) -> tuple[IssueGroup, ...]:
     groups: list[IssueGroup] = []
 
@@ -162,6 +164,28 @@ def build_issue_groups(
             ),
         ))
 
+    if provisional is not None:
+        # A first-year reaches the bot by their sheet handle and nothing else,
+        # and the bot has no way to reach them and say the handle is wrong --
+        # so these two lists are the only place anyone hears about it.
+        if provisional.shared_handles:
+            groups.append(IssueGroup(
+                title="Provisional rows sharing a Telegram handle",
+                effect="None of these people can be recognized by their handle.",
+                action="Give each of them their own handle in the roster",
+                items=tuple(
+                    f"@{item.value} — {counted(item.rows, 'row')}"
+                    for item in provisional.shared_handles
+                ),
+            ))
+        if provisional.without_handle:
+            groups.append(IssueGroup(
+                title="Provisional rows with no Telegram handle",
+                effect="These people cannot reach the bot at all.",
+                action="Add their Telegram handle to the roster",
+                items=tuple(provisional.without_handle),
+            ))
+
     if grades_report is not None and grades_report.ignored_columns:
         groups.append(IssueGroup(
             title="Columns outside a semester",
@@ -216,6 +240,27 @@ def _gradebook_fact(outcome: CohortOutcome) -> str:
     )
 
 
+def _provisional_fact(outcome: CohortOutcome) -> str:
+    """One line about the rows the university has not numbered yet, or "".
+
+    The count of live ones is a fact rather than an issue, and it is stated on
+    every sync: a placeholder nobody replaced would otherwise live quietly for
+    months. Removals are the ordinary churn of rebuilding these rows from the
+    sheet, which is why they are reported here and not as departures.
+    """
+    report = outcome.provisional
+    if report is None:
+        return ""
+    parts = []
+    if report.profiles:
+        parts.append(counted(report.profiles, "profile"))
+    if report.replaced:
+        parts.append(f"{len(report.replaced)} replaced by a real number")
+    if report.removed:
+        parts.append(f"{len(report.removed)} removed")
+    return f"Provisional: {' · '.join(parts)}" if parts else ""
+
+
 def _current_roster_found(outcome: CohortOutcome) -> int:
     if outcome.gradebook is None:
         return 0
@@ -263,10 +308,11 @@ def _document_filename(cohort: str) -> str:
 def render_cohort(outcome: CohortOutcome) -> RenderedReport:
     sections = [
         f"{_cohort_status(outcome)} {outcome.cohort} processed",
-        "\n".join((
+        "\n".join(fact for fact in (
             f"Roster: {counted(outcome.roster_students, 'student')}",
+            _provisional_fact(outcome),
             _gradebook_fact(outcome),
-        )),
+        ) if fact),
     ]
     if outcome.ignored_roster_rows:
         row_count = counted(outcome.ignored_roster_rows, "historical row")

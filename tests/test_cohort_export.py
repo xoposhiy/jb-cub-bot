@@ -99,3 +99,16 @@ def test_the_telegram_cell_drops_the_at_sign_rather_than_escape_it():
 def test_an_ordinary_value_is_untouched():
     header, row = _parsed_rows(User(last_name="A", role=Role.ADMIN), [_person()])
     assert row[header.index("first_name")] == "Ivan"
+
+
+def test_a_provisional_person_keeps_the_matriculation_column_with_an_empty_cell():
+    # The header comes from the keys visible_fields returned, so the column
+    # survives for the cohort's real students -- and their cells with it.
+    people = [_person(matriculation="TMP-A1B2", first_name="Nina",
+                      last_name="Nova"),
+              _person()]
+    header, first, second = _parsed_rows(User(last_name="A", role=Role.ADMIN),
+                                        people)
+    assert "matriculation" in header
+    assert first[header.index("matriculation")] == ""
+    assert second[header.index("matriculation")] == "30000001"

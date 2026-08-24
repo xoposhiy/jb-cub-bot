@@ -1,6 +1,40 @@
+import secrets
+
 from sqlalchemy import select
 
 from jbcub_bot.core.models import Role, User
+
+# A roster row the sheet has not numbered yet is keyed by the bot instead, so
+# `matriculation` stays a non-empty unique string everywhere. A constant rather
+# than a setting: a value drifting from what the rows hold would turn every
+# such person into an ordinary student and lift every restriction at once.
+PROVISIONAL_PREFIX = "TMP-"
+
+
+def new_provisional_key() -> str:
+    """A key for a roster row that carries no matriculation number yet.
+
+    Random rather than derived from the person: two students sharing a name
+    would merge into one row, and a name collision is something this project
+    reports rather than resolves.
+    """
+    return PROVISIONAL_PREFIX + secrets.token_hex(4).upper()
+
+
+def is_provisional(user: User | None) -> bool:
+    """True while this row is a projection of the sheet, not a student's own.
+
+    Every byte of such a row comes from the sheet, the invented key included,
+    and the next `/sync` throws it away and builds it again -- so nothing may
+    be written to it and nothing may be keyed on it beyond that sync.
+
+    Case-insensitive: a prefix typed into a sheet by hand must leave the person
+    restricted rather than promote them.
+    """
+    if user is None or not user.matriculation:
+        return False
+    return user.matriculation.casefold().startswith(
+        PROVISIONAL_PREFIX.casefold())
 
 
 def find_by_telegram_id(session, telegram_id: int) -> User | None:

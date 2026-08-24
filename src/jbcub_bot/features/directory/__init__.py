@@ -7,8 +7,10 @@ knows how it is reached. That is what took `Router`, `F`, `StateFilter`,
 button now says so in one line beside its key, where /help and the refusal read
 the same declaration.
 
-Two checks stay ordinary code rather than becoming guards, both about a
-bootstrap admin whose principal was never saved (`identity.apply_bootstrap`):
+Two checks stay ordinary code rather than becoming guards, and both ask whether
+writing the caller's own row would achieve anything: a bootstrap admin's
+principal was never saved (`identity.apply_bootstrap`), and a first-year's row
+is a placeholder the next /sync rebuilds (`identity.is_provisional`).
 `privacy.cb_cycle`, `edit.on_value` and `edit.cb_clear_do` refuse the write and
 say what to do, while every read-only screen lets them look. A guard there
 would be a visibility filter, and would quietly shorten /help for exactly the

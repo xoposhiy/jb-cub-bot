@@ -148,6 +148,20 @@ async def test_as_stores_the_canonical_ref_not_what_was_typed(session):
     assert impersonation.ref_for(777) == "30000001"
 
 
+async def test_as_on_a_first_year_stores_the_telegram_id(session):
+    # A provisional key lasts one /sync, so keying the mode on it would end the
+    # mode the moment the numbers arrive.
+    session.add(User(last_name="Nova", first_name="Nina",
+                     matriculation="TMP-A1B2", telegram_id=111,
+                     role=Role.STUDENT))
+    session.commit()
+
+    await cmd_as(_msg(), principal=User(last_name="A", role=Role.ADMIN),
+                session=session, dialog=_dialog(), arg="TMP-A1B2")
+
+    assert impersonation.ref_for(777) == "111"
+
+
 async def test_unas_leaves_the_mode(session):
     impersonation.begin(777, "30000001")
     msg, dialog = _msg(), _dialog()

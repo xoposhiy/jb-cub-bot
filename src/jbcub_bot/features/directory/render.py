@@ -1,5 +1,6 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity
 
+from jbcub_bot.core import identity
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.directory import sheets
 from jbcub_bot.features.directory.visibility import (
@@ -73,7 +74,14 @@ def admin_row(matriculation: str) -> list[InlineKeyboardButton]:
 
 
 def admin_keyboard(target: User) -> InlineKeyboardMarkup | None:
-    if not target.matriculation:
+    """The Admin row, when there is anything behind it worth offering.
+
+    Nothing is, for a provisional row: an invite is refused, and a reset undoes
+    a binding the person's next message makes again. Not about avoiding a
+    crash -- a payload from an older screen already answers "Not found." once
+    the row is gone.
+    """
+    if not target.matriculation or identity.is_provisional(target):
         return None
     return InlineKeyboardMarkup(inline_keyboard=[admin_row(target.matriculation)])
 

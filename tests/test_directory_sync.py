@@ -228,7 +228,7 @@ async def test_cohort_problems_share_one_grouped_message_and_source_button(
     assert button.url == "https://docs.google.com/spreadsheets/d/AAA"
 
 
-async def test_current_roster_row_without_matriculation_prevents_false_success(
+async def test_a_roster_row_awaiting_its_number_is_synced_as_provisional(
     session,
     monkeypatch,
 ):
@@ -258,13 +258,146 @@ async def test_current_roster_row_without_matriculation_prevents_false_success(
     )
 
     texts = [call.args[0] for call in message.answer.await_args_list]
-    cohort_report = next(text for text in texts if text.endswith(
-        "Awaiting Number — missing matriculation number"
-    ))
+    cohort_report = next(text for text in texts if "2024 processed" in text)
+    assert cohort_report.startswith("✅ 2024 processed")
+    assert "Provisional: 1 profile" in cohort_report
+    assert "1 of 1 current roster student found" in cohort_report
+    assert "cannot receive grades" not in cohort_report
+    stored = session.query(User).filter_by(primary_cohort="2024").one()
+    assert stored.matriculation.startswith("TMP-")
+    assert stored.handle_sheet == "awaiting"
+
+
+async def test_a_roster_row_without_a_name_still_cannot_receive_grades(
+    session,
+    monkeypatch,
+):
+    # The bot invents a key, never a name -- and the Gradebook is matched on
+    # names, so this row is the one that still has nothing to match on.
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2024", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [COHORT_HEADER, _cohort_row("30000001", "", "", "nameless")]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(["Awaiting", "Number", "91%"])
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message, _ = _sync_message()
+
+    await cmd_sync(
+        message,
+        principal=User(last_name="Admin", role=Role.ADMIN),
+        session=session,
+    )
+
+    texts = [call.args[0] for call in message.answer.await_args_list]
+    cohort_report = next(text for text in texts if "2024 processed" in text)
     assert cohort_report.startswith("⚠️ 2024 processed")
     assert "Current roster rows cannot receive grades (1)" in cohort_report
-    assert "Gradebook rows without a roster match" not in cohort_report
-    assert texts[-1].startswith("⚠️ Sync completed with warnings")
+    assert "30000001 — missing last name, first name" in cohort_report
+    assert "Provisional" not in cohort_report
+
+
+async def test_provisional_rows_are_counted_and_their_handle_problems_named(
+    session,
+    monkeypatch,
+):
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2026", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000001", "Ivanov", "Ivan", "ivanov"),
+                _cohort_row("", "One", "Twin", "twin"),
+                _cohort_row("", "Two", "Twin", "twin"),
+                _cohort_row("", "Nova", "Nina", ""),
+            ]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(
+                ["Ivanov", "Ivan", "91%"],
+                ["One", "Twin", "80%"],
+                ["Two", "Twin", "70%"],
+                ["Nova", "Nina", "60%"],
+            )
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    message, _ = _sync_message()
+
+    await cmd_sync(
+        message,
+        principal=User(last_name="Admin", role=Role.ADMIN),
+        session=session,
+    )
+
+    texts = [call.args[0] for call in message.answer.await_args_list]
+    cohort_report = next(text for text in texts if "2026 processed" in text)
+    assert cohort_report.startswith("⚠️ 2026 processed")
+    assert "Provisional: 3 profiles" in cohort_report
+    # A shared handle claims nobody, and no handle claims nothing -- and the
+    # bot cannot tell either person, so this report is the only warning.
+    assert "Provisional rows sharing a Telegram handle (1)" in cohort_report
+    assert "@twin — 2 rows" in cohort_report
+    assert "Provisional rows with no Telegram handle (1)" in cohort_report
+    assert "Nina Nova" in cohort_report
+    assert "Newly marked as departed" not in cohort_report
+
+
+async def test_the_sync_that_brings_the_numbers_reports_a_replacement(
+    session,
+    monkeypatch,
+):
+    numbered = []
+
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("2026", "AAA")]
+        if sheet_id == "AAA" and range_ == "A:Z":
+            return [
+                COHORT_HEADER,
+                _cohort_row("30000002" if numbered else "",
+                            "Nova", "Nina", "nina"),
+            ]
+        if sheet_id == "AAA" and range_ == "Gradebook!A:ZZ":
+            return _gradebook_rows(["Nova", "Nina", "91%"])
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER]
+        return []
+
+    monkeypatch.setattr(handlers, "fetch_rows", fake_fetch)
+    monkeypatch.setattr(handlers, "get_settings", _settings)
+    monkeypatch.setattr(handlers, "build_credentials", lambda *args: None)
+    admin = User(last_name="Admin", role=Role.ADMIN)
+
+    message, _ = _sync_message()
+    await cmd_sync(message, principal=admin, session=session)
+    first = next(call.args[0] for call in message.answer.await_args_list
+                 if "2026 processed" in call.args[0])
+    assert "Provisional: 1 profile" in first
+
+    numbered.append(True)
+    message, _ = _sync_message()
+    await cmd_sync(message, principal=admin, session=session)
+
+    second = next(call.args[0] for call in message.answer.await_args_list
+                  if "2026 processed" in call.args[0])
+    assert (
+        "Provisional: 1 replaced by a real number · 1 removed" in second
+    )
+    # The placeholder was taken away, not marked -- nobody left the roster.
+    assert "Newly marked as departed" not in second
+    assert [u.matriculation for u in session.query(User).all()] == ["30000002"]
 
 
 async def test_rights_problems_share_the_final_message_and_source_button(

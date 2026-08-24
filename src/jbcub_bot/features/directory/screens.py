@@ -1,16 +1,22 @@
-"""Pieces every self-service screen needs: the value shortener, and the two
+"""Pieces every self-service screen needs: the value shortener, and the
 refusals that are this feature's own rather than the contract's.
 
-Two screens (`privacy.py`, `edit.py`) write only the caller's own row, so
-whether the caller *has* a row is the one thing they both have to say the same
-way. `NOT_LINKED` used to live here beside `NO_ROW`; refusing a caller with no
-principal at all is the contract's default guard now (`core/guards.py`), and
-`NO_ROW` stays because it must not be one: a contract guard is a visibility
-filter, and hiding the screen from a bootstrap admin whose principal was never
-saved would take it from exactly the person who needs to be told why.
+Two screens (`privacy.py`, `edit.py`) write only the caller's own row, so why
+that row cannot be written is the thing they both have to say the same way --
+and there are two reasons. `NOT_LINKED` used to live here beside them; refusing
+a caller with no principal at all is the contract's default guard now
+(`core/guards.py`). These two must not become guards: a guard is a visibility
+filter, so it would hide the screen from exactly the person who has to be told
+why nothing can be saved.
 """
 
 NO_ROW = "Your account has no saved profile yet. Ask an admin to link you."
+# Short enough for a callback alert, which Telegram cuts off past 200 characters.
+PROVISIONAL = (
+    "Your profile is a placeholder until your matriculation number arrives. "
+    "Every /sync rebuilds it from the cohort sheet, so nothing saved here "
+    "would last. Ask an admin to edit the sheet."
+)
 EXPIRED = "This screen expired — send the command again."
 UNKNOWN_FIELD = "Unknown field."
 

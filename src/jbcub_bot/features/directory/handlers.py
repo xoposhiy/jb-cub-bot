@@ -464,6 +464,10 @@ async def cmd_sync(message: Message, principal: User, session):
         for record in records:
             record["primary_cohort"] = entry["cohort"]
             record["source_link"] = entry["link"]
+        # A first-year joins a month before the university issues numbers, so
+        # their row arrives with the column empty -- and an empty key is a row
+        # upsert_users skips while reporting success. The bot keys it itself.
+        sheets.assign_provisional_keys(records, identity.new_provisional_key)
         # The first non-person row is the separator itself; only rows after it
         # are historical rows that the report should count as ignored.
         ignored_roster_rows = max(0, len(rows) - len(records) - 2)
@@ -527,8 +531,11 @@ async def cmd_sync(message: Message, principal: User, session):
         try:
             sheets.upsert_users(session, records)
             # After the upsert, so anyone the roster names again is already back
-            # before the ones it dropped get marked.
-            departed = sheets.mark_departed(session, cohort_name, records, today)
+            # before the ones it dropped get settled.
+            settled = sheets.settle_absentees(session, cohort_name, records,
+                                              today)
+            provisional = sheets.provisional_report(session, cohort_name,
+                                                    settled.removed)
             rep = sheets.reconcile(session, records)
             session.commit()
         except Exception as exc:
@@ -577,9 +584,11 @@ async def cmd_sync(message: Message, principal: User, session):
             issues=sync_diagnostics.build_issue_groups(
                 rep,
                 report,
-                departed,
+                settled.marked,
+                provisional,
             ),
             source_url=sheets.sheet_url(link),
+            provisional=provisional,
         )
         outcomes.append(outcome)
         try:

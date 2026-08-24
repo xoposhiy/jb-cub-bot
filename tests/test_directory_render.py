@@ -159,3 +159,40 @@ def test_me_keyboard_puts_self_service_above_the_admin_button():
 def test_me_keyboard_for_an_admin_without_matriculation_has_only_self_service():
     kb = me_keyboard(User(first_name="A", last_name="Admin", role=Role.ADMIN))
     assert len(kb.inline_keyboard) == 1
+
+
+# --- a provisional profile shows no key and offers no admin action ---------
+
+def test_render_omits_the_matriculation_line_for_a_provisional_profile():
+    admin = User(first_name="A", last_name="Admin", role=Role.ADMIN)
+    target = User(first_name="Nina", last_name="Nova", role=Role.STUDENT,
+                  primary_cohort="2026", matriculation="TMP-A1B2",
+                  birthday="2008-01-02")
+    text = render_profile(admin, target)
+    assert "Matriculation" not in text
+    assert "TMP-A1B2" not in text
+    assert "Name: Nina Nova" in text
+    assert "Birthday: 2008-01-02" in text  # the rest of the profile is intact
+
+
+def test_a_provisional_profile_gets_no_admin_keyboard():
+    # Every action behind it either refuses or undoes a binding the person's
+    # next message makes again.
+    admin = User(last_name="Admin", role=Role.ADMIN)
+    target = User(last_name="Nova", role=Role.STUDENT, matriculation="TMP-A1B2")
+    assert profile_keyboard(admin, target, show_grades=False) is None
+
+
+def test_a_provisional_profile_still_offers_grades_to_staff():
+    # Gradebook rows match on name, so a first-year's grades import normally.
+    teacher = User(last_name="Teacher", role=Role.TEACHER)
+    target = User(last_name="Nova", role=Role.STUDENT, matriculation="TMP-A1B2")
+    keyboard = profile_keyboard(teacher, target, show_grades=True)
+    data = [b.callback_data for row in keyboard.inline_keyboard for b in row]
+    assert data == ["dir:grades:TMP-A1B2:-1"]
+
+
+def test_a_provisional_admin_own_profile_keeps_only_self_service():
+    admin = User(last_name="Admin", role=Role.ADMIN, matriculation="TMP-A1B2")
+    kb = me_keyboard(admin)
+    assert len(kb.inline_keyboard) == 1

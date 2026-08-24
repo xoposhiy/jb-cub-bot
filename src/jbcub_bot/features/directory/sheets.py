@@ -205,9 +205,11 @@ def normalize_rows(rows: list[list[str]], mapping: dict) -> list[dict]:
 from collections import Counter
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
-from jbcub_bot.core.models import Role, User
+from jbcub_bot.core import identity
+from jbcub_bot.core.models import Grade, Role, User
+from jbcub_bot.features.directory.matching import fold
 
 
 @dataclass(frozen=True)
@@ -231,14 +233,63 @@ class DepartedUser:
 
 
 @dataclass
+class SettleReport:
+    """What `settle_absentees` did: dates written, and rows taken away."""
+
+    marked: list[DepartedUser] = field(default_factory=list)
+    removed: list[DepartedUser] = field(default_factory=list)
+
+
+@dataclass
+class ProvisionalReport:
+    """One cohort's placeholder rows, as they stand after a sync settled.
+
+    `replaced` is the good ending -- the university issued the number and the
+    person is an ordinary student now. The two handle lists are the only signal
+    a first-year who cannot get in will ever produce: the bot has no way to
+    reach them and tell them their sheet handle is wrong.
+    """
+
+    profiles: int = 0
+    replaced: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
+    shared_handles: list[DuplicateKey] = field(default_factory=list)
+    without_handle: list[str] = field(default_factory=list)
+
+
+@dataclass
 class ReconcileReport:
     differences: list[FieldDifference] = field(default_factory=list)
     duplicates: list[DuplicateKey] = field(default_factory=list)
 
 
+def record_key(record: dict, key: str = "matriculation") -> str:
+    """The key a record identifies its person by, stripped; "" when it has none.
+
+    Every reader of a record's key goes through this, so all of them agree on
+    what "the same key" means. Untrimmed, a trailing space in a real number is
+    a different key and gives one person two rows -- and then a roster this
+    person *is* on reads as one they are missing from.
+    """
+    return str(record.get(key) or "").strip()
+
+
+def assign_provisional_keys(records: list[dict], generate,
+                            key: str = "matriculation") -> None:
+    """Key every record the sheet left unkeyed, so none of them is skipped.
+
+    `generate` is a parameter rather than a call in here, the way `today` is a
+    parameter of `settle_absentees`: a test pins the keys instead of matching
+    a pattern.
+    """
+    for record in records:
+        if not record_key(record, key):
+            record[key] = generate()
+
+
 def upsert_users(session, records: list[dict], key: str = "matriculation") -> None:
     for record in records:
-        key_value = record.get(key)
+        key_value = record_key(record, key)
         if not key_value:
             continue
         user = session.scalar(
@@ -248,7 +299,7 @@ def upsert_users(session, records: list[dict], key: str = "matriculation") -> No
             user = User(**{key: key_value})
             session.add(user)
         # Named by the roster again, so they are back: clearing the mark here
-        # (rather than in mark_departed) means a return is undone by the same
+        # (rather than in settle_absentees) means a return is undone by the same
         # pass that resumes updating their fields.
         user.departed_at = None
         for field_name in SHEET_OWNED:
@@ -262,14 +313,19 @@ def upsert_users(session, records: list[dict], key: str = "matriculation") -> No
     # Caller commits — keeps multi-sheet /sync atomic.
 
 
-def mark_departed(session, cohort: str, records: list[dict], today: str,
-                  key: str = "matriculation") -> list[DepartedUser]:
-    """Mark this cohort's members that `records` no longer names and return them.
+def settle_absentees(session, cohort: str, records: list[dict], today: str,
+                     key: str = "matriculation") -> SettleReport:
+    """Settle this cohort's members that `records` no longer names.
+
+    A provisional row is removed, an ordinary one is marked departed. The row
+    holds nothing Google Sheets does not hold, so deleting it loses nothing and
+    the next `/sync` builds it again from the sheet; a departure date is the
+    bot's own and has to survive.
 
     Scoped to `primary_cohort == cohort` deliberately: every other cohort's
     students and every Rights-only row (admins and teachers, keyed on their
     handle, with no cohort at all) are missing from these records too, and
-    marking them would hide the program's own staff from everyone.
+    settling them would hide the program's own staff from everyone.
 
     A member with no `key` of their own is spared as well -- the roster is keyed
     on it, so a row that was never matched against the roster says nothing by
@@ -278,25 +334,77 @@ def mark_departed(session, cohort: str, records: list[dict], today: str,
     `today` is a parameter, not a `date.today()` call, so the caller owns what
     "now" means and a test can pin it.
 
-    Already-marked rows are left alone: the date says when the roster stopped
-    naming them, which a later sync overwriting it would turn into "just now".
+    An ordinary row that is already marked is left alone: the date says when
+    the roster stopped naming them, which a later sync overwriting it would
+    turn into "just now". A row already carrying a date is still selected
+    though -- a provisional row that somehow acquired one would otherwise never
+    be looked at again and would linger forever.
 
     Caller commits -- keeps multi-sheet /sync atomic.
     """
-    present = {r.get(key) for r in records if r.get(key)}
-    stmt = select(User).where(
-        User.primary_cohort == cohort, User.departed_at.is_(None)
-    )
-    marked: list[DepartedUser] = []
-    for user in session.scalars(stmt).all():
+    present = {record_key(record, key) for record in records
+               if record_key(record, key)}
+    report = SettleReport()
+    removed_ids: list[int] = []
+    for user in session.scalars(
+        select(User).where(User.primary_cohort == cohort)
+    ).all():
         key_value = getattr(user, key)
-        if key_value and key_value not in present:
+        if not key_value or key_value in present:
+            continue
+        person = DepartedUser(matriculation=str(key_value),
+                              full_name=user.full_name)
+        if identity.is_provisional(user):
+            removed_ids.append(user.id)
+            report.removed.append(person)
+        elif not user.departed_at:
             user.departed_at = today
-            marked.append(DepartedUser(
-                matriculation=str(key_value),
-                full_name=user.full_name,
-            ))
-    return marked
+            report.marked.append(person)
+    if removed_ids:
+        # The grades go with the row, and here rather than in the grades pass:
+        # that pass is skipped whenever a Gradebook is broken. `users.id` is an
+        # INTEGER PRIMARY KEY, so SQLite reuses it, and a left-behind
+        # `grades.user_id` would attach to whoever gets the number next -- a
+        # teacher shown someone else's grades.
+        session.execute(delete(Grade).where(Grade.user_id.in_(removed_ids)))
+        session.execute(delete(User).where(User.id.in_(removed_ids)))
+    return report
+
+
+def provisional_report(session, cohort: str,
+                       removed: list[DepartedUser]) -> ProvisionalReport:
+    """This cohort's placeholder rows once `settle_absentees` has run.
+
+    Counted off the rows rather than the records, so a prefix typed into the
+    sheet by hand counts too and a forgotten placeholder keeps being reported
+    for as long as it exists.
+
+    A removal whose person now holds a real number is the number arriving, not
+    someone leaving. Names are what pairs the two: the invented key is gone
+    with the row, and the sheet spells the person the same way in both syncs.
+    """
+    rows = session.scalars(
+        select(User).where(User.primary_cohort == cohort)
+    ).all()
+    report = ProvisionalReport(removed=[item.full_name for item in removed])
+    real_names = {fold(user.full_name) for user in rows
+                  if not identity.is_provisional(user)}
+    report.replaced = [item.full_name for item in removed
+                       if fold(item.full_name) in real_names]
+    handles = Counter()
+    for user in rows:
+        if not identity.is_provisional(user):
+            continue
+        report.profiles += 1
+        if user.handle_sheet:
+            handles[user.handle_sheet] += 1
+        else:
+            report.without_handle.append(user.full_name)
+    report.shared_handles = [DuplicateKey(value=handle, rows=count)
+                             for handle, count in handles.items() if count > 1]
+    report.without_handle.sort()
+    report.shared_handles.sort(key=lambda item: item.value)
+    return report
 
 
 # Fields the roster and the bot can both hold a value for: (the record key the
@@ -311,7 +419,8 @@ DRIFT_PAIRS = (
 
 def reconcile(session, records: list[dict], key: str = "matriculation") -> ReconcileReport:
     report = ReconcileReport()
-    keys = [str(record.get(key)) for record in records if record.get(key)]
+    keys = [record_key(record, key) for record in records
+            if record_key(record, key)]
     counts = Counter(keys)
     report.duplicates = [
         DuplicateKey(value=value, rows=count)
@@ -321,8 +430,8 @@ def reconcile(session, records: list[dict], key: str = "matriculation") -> Recon
     duplicate_values = {item.value for item in report.duplicates}
 
     for record in records:
-        raw_key = record.get(key)
-        if not raw_key or str(raw_key) in duplicate_values:
+        raw_key = record_key(record, key)
+        if not raw_key or raw_key in duplicate_values:
             continue
         user = session.scalar(
             select(User).where(getattr(User, key) == raw_key)
@@ -338,7 +447,7 @@ def reconcile(session, records: list[dict], key: str = "matriculation") -> Recon
                 and sheet_value != profile_value
             ):
                 report.differences.append(FieldDifference(
-                    key=str(raw_key),
+                    key=raw_key,
                     field=label,
                     sheet_value=str(sheet_value),
                     profile_value=str(profile_value),

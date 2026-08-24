@@ -13,6 +13,7 @@ import time
 
 from sqlalchemy import select
 
+from jbcub_bot.core import identity
 from jbcub_bot.core.models import User
 
 # 16 bytes -> 22 base64url characters, comfortably inside Telegram's 64.
@@ -28,6 +29,11 @@ def issue_link_token(session, matriculation: str, secret: str) -> str:
     user = session.scalar(select(User).where(User.matriculation == matriculation))
     if user is None:
         raise ValueError(f"no user with matriculation {matriculation}")
+    if identity.is_provisional(user):
+        # The token is keyed on a value this sync invented and the next will
+        # discard, so the link would go dead on its own. Their sheet handle is
+        # the way in until the real number arrives.
+        raise ValueError(f"{matriculation} is a provisional key")
     token = secrets.token_urlsafe(_TOKEN_BYTES)
     # The HMAC rather than the token: single-use (the row is cleared on
     # binding) without a usable invite sitting in the database.
