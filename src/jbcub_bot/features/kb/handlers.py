@@ -77,7 +77,11 @@ _RATE_LIMITED = ("The knowledge base is getting a lot of questions right now —
                  "try again in a few minutes.")
 # What the placeholder becomes once show_profile picked somebody -- the
 # profile itself follows as its own message, so this is never the last word.
-_FOUND_SOMEONE = "🔎 Found them — see below."
+# The tip only fires here, on the slow agent path: a bare name never reaches
+# the agent at all, so this is the one place worth teaching that shortcut.
+_FOUND_SOMEONE = ("🔎 Found them — see below.\n\n"
+                  "💡 Tip: next time, just send a name or Telegram handle — "
+                  "it skips the AI and answers faster.")
 
 
 logger = logging.getLogger(__name__)
