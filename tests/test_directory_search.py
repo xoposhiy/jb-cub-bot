@@ -1,5 +1,10 @@
 from jbcub_bot.core.models import Role, User
-from jbcub_bot.features.directory.search import list_cohort, list_cohort_names, rank_users
+from jbcub_bot.features.directory.search import (
+    classify,
+    list_cohort,
+    list_cohort_names,
+    rank_users,
+)
 
 
 def _seed(session):
@@ -97,6 +102,32 @@ def test_list_cohort_includes_a_departed_member_when_asked(session):
     names = {u.full_name
              for u in list_cohort(session, "2024", include_departed=True)}
     assert names == {"Iaroslav Belozerov", "Igor Chsheglov"}
+
+
+# --- classify: a clear leader, a shortlist, or neither -----------------------
+
+def test_classify_finds_nobody_from_an_empty_ranking():
+    assert classify([]) == (None, [])
+
+
+def test_classify_names_the_clear_leader():
+    ann = User(first_name="Anna", last_name="Smith")
+    ranked = [(0.9, ann), (0.5, User(first_name="Anna", last_name="Other"))]
+
+    target, close = classify(ranked)
+
+    assert target is ann
+    assert close == []
+
+
+def test_classify_lists_a_shortlist_when_nobody_clearly_leads():
+    a = User(first_name="Anna", last_name="Smith")
+    b = User(first_name="Anna", last_name="Smyth")
+
+    target, close = classify([(0.9, a), (0.88, b)])
+
+    assert target is None
+    assert set(close) == {a, b}
 
 
 def test_list_cohort_names_newest_first_and_only_where_someone_is_current(session):

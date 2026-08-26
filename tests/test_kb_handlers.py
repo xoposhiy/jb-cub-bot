@@ -150,24 +150,29 @@ _STATS = kb_agent.AskStats(
 
 def _install_runtime(monkeypatch, answer=_ANSWER, pdfs=(_PDF,), complaints=(),
                      log_chat_id="", admin_ids=(), rate_limit=100,
-                     rate_window_seconds=3600, verdict=""):
+                     rate_window_seconds=3600, verdict="", profile_id=None):
     """A runtime whose agent is a function, and a record of what it was given.
 
     `verdict` makes that function decline the way the real one does when the
     message was a name -- but only while the name check is on, so a test can
-    watch /ask switch it off.
+    watch /ask switch it off. `profile_id` makes it pick a profile instead,
+    the way show_profile would -- unconditionally, since the real tool is on
+    the list whether or not /ask switched the name check off.
     """
     store = FakeStore()
     run = SimpleNamespace(asked=[], carried=[], checks=[])
 
     async def fake_ask(agent, snapshot, question, history_, about="",
-                       check_names=True, now=None):
+                       check_names=True, now=None, session=None,
+                       include_departed=False):
         run.asked.append(question)
         run.carried.append(list(history_))
         run.checks.append(check_names)
         stamped = kb_agent.stamp(question, now)
         if verdict and check_names:
             return kb_agent.Answer("", stamped, _STATS, person_name=verdict)
+        if profile_id is not None:
+            return kb_agent.Answer("", stamped, _STATS, profile_id=profile_id)
         return kb_agent.Answer(text=answer, question=stamped, stats=_STATS,
                                sources=tuple(pdfs),
                                complaints=tuple(complaints))
@@ -342,7 +347,8 @@ async def test_the_agent_is_told_the_asker_role_and_cohort(monkeypatch):
     store = FakeStore()
 
     async def fake_ask(agent, snapshot, question, history_, about="",
-                       check_names=True, now=None):
+                       check_names=True, now=None, session=None,
+                       include_departed=False):
         seen.append(about)
         return kb_agent.Answer("ok", question, kb_agent.AskStats())
 
@@ -463,6 +469,82 @@ async def test_a_name_verdict_is_logged_as_a_miss_with_the_runs_cost(
     assert "«Егоров»" in entry
     assert NOTHING_MATCHED in entry
     assert "1.2k in / 310 out" in entry, "the miss cost a model turn"
+
+
+# --- the agent found a specific person: search_people and show_profile --------
+
+def _ivan_id(factory) -> int:
+    session = factory()
+    try:
+        return session.query(User).filter_by(matriculation="30001111").one().id
+    finally:
+        session.close()
+
+
+async def test_a_profile_pick_shows_the_profile_below_the_placeholder(
+        monkeypatch):
+    factory = _session_factory()
+    _seed(factory)
+    _install_runtime(monkeypatch, profile_id=_ivan_id(factory))
+    dp, bot = build_dispatcher(session_factory=factory), FakeBot()
+
+    await _say(dp, bot, "who is Ivan Ivanov?", telegram_id=ADMIN_ID)
+
+    texts = _texts(bot)
+    assert texts[1] == kb._FOUND_SOMEONE, "the placeholder, resolved"
+    assert "Ivan Ivanov" in texts[-1]
+
+
+async def test_a_profile_pick_carries_the_admin_keyboard(monkeypatch):
+    factory = _session_factory()
+    _seed(factory)
+    _install_runtime(monkeypatch, profile_id=_ivan_id(factory))
+    dp, bot = build_dispatcher(session_factory=factory), FakeBot()
+
+    await _say(dp, bot, "who is Ivan Ivanov?", telegram_id=ADMIN_ID)
+
+    assert getattr(bot.sent[-1], "reply_markup", None) is not None, \
+        "an admin gets the same profile keyboard the roster search would give"
+
+
+async def test_a_profile_pick_drops_the_conversation(monkeypatch):
+    factory = _session_factory()
+    _seed(factory)
+    _, run = _install_runtime(monkeypatch, profile_id=_ivan_id(factory))
+    dp, bot = build_dispatcher(session_factory=factory), FakeBot()
+
+    await _say(dp, bot, "who is Ivan Ivanov?", telegram_id=ADMIN_ID)
+
+    assert history.as_input(history.conversation(ADMIN_ID)) == []
+
+
+async def test_a_profile_pick_is_logged_with_who_was_shown(monkeypatch):
+    factory = _session_factory()
+    _seed(factory)
+    _install_runtime(monkeypatch, profile_id=_ivan_id(factory),
+                     log_chat_id=LOG_CHAT)
+    dp, bot = build_dispatcher(session_factory=factory), FakeBot()
+
+    await _say(dp, bot, "who is Ivan Ivanov?", telegram_id=ADMIN_ID)
+
+    [entry] = _logged(bot)
+    assert "found a person" in entry
+    assert "shown: Ivan Ivanov" in entry
+
+
+async def test_a_profile_id_that_no_longer_exists_falls_back_to_no_one_found(
+        monkeypatch):
+    """The row was there when show_profile checked it and gone by the time
+    this ran -- vanishingly unlikely, but the honest answer is a roster
+    miss's, not a crash."""
+    factory = _session_factory()
+    _seed(factory)
+    _install_runtime(monkeypatch, profile_id=999999)
+    dp, bot = build_dispatcher(session_factory=factory), FakeBot()
+
+    await _say(dp, bot, "who is nobody?", telegram_id=ADMIN_ID)
+
+    assert _texts(bot)[-1] == NOTHING_MATCHED
 
 
 # --- /ask, which starts clean -------------------------------------------------------

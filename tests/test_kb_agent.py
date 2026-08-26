@@ -19,6 +19,7 @@ from openai.types.responses import (
 )
 
 from jbcub_bot.core.kb_snapshot import Note, Snapshot, Source
+from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.kb import agent as kb_agent
 from jbcub_bot.features.kb import tools, validate
 
@@ -391,6 +392,123 @@ def test_the_prompt_says_what_a_bare_name_is_and_what_it_is_not():
     assert "naming a course, a document, a place or a programme is not a " \
         "person" in rules
     assert "When you are unsure, answer" in rules
+
+
+# --- finding a specific person: search_people and show_profile -----------------
+
+def _seed_person(session) -> User:
+    person = User(first_name="Ivan", last_name="Petrov", role=Role.STUDENT,
+                 primary_cohort="2024")
+    session.add(person)
+    session.commit()
+    return person
+
+
+def _picks_profile(person_id: int) -> StubModel:
+    return StubModel([
+        [_call("search_people", '{"query": "Ivan Petrov"}')],
+        [_call("show_profile", '{"person_id": %d}' % person_id)],
+        # Scripted but never reached, same as `_declines` above.
+        [_text("never reached")],
+    ])
+
+
+async def test_search_people_then_show_profile_ends_the_run(session):
+    person = _seed_person(session)
+
+    out = await kb_agent.ask(_agent(_picks_profile(person.id)), _snapshot(),
+                             "who is Ivan Petrov?", [], session=session)
+
+    assert out.profile_id == person.id
+    assert out.text == "", "a profile pick is not an answer"
+
+
+async def test_the_profile_pick_ends_the_run_before_checking_and_sources(session):
+    person = _seed_person(session)
+    model = _picks_profile(person.id)
+
+    out = await kb_agent.ask(_agent(model), _sourced(), "who is Ivan Petrov?",
+                             [], session=session)
+
+    assert model.calls == 2, "the run ends at show_profile"
+    assert (out.sources, out.complaints) == ((), ())
+
+
+async def test_show_profile_with_an_unknown_id_is_refused_and_the_run_continues(
+        session):
+    model = StubModel([
+        [_call("show_profile", '{"person_id": 999999}')],
+        [_text("I could not find them.")],
+    ])
+
+    out = await kb_agent.ask(_agent(model), _snapshot(), "who is that?", [],
+                             session=session)
+
+    assert out.profile_id is None
+    assert out.text == "I could not find them."
+
+
+async def test_search_people_reports_a_clear_match_from_the_roster(session):
+    person = _seed_person(session)
+    model = StubModel([
+        [_call("search_people", '{"query": "Ivan Petrov"}')],
+        [_text("found them")],
+    ])
+
+    out = await kb_agent.ask(_agent(model), _snapshot(), "who is Ivan Petrov?",
+                             [], session=session)
+
+    assert out.text == "found them"
+    call = out.stats.calls[0]
+    assert call.name == "search_people"
+    assert call.result == "1 clear match"
+
+
+async def test_search_people_with_no_session_says_so():
+    model = StubModel([
+        [_call("search_people", '{"query": "Ivan"}')],
+        [_text("I could not check the roster.")],
+    ])
+
+    out = await kb_agent.ask(_agent(model), _snapshot(), "who is Ivan?", [])
+
+    assert out.text == "I could not check the roster."
+
+
+def test_the_agent_is_given_the_two_person_lookup_tools():
+    built = kb_agent.build_agent("m", client=None, model=StubModel([]))
+
+    names = {t.name for t in built.tools}
+    assert {"search_people", "show_profile"} <= names
+
+
+def test_the_prompt_lists_the_two_person_lookup_tools():
+    rules = kb_agent.SYSTEM_RULES
+
+    assert "search_people" in rules
+    assert "show_profile" in rules
+
+
+def test_the_prompt_says_a_person_may_be_findable_in_either_place():
+    """The roster is not the only place a person shows up -- the handbook
+    documents faculty and course assignments too, so the agent must try both
+    before concluding nobody exists or that the base says nothing about them.
+    A prior, more elaborate version split by question phrasing ("who is X" vs
+    "does X teach this course") and that let a person only in the handbook,
+    not the roster, be declared nonexistent without the base ever being
+    searched."""
+    rules = " ".join(kb_agent.SYSTEM_RULES.split())
+
+    assert "Try both search_people and the base" in rules
+    assert "before telling the reader nobody exists" in rules
+
+
+def test_the_prompt_lets_a_base_answer_stand_in_for_a_profile():
+    """When the base already names a person's role or contact, that answer,
+    not a profile pull, is what should go out."""
+    rules = " ".join(kb_agent.SYSTEM_RULES.split())
+
+    assert "When the base already answered the question" in rules
 
 
 # --- the stamp on every question ------------------------------------------------

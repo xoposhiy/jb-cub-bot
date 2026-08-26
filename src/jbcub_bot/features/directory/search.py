@@ -40,6 +40,22 @@ def rank_users(session, query: str, *,
     return hits
 
 
+def classify(ranked: list[tuple[float, User]]) -> tuple[User | None, list[User]]:
+    """A clear leader to show as a profile, or a shortlist close enough to name.
+
+    One rule, so a name-shaped query is judged the same way wherever it is
+    asked -- by the deterministic search on the chain and by the agent's own
+    `search_people` tool.
+    """
+    if not ranked:
+        return None, []
+    best, target = ranked[0]
+    runner_up = ranked[1][0] if len(ranked) > 1 else 0.0
+    if best - runner_up >= matching.LEAD:
+        return target, []
+    return None, [user for score, user in ranked if best - score <= matching.SPREAD]
+
+
 def list_cohort(session, primary_cohort: str, *,
                 include_departed: bool = False) -> list[User]:
     stmt = select(User).where(User.primary_cohort == primary_cohort)

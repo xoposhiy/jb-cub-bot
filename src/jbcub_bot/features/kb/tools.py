@@ -1,8 +1,11 @@
-"""The agent's whole world: three pure functions over a dict of notes.
+"""The agent's whole world: pure functions over a dict of notes, plus the two
+that read the roster.
 
 "No bash, no writes, no scripts" is a property of this module rather than an
 instruction a model could be talked out of — `read_note("../../.env")` is a
 missing dict key, not a path traversal, because there is no filesystem here.
+`search_people` is the one exception, a read against the same database every
+other feature already reads.
 
 Every result is clipped with a visible mark, so one tool call cannot fill the
 context window.
@@ -14,6 +17,8 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from jbcub_bot.core.kb_snapshot import Note, Snapshot
+from jbcub_bot.core.models import User
+from jbcub_bot.features.directory.search import classify, rank_users
 
 MAX_CHARS = 20000
 # A listing gets a looser cap than a note. The prompt now carries folders
@@ -51,6 +56,43 @@ def current_datetime(now: datetime) -> str:
     `now` is the caller's to supply, the way `sheets` takes `today`.
     """
     return f"{now:%A, %d %B %Y}, {now:%H:%M} UTC"
+
+
+# Past this many close matches the listing is noise, not a shortlist -- the
+# reader is better asked directly than shown twenty near-misses.
+MAX_PEOPLE_LISTED = 10
+
+
+def _describe_person(user: User) -> str:
+    """One line identifying a roster row well enough to tell it from another
+    with the same first name -- role and cohort, and the id `show_profile`
+    needs, since names alone are not always unique."""
+    bits = [user.full_name or "(no name)", user.role.value]
+    if user.primary_cohort:
+        bits.append(f"cohort {user.primary_cohort}")
+    return " — ".join(bits) + f" (id {user.id})"
+
+
+def search_people(session, query: str, *, include_departed: bool) -> str:
+    """Roster candidates for `query`, or the clear leader among them.
+
+    The same scoring and the same thresholds as the deterministic search that
+    runs on every message before this agent ever sees one -- `directory`'s
+    `classify` -- so a name is judged the same way whether it arrived bare or
+    inside a real question.
+    """
+    ranked = rank_users(session, query, include_departed=include_departed)
+    target, close = classify(ranked)
+    if target is not None:
+        return (f"One clear match: {_describe_person(target)}.\n"
+                f"Call show_profile with person_id {target.id} to show it.")
+    if close:
+        listing = "\n".join(f"- {_describe_person(u)}"
+                            for u in close[:MAX_PEOPLE_LISTED])
+        return (f"Several people could match {query!r}:\n{listing}\n"
+                "Call show_profile with whichever id is actually meant once "
+                "you are confident, or ask the reader which one they mean.")
+    return f"No one in the roster matches {query!r}."
 
 
 def list_notes(snapshot: Snapshot, path_prefix: str = "") -> str:
@@ -234,6 +276,15 @@ def summarize_result(name: str, output: str) -> str:
         if text.startswith(_NO_NOTE):
             return "no such note"
         return f"{_size(len(output))} chars" + (" (clipped)" if clipped else "")
+    if name == "search_people":
+        if text.startswith("No one in the roster matches"):
+            return "no match"
+        if text.startswith("One clear match"):
+            return "1 clear match"
+        candidates = text.count("\n- ")
+        return f"{candidates} candidate{'' if candidates == 1 else 's'}"
+    if name == "show_profile":
+        return "shown" if text.startswith("Understood") else "refused"
     if text.startswith(_NO_MATCH) or text.startswith(_NO_NOTES):
         return "0 hits"
     if not text:

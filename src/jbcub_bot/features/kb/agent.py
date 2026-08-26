@@ -4,8 +4,11 @@ The framework owns the tool cycle and the schemas it derives from these
 functions' signatures, so this module holds the tools, the prompts and the two
 follow-up questions — nothing else.
 
-The agent is given a way to decline the response if it looks like a person's name rather than a question 
-`looks_like_a_person_name` — and calling it ends the run.
+The agent is given a way to decline the response if it looks like a person's name rather than a question
+`looks_like_a_person_name` — and calling it ends the run. It can also find and
+show a profile itself, through `search_people` and `show_profile`, for a
+question that names one specific person rather than a bare name; `show_profile`
+ends the run the same way.
 
 What the agent writes is what the reader gets. There is no rendering step and
 nothing here edits its prose: the prompt says how to cite and `validate` says
@@ -43,8 +46,10 @@ from agents import (
 from agents.exceptions import MaxTurnsExceeded
 from openai import AsyncOpenAI
 from openai.types.shared import Reasoning
+from sqlalchemy.orm import Session
 
 from jbcub_bot.core.kb_snapshot import Snapshot, SnapshotStore
+from jbcub_bot.core.models import User
 from jbcub_bot.features.kb import tools, validate
 
 logger = logging.getLogger(__name__)
@@ -69,11 +74,13 @@ CUT_SHORT = ("I had to stop searching before I found a grounded answer — the "
 # rules that are about *this* caller rather than about the base.
 SYSTEM_RULES = """\
 You answer questions about the university programs from a knowledge base you \
-read through three tools: list_notes, search_notes and read_note. Three more \
-are not about the base: current_datetime, for when the answer turns on what \
-day it is; looks_like_a_person_name, for the rare message that is somebody's \
-name rather than a question; and choose_sources, which belongs to a question \
-that comes after your answer — leave that one alone until you are asked.
+read through three tools: list_notes, search_notes and read_note. The rest are \
+not about the base: current_datetime, for when the answer turns on what day it \
+is; looks_like_a_person_name, for the rare message that is somebody's name \
+rather than a question; search_people and show_profile, for a question that is \
+really about one specific person; and choose_sources, which belongs to a \
+question that comes after your answer — leave that one alone until you are \
+asked.
 
 When the message is a name and not a question:
 - The same box the reader types a question into also finds people by name, and \
@@ -82,11 +89,23 @@ looks_like_a_person_name when the whole message is nothing but a person's \
 name. That ends your turn; you are not answering that one, and the reader is \
 told the roster has nobody by that name.
 - A question with a name inside it is a question, and so is a request about \
-somebody. Only a bare name qualifies.
+somebody — that one is search_people's and show_profile's to answer below, not \
+looks_like_a_person_name's.
 - A bare word naming a course, a document, a place or a programme is not a \
 person, however unfamiliar it looks. Search for it.
 - When you are unsure, answer. A wrong verdict costs the reader their answer, \
 where a needless search costs a few seconds.
+
+Finding a specific person:
+- A person can be on the roster, documented in the base, in both, or in \
+neither. Try both search_people and the base (list_notes, search_notes) \
+before answering about somebody, and before telling the reader nobody exists \
+or that the base says nothing about them — never guess either from your own \
+knowledge.
+- show_profile shows the reader that person's roster profile and ends your \
+turn; nothing you write afterwards reaches them. Call it once you know who is \
+meant and a profile is the actual answer. When the base already answered the \
+question — their role, what they teach, who to contact — write that instead.
 
 Finding things:
 - You are given the base's folders. Call list_notes on the one that looks \
@@ -168,12 +187,17 @@ The program documents say nothing about that.
 
 @dataclass
 class Ask:
-    """What one run is given: the base to read, and who is asking.
+    """What one run is given: the base to read, the roster to search, and who
+    is asking.
 
     `about` is a short line such as "role: teacher · cohort: 2024". It saves a
     round trip: a cohort implies a programme and a calendar year, so "which
     courses are in my programme" becomes answerable without a clarifying
     question.
+
+    `session` and `include_departed` are what `search_people` needs to read the
+    same roster the deterministic search reads, and nothing more -- the tool
+    never touches the caller's own row or writes anything.
 
     `options` and `chosen` belong to the follow-up question about sources.
     They sit here rather than in a context of their own because that question
@@ -185,16 +209,19 @@ class Ask:
     rather than through a second set of instructions, which is the same trick
     the empty `options` above plays: the prompt is the prefix the provider
     caches on, and two versions of it would be two prefixes to pay for.
-    `person_name` is where the verdict lands, and the reason this dataclass is
-    not frozen -- the two lists above are mutated in place, but a string cannot
-    be.
+    `person_name` and `profile_id` are where the two verdicts land, and the
+    reason this dataclass is not frozen -- the two lists above are mutated in
+    place, but a string or an int cannot be.
     """
     snapshot: Snapshot
+    session: Session | None = None
     about: str = ""
+    include_departed: bool = False
     options: list[str] = field(default_factory=list)
     chosen: list[tools.SourceRef] = field(default_factory=list)
     check_names: bool = True
     person_name: str = ""
+    profile_id: int | None = None
 
 
 @function_tool(strict_mode=False)
@@ -265,19 +292,70 @@ def looks_like_a_person_name(ctx: RunContextWrapper[Ask], name: str) -> str:
     return VERDICT_TAKEN
 
 
-async def _stop_on_a_name(ctx: RunContextWrapper[Ask],
-                          results) -> ToolsToFinalOutputResult:
-    """End the run the moment the agent declines, and never otherwise.
+async def _stop_on_a_verdict(ctx: RunContextWrapper[Ask],
+                             results) -> ToolsToFinalOutputResult:
+    """End the run the moment the agent declines or picks a profile, and never
+    otherwise.
 
-    A verdict is not an answer, so there is nothing left to write: letting the
-    loop go round once more would buy a closing sentence nobody reads. It has
-    to be this rather than the framework's `StopAtTools`, which stops on the
-    call and cannot see that /ask turned the check off — the refusal above has
-    to leave the run going.
+    Neither a verdict nor a profile pick is an answer, so there is nothing
+    left to write: letting the loop go round once more would buy a closing
+    sentence nobody reads. It has to be this rather than the framework's
+    `StopAtTools`, which stops on the call itself and cannot see that /ask
+    turned the name check off — that refusal has to leave the run going.
     """
-    if ctx.context.person_name:
+    if ctx.context.person_name or ctx.context.profile_id is not None:
         return ToolsToFinalOutputResult(is_final_output=True, final_output="")
     return ToolsToFinalOutputResult(is_final_output=False)
+
+
+@function_tool(strict_mode=False)
+async def search_people(ctx: RunContextWrapper[Ask], query: str) -> str:
+    """Search the roster for a person by name.
+
+    Call this when the message is really about one specific person -- who
+    they are, what they teach, what cohort they are in -- rather than about
+    the program in general. The base has no student or staff directory in it,
+    so this is the only grounded way to answer a question like that; never
+    guess an answer about a person from your own knowledge.
+
+    Async, unlike the base's own tools, so the framework calls it on this
+    event loop's own thread rather than a worker one -- the session behind it
+    is a synchronous one, bound to the thread that opened it, exactly like
+    every other feature already reads the same roster.
+
+    Args:
+        query: the person's name, or the part of it the message gives.
+    """
+    if ctx.context.session is None:
+        return "The roster is not available in this run."
+    return tools.search_people(ctx.context.session, query,
+                               include_departed=ctx.context.include_departed)
+
+
+SHOW_PROFILE_TAKEN = ("Understood — the reader is being shown that profile "
+                     "now. Nothing further is needed from you.")
+SHOW_PROFILE_UNKNOWN_ID = ("There is no such id. Call search_people again and "
+                          "use one of the ids it gives you.")
+
+
+@function_tool(strict_mode=False)
+async def show_profile(ctx: RunContextWrapper[Ask], person_id: int) -> str:
+    """Show the reader this person's profile, and end the run.
+
+    Only for an id search_people just gave you, never a guess. The reader has
+    their answer the moment you call this; write nothing else afterwards.
+
+    Async for the same reason search_people is -- the session it checks the
+    id against belongs to this thread.
+
+    Args:
+        person_id: the id from search_people's listing.
+    """
+    if (ctx.context.session is None
+            or ctx.context.session.get(User, person_id) is None):
+        return SHOW_PROFILE_UNKNOWN_ID
+    ctx.context.profile_id = person_id
+    return SHOW_PROFILE_TAKEN
 
 
 @function_tool(strict_mode=False)
@@ -375,11 +453,12 @@ def build_agent(model_name: str, client, model=None,
         name="kb-search",
         instructions=instructions,
         tools=[list_notes, search_notes, read_note, current_datetime,
-               looks_like_a_person_name, choose_sources],
+               looks_like_a_person_name, search_people, show_profile,
+               choose_sources],
         model=model or OpenAIResponsesModel(model=model_name,
                                             openai_client=client),
         model_settings=_model_settings(reasoning_effort),
-        tool_use_behavior=_stop_on_a_name,
+        tool_use_behavior=_stop_on_a_verdict,
     )
 
 
@@ -464,6 +543,11 @@ class Answer:
     `person_name` is non-empty when the agent declined instead of answering.
     Then `text` is empty and there is nothing else here to use: the caller says
     "No one found." and drops the conversation.
+
+    `profile_id` is set instead when the agent found the person and called
+    show_profile. `text` is empty here too -- the caller renders that person's
+    profile and drops the conversation, the same way a bare name found on the
+    chain would have.
     """
     text: str
     question: str
@@ -471,6 +555,7 @@ class Answer:
     sources: tuple[tools.SourceRef, ...] = ()
     complaints: tuple[str, ...] = ()  # what the check said, for the admin trace
     person_name: str = ""
+    profile_id: int | None = None
 
 
 def stamp(question: str, now: datetime | None = None) -> str:
@@ -502,7 +587,8 @@ def notes_read(calls: tuple[ToolCall, ...]) -> list[str]:
 
 async def ask(agent: Agent, snapshot: Snapshot, question: str, history: list,
               about: str = "", check_names: bool = True,
-              now: datetime | None = None) -> Answer:
+              now: datetime | None = None, session: Session | None = None,
+              include_departed: bool = False) -> Answer:
     """One question, checked once, taken as it stands, then asked what it used.
 
     A first answer that trips a check is handed the complaint and asked again,
@@ -516,9 +602,10 @@ async def ask(agent: Agent, snapshot: Snapshot, question: str, history: list,
     same conversation, so the provider's cache carries the history for nearly
     nothing.
 
-    A verdict short-circuits both of those. There is nothing to check in an
-    answer that was never written and nothing to attach to it, so the run ends
-    at the tool call and its cost is the whole of what comes back.
+    A verdict, or a profile picked with show_profile, short-circuits both of
+    those. There is nothing to check in an answer that was never written and
+    nothing to attach to it, so the run ends at the tool call and its cost is
+    the whole of what comes back.
 
     An exhausted turn budget answers with a fixed line. Its statistics still
     come back -- a run that cost every turn and produced nothing is exactly the
@@ -528,14 +615,21 @@ async def ask(agent: Agent, snapshot: Snapshot, question: str, history: list,
     builds it out of question/answer pairs. What comes back is deliberately not
     the run's own input list: tool calls and note texts dwarf everything else
     in it, and none of that is worth carrying to the next question.
+
+    `session` and `include_departed` reach `search_people` through the run
+    context; a caller with no session -- a test that never exercises that tool
+    -- need not supply one.
     """
-    context = Ask(snapshot=snapshot, about=about, check_names=check_names)
+    context = Ask(snapshot=snapshot, session=session, about=about,
+                  include_departed=include_departed, check_names=check_names)
     asked = stamp(question, now)
     first = await _run(agent, list(history) + [{"role": "user",
                                                "content": asked}], context)
     if context.person_name:
         return Answer("", asked, first.stats,
                       person_name=context.person_name)
+    if context.profile_id is not None:
+        return Answer("", asked, first.stats, profile_id=context.profile_id)
     if first.cut_short:
         return Answer(CUT_SHORT, asked, first.stats)
 

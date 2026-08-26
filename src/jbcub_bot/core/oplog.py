@@ -132,6 +132,22 @@ def format_kb_rate_limited(limit: int, principal=None, tg_user=None) -> str:
     ])
 
 
+def format_kb_person_found(question: str, target_name: str, principal=None,
+                           tg_user=None) -> str:
+    """The head of one entry for a question the agent answered by showing a
+    profile instead of writing words -- `search_people` and `show_profile`.
+
+    The caller appends the trace, same as `format_kb_question`, so the cost of
+    finding them sits under the question that caused it.
+    """
+    return "\n".join([
+        "🔎 Knowledge base found a person",
+        f"from: {describe_sender(principal, tg_user)}",
+        f"question: «{clip(question)}»",
+        f"shown: {target_name}",
+    ])
+
+
 def format_kb_question(question: str, principal=None, tg_user=None) -> str:
     """The head of one entry per question put to the knowledge base.
 

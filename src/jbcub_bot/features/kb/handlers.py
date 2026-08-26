@@ -9,9 +9,15 @@ which looks exactly like a one-word question; that one is the agent's to
 decline, through `looks_like_a_person_name`, and the reader gets the same
 "No one found." the search itself would have given.
 
-`/ask` is the way past all of that: it drops the conversation and bypasses both
-the search and the name check, which makes it the only way to ask the agent
-*about* a person by name.
+A question that names a specific person, rather than a bare name, still
+reaches the agent -- the deterministic search only catches a name on its own.
+`search_people` and `show_profile` are the agent's own version of what the
+roster search does for a bare name: this feature renders and sends the profile
+it picked and drops the conversation the same way a name verdict does.
+
+`/ask` is the way past the name check: it drops the conversation and bypasses
+both the search and the check, so a bare name that the roster does carry
+reaches search_people instead of being declined outright.
 
 Both refusals on the chain -- an unconfigured runtime, an exhausted hourly
 budget -- decline rather than explain. Someone who mistyped a surname is not
@@ -37,6 +43,13 @@ from jbcub_bot.core import oplog as oplog_mod
 from jbcub_bot.core.config import get_settings
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.core.pipeline import NOTHING_MATCHED
+from jbcub_bot.features.directory import grades
+from jbcub_bot.features.directory.handlers import is_admin
+from jbcub_bot.features.directory.render import (
+    profile_entities,
+    profile_keyboard,
+    render_profile,
+)
 from jbcub_bot.features.kb import history
 from jbcub_bot.features.kb import pdf as pdf_mod
 from jbcub_bot.features.kb import render as render_mod
@@ -62,6 +75,9 @@ _ASK_ALONE = ("Ask me anything about the program — just type it, or put the "
               "question right after /ask.")
 _RATE_LIMITED = ("The knowledge base is getting a lot of questions right now — "
                  "try again in a few minutes.")
+# What the placeholder becomes once show_profile picked somebody -- the
+# profile itself follows as its own message, so this is never the last word.
+_FOUND_SOMEONE = "🔎 Found them — see below."
 
 
 logger = logging.getLogger(__name__)
@@ -165,6 +181,41 @@ async def _attach_sources(bot, message: Message, live, snapshot,
         except TelegramAPIError:
             logger.warning("could not send the source links", exc_info=True)
     return sent, last
+
+
+async def _show_profile(bot: Bot, target: Message, looking: Message,
+                        principal: User, session, live, tg_user,
+                        impersonator, question: str, result) -> None:
+    """Render the profile show_profile picked, and drop the conversation the
+    same way a name verdict does -- the reader has their answer either way.
+
+    A second message rather than an edit of the placeholder: a profile carries
+    a keyboard and a source hyperlink, and Telegram takes those through
+    `reply_markup` and `entities`, not through the parse mode `_reveal` edits
+    the placeholder with.
+    """
+    chat_id = target.chat.id
+    person = session.get(User, result.profile_id)
+    if person is None:
+        # The row was gone by the time this ran -- deleted between the tool
+        # call and here. Nothing to show; the honest answer is the one a
+        # roster miss already gives.
+        await _reveal(bot, target, looking, NOTHING_MATCHED)
+        history.drop(chat_id)
+        await _log_miss(bot, live, principal, tg_user, impersonator, question,
+                        result)
+        return
+    await _reveal(bot, target, looking, _FOUND_SOMEONE)
+    show_grades = grades.has_grades(session, person.id)
+    text = render_profile(principal, person)
+    await target.answer(
+        text,
+        reply_markup=profile_keyboard(principal, person, show_grades=show_grades),
+        entities=profile_entities(principal, person, text),
+    )
+    history.drop(chat_id)
+    await _log_profile_shown(bot, live, principal, tg_user, question, person,
+                             result)
 
 
 # The runtime is process-wide and built on first use: get_settings() must not
@@ -378,6 +429,20 @@ async def _log_miss(bot, live, principal, tg_user, impersonator, question,
     await _send_with_trace(bot, live, head, result)
 
 
+async def _log_profile_shown(bot, live, principal, tg_user, question,
+                             person: User, result) -> None:
+    """search_people and show_profile, in the same feed a question costs.
+
+    A hit rather than a miss, but the same reasoning as `_log_miss`: the
+    reader already has their answer, and this is where whoever runs the bot
+    finds out the agent spent a turn finding somebody rather than answering
+    from the base.
+    """
+    head = oplog_mod.format_kb_person_found(question, person.full_name,
+                                            principal, tg_user)
+    await _send_with_trace(bot, live, head, result)
+
+
 async def _send_with_trace(bot, live, head: str, result) -> None:
     room = render_mod.CLIP_LIMIT - len(head) - 1
     trace = render_mod.trace_message(result.stats, result.complaints,
@@ -406,7 +471,7 @@ async def _log_rate_limit(bot, live, principal, tg_user) -> None:
 # --- the two ways in -----------------------------------------------------------
 
 async def answer_question(message: Message, principal: User, bot: Bot,
-                          impersonator) -> bool:
+                          session, impersonator) -> bool:
     """The chain slot at `AGENT`: whatever the roster search declined.
 
     `False` back means nothing here answered and the core's last word gets to,
@@ -423,18 +488,20 @@ async def answer_question(message: Message, principal: User, bot: Bot,
     if _budget_spent(live.rate_limit, live.rate_window_seconds):
         await _log_rate_limit(bot, live, principal, message.from_user)
         return False
-    await _put(message, principal, bot, live, message.text, message.from_user,
-               impersonator, check_names=True)
+    await _put(message, principal, bot, session, live, message.text,
+               message.from_user, impersonator, check_names=True)
     return True
 
 
-async def cmd_ask(message: Message, principal: User, bot: Bot, arg: str,
-                  impersonator):
+async def cmd_ask(message: Message, principal: User, bot: Bot, session,
+                  arg: str, impersonator):
     """Start clean. The conversation goes, and so does the name check.
 
-    Bypassing the check is what makes this the only way to ask the agent about
-    a person by name: on the chain, "Dr Weber" would be declined as a name the
-    roster does not carry.
+    Bypassing the check is what lets this ask about a bare name the chain
+    would otherwise decline outright: "Dr Weber" on the chain never reaches
+    search_people, because looks_like_a_person_name takes it first. A question
+    with a name inside it -- "who is Dr Weber" -- reaches search_people either
+    way, /ask or not.
     """
     live = runtime()
     if live is None:
@@ -452,8 +519,8 @@ async def cmd_ask(message: Message, principal: User, bot: Bot, arg: str,
         await message.answer(_RATE_LIMITED)
         await _log_rate_limit(bot, live, principal, message.from_user)
         return
-    await _put(message, principal, bot, live, question, message.from_user,
-               impersonator, check_names=False)
+    await _put(message, principal, bot, session, live, question,
+               message.from_user, impersonator, check_names=False)
 
 
 async def cmd_kb_reload(message: Message, principal: User):
@@ -468,8 +535,9 @@ async def cmd_kb_reload(message: Message, principal: User):
     )
 
 
-async def _put(target: Message, principal: User, bot: Bot, live, question: str,
-               tg_user, impersonator, *, check_names: bool) -> None:
+async def _put(target: Message, principal: User, bot: Bot, session, live,
+               question: str, tg_user, impersonator, *,
+               check_names: bool) -> None:
     """One question to the agent, and whatever it says back."""
     chat_id = target.chat.id
     chat = history.conversation(chat_id)
@@ -477,7 +545,8 @@ async def _put(target: Message, principal: User, bot: Bot, live, question: str,
     snapshot = await live.store.get()
     result = await ask(live.agent, snapshot, question, history.as_input(chat),
                        about=describe_asker(principal),
-                       check_names=check_names)
+                       check_names=check_names, session=session,
+                       include_departed=is_admin(principal))
 
     if result.person_name:
         # Not an answer, so nothing here attaches, traces or remembers: the
@@ -486,6 +555,11 @@ async def _put(target: Message, principal: User, bot: Bot, live, question: str,
         history.drop(chat_id)
         await _log_miss(bot, live, principal, tg_user, impersonator, question,
                         result)
+        return
+
+    if result.profile_id is not None:
+        await _show_profile(bot, target, looking, principal, session, live,
+                            tg_user, impersonator, question, result)
         return
 
     # The agent's own words, clipped only if it wrote past what Telegram takes.

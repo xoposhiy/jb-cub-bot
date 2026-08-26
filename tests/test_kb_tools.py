@@ -3,6 +3,7 @@ missing key rather than a filesystem call, so that is what these prove."""
 from datetime import UTC, datetime
 
 from jbcub_bot.core.kb_snapshot import Note, Snapshot, Source
+from jbcub_bot.core.models import Role, User
 from jbcub_bot.features.kb import tools
 
 
@@ -218,3 +219,87 @@ def test_a_missing_note_says_so_rather_than_reporting_its_error_text_size():
                                      tools.read_note(snapshot, "kb/ghost.md"))
 
     assert summary == "no such note"
+
+
+# --- search_people, the roster read this module makes an exception for ------
+
+def _seed_roster(session):
+    ivan = User(first_name="Ivan", last_name="Petrov", role=Role.STUDENT,
+               primary_cohort="2024")
+    weber = User(first_name="Anna", last_name="Weber", role=Role.TEACHER)
+    session.add_all([ivan, weber])
+    session.commit()
+    return ivan, weber
+
+
+def test_search_people_says_nobody_matches(session):
+    _seed_roster(session)
+
+    result = tools.search_people(session, "Egorov", include_departed=False)
+
+    assert result == "No one in the roster matches 'Egorov'."
+
+
+def test_search_people_names_the_clear_leader_and_its_id(session):
+    ivan, _ = _seed_roster(session)
+
+    result = tools.search_people(session, "Ivan Petrov", include_departed=False)
+
+    assert "One clear match" in result
+    assert f"id {ivan.id}" in result
+    assert f"person_id {ivan.id}" in result
+
+
+def test_search_people_lists_a_shortlist_when_nobody_clearly_leads(session):
+    a = User(first_name="Anna", last_name="Smith", role=Role.STUDENT)
+    b = User(first_name="Anna", last_name="Smyth", role=Role.STUDENT)
+    session.add_all([a, b])
+    session.commit()
+
+    result = tools.search_people(session, "Anna", include_departed=False)
+
+    assert "Several people could match" in result
+    assert f"id {a.id}" in result
+    assert f"id {b.id}" in result
+
+
+def test_search_people_hides_a_departed_person_by_default(session):
+    weber = User(first_name="Anna", last_name="Weber", role=Role.TEACHER,
+                departed_at="2026-01-01")
+    session.add(weber)
+    session.commit()
+
+    result = tools.search_people(session, "Anna Weber", include_departed=False)
+
+    assert "No one in the roster matches" in result
+
+
+def test_search_people_finds_a_departed_person_for_an_admin(session):
+    weber = User(first_name="Anna", last_name="Weber", role=Role.TEACHER,
+                departed_at="2026-01-01")
+    session.add(weber)
+    session.commit()
+
+    result = tools.search_people(session, "Anna Weber", include_departed=True)
+
+    assert "One clear match" in result
+
+
+def test_search_people_result_is_summarized_for_the_admin_trace():
+    assert tools.summarize_result(
+        "search_people", "No one in the roster matches 'x'.") == "no match"
+    assert tools.summarize_result(
+        "search_people", "One clear match: A (id 1).\nCall show_profile "
+        "with person_id 1 to show it.") == "1 clear match"
+    listing = ("Several people could match 'x':\n- A (id 1)\n- B (id 2)\n"
+              "Call show_profile with whichever id is actually meant once "
+              "you are confident, or ask the reader which one they mean.")
+    assert tools.summarize_result("search_people", listing) == "2 candidates"
+
+
+def test_show_profile_result_is_summarized_for_the_admin_trace():
+    assert tools.summarize_result("show_profile", "Understood — the reader "
+                                  "is being shown that profile now. Nothing "
+                                  "further is needed from you.") == "shown"
+    assert tools.summarize_result(
+        "show_profile", "There is no such id.") == "refused"

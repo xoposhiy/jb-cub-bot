@@ -26,7 +26,7 @@ from jbcub_bot.features.directory.render import (
     profile_keyboard,
     render_profile,
 )
-from jbcub_bot.features.directory.search import rank_users
+from jbcub_bot.features.directory.search import classify, rank_users
 
 from jbcub_bot.core.sheets_client import build_credentials, fetch_rows
 from jbcub_bot.features.directory import sheets
@@ -45,7 +45,7 @@ def set_status(session, user: User, text: str) -> None:
 
 
 def is_admin(principal: User | None) -> bool:
-    """Whether a departed profile is theirs to see. Named because name_search asks."""
+    """Whether a departed profile is theirs to see."""
     return principal is not None and principal.role is Role.ADMIN
 
 
@@ -218,11 +218,10 @@ async def name_search(message: Message, principal: User, session) -> bool:
     """
     ranked = rank_users(session, (message.text or "").strip(),
                         include_departed=is_admin(principal))
-    if not ranked:
+    target, close = classify(ranked)
+    if target is None and not close:
         return False
-    best, target = ranked[0]
-    runner_up = ranked[1][0] if len(ranked) > 1 else 0.0
-    if best - runner_up >= matching.LEAD:
+    if target is not None:
         show = grades.has_grades(session, target.id) if target.id is not None else False
         text = render_profile(principal, target)
         await message.answer(
@@ -231,7 +230,6 @@ async def name_search(message: Message, principal: User, session) -> bool:
             entities=profile_entities(principal, target, text),
         )
         return True
-    close = [user for score, user in ranked if best - score <= matching.SPREAD]
     lines = [f"- {user.full_name}" for user in close[:20]]
     await message.answer("Several people match:\n" + "\n".join(lines))
     return True
