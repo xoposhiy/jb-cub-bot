@@ -8,6 +8,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    MessageEntity,
 )
 from sqlalchemy import delete, select
 
@@ -182,25 +183,55 @@ def has_grades(session, user_id: int) -> bool:
     ) is not None
 
 
-def _render_body(rows: list[Grade]) -> str:
-    lines = []
+def _utf16_len(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _screen_lines(term: str, rows: list[Grade]) -> list[tuple[str, bool]]:
+    """Every line of the screen, each marked bold or not.
+
+    The term and each category name are the section headers; sharing this
+    list between `render_screen` and `grade_entities` keeps the bold spans
+    from ever drifting out of sync with the text they mark.
+    """
+    lines: list[tuple[str, bool]] = [(term, True), ("", False)]
     last_category = None
     for grade in rows:
         if grade.category:
             if grade.category != last_category:
-                lines.append(grade.category)
+                lines.append((grade.category, True))
                 last_category = grade.category
         else:
             last_category = None
-        lines.append(f"• {grade.label}: {grade.value}")
-    return "\n".join(lines)
+        lines.append((f"• {grade.label}: {grade.value}", False))
+    return lines
 
 
 def render_screen(term: str, rows: list[Grade]) -> str:
-    text = f"{term}\n\n{_render_body(rows)}"
+    text = "\n".join(line for line, _bold in _screen_lines(term, rows))
     if len(text) > _TEXT_LIMIT:
         text = text[: _TEXT_LIMIT - len(_TRUNCATE_MARK)] + _TRUNCATE_MARK
     return text
+
+
+def grade_entities(term: str, rows: list[Grade], text: str) -> list[MessageEntity]:
+    """Bold the term and each category, so a long screen reads in sections
+    instead of one dense block of bullets.
+
+    Takes the already-rendered `text` so that if it was truncated, no entity
+    ever points past the end of it.
+    """
+    limit = _utf16_len(text)
+    entities = []
+    offset = 0
+    for line, bold in _screen_lines(term, rows):
+        length = _utf16_len(line)
+        if bold and length and offset + length <= limit:
+            entities.append(
+                MessageEntity(type="bold", offset=offset, length=length)
+            )
+        offset += length + 1  # the joining "\n"
+    return entities
 
 
 def semester_keyboard(
@@ -253,6 +284,7 @@ async def cb_grades(cb: CallbackQuery, principal: User, session, arg: str):
         await cb.message.edit_text(
             screen,
             reply_markup=semester_keyboard(matriculation, terms, active=term),
+            entities=grade_entities(term, groups[term], screen),
         )
     await cb.answer()
 

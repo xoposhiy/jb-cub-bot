@@ -96,6 +96,21 @@ async def test_open_latest_and_switch_to_explicit_term(session):
     assert _button_texts(earlier)[:2] == ["📍 Fall 2025", "Spring 2026"]
 
 
+async def test_the_term_and_each_category_are_bold(session):
+    """A long list of grades reads in sections, not one dense block."""
+    _student_with_grades(session)
+    admin = User(last_name="Admin", role=Role.ADMIN)
+    opened = _callback()
+
+    await grades.cb_grades(opened, principal=admin, session=session,
+                           arg="30000001:0")
+
+    text = opened.message.edit_text.await_args.args[0]
+    kwargs = opened.message.edit_text.await_args.kwargs
+    bold = [text[e.offset:e.offset + e.length] for e in kwargs["entities"]]
+    assert bold == ["Fall 2025", "Mandatory"]
+
+
 def test_marking_the_open_semester_leaves_callback_data_alone():
     keyboard = grades.semester_keyboard(
         "30000001", ["Fall 2025", "Spring 2026"], active="Spring 2026"
