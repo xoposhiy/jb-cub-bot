@@ -705,6 +705,53 @@ async def test_a_students_question_is_logged_like_anybody_elses(monkeypatch):
     assert len(_logged(bot)) == 1
 
 
+# --- a bootstrap admin's own traffic stays out of the ops chat -----------------
+
+async def test_a_bootstrap_admins_question_is_not_logged(monkeypatch):
+    """Debugging traffic is not what the ops chat is for watching."""
+    dp, bot, _, _ = _setup(monkeypatch, log_chat_id=LOG_CHAT,
+                           admin_ids=(TEACHER_ID,))
+
+    await _say(dp, bot, QUESTION)
+
+    assert _logged(bot) == []
+
+
+async def test_a_bootstrap_admins_name_verdict_is_not_logged(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch, verdict="Егоров", log_chat_id=LOG_CHAT,
+                           admin_ids=(TEACHER_ID,))
+
+    await _say(dp, bot, "Егоров")
+
+    assert _logged(bot) == []
+
+
+async def test_a_bootstrap_admins_profile_pick_is_not_logged(monkeypatch):
+    factory = _session_factory()
+    _seed(factory)
+    _install_runtime(monkeypatch, profile_id=_ivan_id(factory),
+                     log_chat_id=LOG_CHAT, admin_ids=(ADMIN_ID,))
+    dp, bot = build_dispatcher(session_factory=factory), FakeBot()
+
+    await _say(dp, bot, "who is Ivan Ivanov?", telegram_id=ADMIN_ID)
+
+    assert _logged(bot) == []
+
+
+async def test_a_bootstrap_admins_rating_tap_is_not_logged(monkeypatch):
+    dp, bot, _, _ = _setup(monkeypatch, log_chat_id=LOG_CHAT,
+                           admin_ids=(TEACHER_ID,))
+    await _say(dp, bot, QUESTION)
+    rated = _rating_buttons(bot)[0]
+
+    await dp.feed_update(bot, _callback(bot, TEACHER_ID,
+                                        f"{kb.RATE_CALLBACK}:good",
+                                        update_id=2, on_message=rated),
+                         dispatcher=dp)
+
+    assert _logged(bot) == []
+
+
 # --- the rating pair --------------------------------------------------------------
 
 async def test_an_answer_carries_the_rating_pair(monkeypatch):

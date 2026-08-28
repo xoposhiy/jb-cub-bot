@@ -384,7 +384,7 @@ async def _log_feedback(bot, good: bool, principal, tg_user) -> None:
     remember to check.
     """
     live = runtime()
-    if live is None:
+    if live is None or _is_bootstrap_admin(live, tg_user):
         return
     log = oplog_mod.OpsLog(bot, live.log_chat_id, live.admin_ids)
     await log.send(oplog_mod.format_kb_feedback(good, principal, tg_user))
@@ -406,6 +406,17 @@ async def cb_rate(cb: CallbackQuery, principal: User, bot: Bot, arg: str):
 
 # --- what the ops chat is told -------------------------------------------------
 
+def _is_bootstrap_admin(live, tg_user) -> bool:
+    """Whether the real sender is a bootstrap admin poking at the bot.
+
+    The ops chat is for watching what everybody else asks; a bootstrap admin
+    debugging or experimenting would otherwise read their own traffic back to
+    themselves on every question. `/as` does not change who this is, since it
+    only relabels the principal, not who actually sent the message.
+    """
+    return tg_user is not None and tg_user.id in live.admin_ids
+
+
 async def _log_question(bot, live, principal, tg_user, question,
                         result) -> None:
     """Put the question, and what it cost, in the ops chat.
@@ -414,6 +425,8 @@ async def _log_question(bot, live, principal, tg_user, question,
     asked is waiting on the answer, and a report is never worth delaying it.
     `OpsLog` swallows its own delivery failures, so there is nothing to guard.
     """
+    if _is_bootstrap_admin(live, tg_user):
+        return
     head = oplog_mod.format_kb_question(question, principal, tg_user)
     await _send_with_trace(bot, live, head, result)
 
@@ -427,6 +440,8 @@ async def _log_miss(bot, live, principal, tg_user, impersonator, question,
     run's cost, because a miss that spent a model turn is the one worth
     counting.
     """
+    if _is_bootstrap_admin(live, tg_user):
+        return
     head = oplog_mod.format_miss(query=question, answer=NOTHING_MATCHED,
                                  principal=principal, tg_user=tg_user,
                                  impersonator=impersonator)
@@ -442,6 +457,8 @@ async def _log_profile_shown(bot, live, principal, tg_user, question,
     finds out the agent spent a turn finding somebody rather than answering
     from the base.
     """
+    if _is_bootstrap_admin(live, tg_user):
+        return
     head = oplog_mod.format_kb_person_found(question, person.full_name,
                                             principal, tg_user)
     await _send_with_trace(bot, live, head, result)
