@@ -41,7 +41,8 @@ async def test_invite_links_an_account_whose_handle_differs_from_the_sheet(sessi
     message = _message(777, "ivan_new")
     await _start(message, session, payload=token)
 
-    message.answer.assert_awaited_once_with("Linked as I Ivan.")
+    message.answer.assert_awaited_once_with(
+        f"Linked as I Ivan.\n\n{handlers.WELCOME_BLURB}")
     assert ivan.telegram_id == 777
     assert ivan.handle_observed == "ivan_new"  # observed handle wins
     assert ivan.handle_sheet == "ivan_old"  # /sync's column is left alone
@@ -82,7 +83,8 @@ async def test_invite_for_your_own_profile_is_harmless(session):
     message = _message(777, "ivan")
     await _start(message, session, principal=ivan, payload=token)
 
-    message.answer.assert_awaited_once_with("Linked as I Ivan.")
+    message.answer.assert_awaited_once_with(
+        f"Linked as I Ivan.\n\n{handlers.WELCOME_BLURB}")
     assert ivan.telegram_id == 777
 
 

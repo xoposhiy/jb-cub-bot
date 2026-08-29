@@ -354,6 +354,16 @@ async def cb_reset_cancel(cb: CallbackQuery, principal: User, session):
     await cb.answer()
 
 
+# Said once a caller is recognized, whether that recognition already existed
+# (a returning /start) or was just created (a fresh /start <token>) -- the
+# same two sentences either way, so this is the one place that wording lives.
+WELCOME_BLURB = (
+    "Welcome! I can search for contacts of people in the program and answer "
+    "questions about the program or the university. Type /help for more "
+    "details.\n\nTry /me to see how others see your profile."
+)
+
+
 async def cmd_start(message: Message, principal: User, session, arg: str):
     settings = get_settings()
     payload = arg
@@ -376,10 +386,10 @@ async def cmd_start(message: Message, principal: User, session, arg: str):
             return
         identity.bind_by_token(session, message.from_user.id,
                                message.from_user.username, user)
-        await message.answer(f"Linked as {user.full_name}.")
+        await message.answer(f"Linked as {user.full_name}.\n\n{WELCOME_BLURB}")
         return
     if principal is not None:
-        await message.answer(f"Welcome back, {principal.full_name}.")
+        await message.answer(WELCOME_BLURB)
     else:
         await message.answer(
             "I couldn't recognize you. Ask a program admin for a one-time link."

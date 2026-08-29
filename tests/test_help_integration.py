@@ -17,6 +17,7 @@ from aiogram.types import User as TgUser
 
 from jbcub_bot.core.db import Base
 from jbcub_bot.core.models import Role, User
+from jbcub_bot.features.help.render import CONTACT_NOTICE
 from jbcub_bot.main import build_dispatcher
 
 
@@ -155,7 +156,9 @@ async def test_an_unlinked_caller_sees_the_public_commands_and_the_notice():
         "❓ Help — Commands you can use.\n"
         "  /help — List the commands you can use.\n"
         "\n"
-        "You're not linked yet — ask a program admin for a one-time link."
+        "You're not linked yet — ask a program admin for a one-time link.\n"
+        "\n"
+        f"{CONTACT_NOTICE}"
     )
 
 
@@ -167,7 +170,7 @@ async def test_the_features_are_listed_in_discovery_order():
     out = await _run_help(_with_admin(), 777)
 
     headings = [line for line in out.splitlines() if not line.startswith("  ")
-                and line]
+                and line and line != CONTACT_NOTICE]
     assert [heading.split(" — ")[0] for heading in headings] == [
         "📒 Directory", "❓ Help", "🕵️ Impersonate", "📚 Kb",
     ]

@@ -1,6 +1,10 @@
 """What /help says: grouped by feature, with the role on the line."""
 from jbcub_bot.core.contract import Registry
-from jbcub_bot.features.help.render import UNLINKED_NOTICE, render_help
+from jbcub_bot.features.help.render import (
+    CONTACT_NOTICE,
+    UNLINKED_NOTICE,
+    render_help,
+)
 from jbcub_bot.core.models import Role, User
 from jbcub_bot.core.pipeline import LOOKUP
 
@@ -176,7 +180,8 @@ def test_a_string_note_is_a_line_of_its_own():
     bot.note("The base holds the handbook.")
     out = render_help(registry.features(), _student())
     assert out == ("📚 Knowledge base — Ask about the program.\n"
-                   "  The base holds the handbook.")
+                   "  The base holds the handbook.\n\n"
+                   f"{CONTACT_NOTICE}")
 
 
 def test_a_callable_note_is_resolved_with_the_principal():
@@ -216,7 +221,10 @@ def test_a_note_carries_no_badge():
     # A note is prose, not something to type: it says who it is for itself, and
     # its guard already keeps it away from anyone else.
     out = render_help(_admin_note().features(), _admin())
-    assert out.endswith("\n  Reload with /kb_reload.")
+    assert out == ("📚 Knowledge base — Ask about the program.\n"
+                   "  /kb — Show what the base holds.\n"
+                   "  Reload with /kb_reload.\n\n"
+                   f"{CONTACT_NOTICE}")
 
 
 def test_a_note_resolving_to_nothing_is_not_a_blank_line():
@@ -229,7 +237,8 @@ def test_a_note_resolving_to_nothing_is_not_a_blank_line():
     bot.note(lambda principal: "")
     out = render_help(registry.features(), _student())
     assert out == ("📚 Knowledge base — Ask about the program.\n"
-                   "  /kb — Show what the base holds.")
+                   "  /kb — Show what the base holds.\n\n"
+                   f"{CONTACT_NOTICE}")
 
 
 # --- /cancel ------------------------------------------------------------------
@@ -247,7 +256,8 @@ def test_cancel_is_listed_under_a_feature_that_registered_a_dialog():
     out = render_help(_editing().features(), _student())
     assert out == ("📒 Directory — Find classmates.\n"
                    "  /me — Show your profile.\n"
-                   "  /cancel — Cancel what you are in the middle of.")
+                   "  /cancel — Cancel what you are in the middle of.\n\n"
+                   f"{CONTACT_NOTICE}")
 
 
 def test_cancel_is_absent_from_a_feature_with_no_dialog():
@@ -260,7 +270,7 @@ def test_cancel_takes_the_dialogs_guard():
     bot = registry.api_for("impersonate")
     bot.describe("🕵️", "Impersonate", "Admin: see the bot as a given user.")
     bot.dialog("pick", on_text=_noop, role=Role.ADMIN)
-    assert render_help(registry.features(), _student()) == ""
+    assert render_help(registry.features(), _student()) == CONTACT_NOTICE
     assert ("  /cancel — Cancel what you are in the middle of. (admin)"
             in render_help(registry.features(), _admin()))
 
@@ -283,7 +293,9 @@ def test_an_unlinked_caller_sees_the_public_lines_and_the_notice():
                    "  /start — Link your account.\n"
                    "\n"
                    "You're not linked yet — ask a program admin for a "
-                   "one-time link.")
+                   "one-time link.\n"
+                   "\n"
+                   f"{CONTACT_NOTICE}")
     assert "/me" not in out
     assert "💬" not in out
 
@@ -291,7 +303,9 @@ def test_an_unlinked_caller_sees_the_public_lines_and_the_notice():
 def test_an_unlinked_caller_with_nothing_public_sees_the_notice_alone():
     registry = Registry()
     _impersonate(registry)
-    assert render_help(registry.features(), None) == UNLINKED_NOTICE
+    assert render_help(registry.features(), None) == (
+        f"{UNLINKED_NOTICE}\n\n{CONTACT_NOTICE}"
+    )
 
 
 def test_the_notice_wording_is_unchanged():

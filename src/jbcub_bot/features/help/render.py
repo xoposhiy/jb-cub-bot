@@ -32,6 +32,7 @@ from jbcub_bot.core.contract import (
 from jbcub_bot.core.models import Role, User
 
 UNLINKED_NOTICE = "You're not linked yet — ask a program admin for a one-time link."
+CONTACT_NOTICE = "Having trouble with the bot? Message Pavel Egorov."
 
 # The wording matches the refusal the same guard would answer with -- see
 # `core/guards.py`, "Admins only." / "Staff only." -- so a line reads the same
@@ -43,14 +44,14 @@ _BADGE = {Role.ADMIN: " (admin)", Role.TEACHER: " (staff)"}
 def render_help(features: list[FeatureRegistration],
                 principal: User | None) -> str:
     """The whole of /help for one caller."""
-    blocks = [block for block in (_block(reg, principal) for reg in features)
-              if block]
+    parts = [block for block in (_block(reg, principal) for reg in features)
+             if block]
     if principal is None:
         # The one thing that would actually help an unlinked caller, so it is
         # the whole answer when there is nothing else to say.
-        joined = "\n\n".join(blocks)
-        return f"{joined}\n\n{UNLINKED_NOTICE}" if blocks else UNLINKED_NOTICE
-    return "\n\n".join(blocks)
+        parts.append(UNLINKED_NOTICE)
+    parts.append(CONTACT_NOTICE)
+    return "\n\n".join(parts)
 
 
 def _block(reg: FeatureRegistration, principal: User | None) -> str:
