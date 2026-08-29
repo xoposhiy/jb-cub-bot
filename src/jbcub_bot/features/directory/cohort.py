@@ -108,17 +108,24 @@ async def cmd_cohort(message: Message, principal: User, session, arg: str):
 
 async def _send_csv(message: Message, viewer: User, cohort: str,
                     people: list[User]) -> None:
-    """The list as a file, when there is anything to put in it.
+    """The list as two files, when there is anything to put in them.
 
-    A separate message rather than a caption: a caption is capped at 1024
-    characters and a cohort list is not.
+    Separate messages rather than a caption: a caption is capped at 1024
+    characters and a cohort list is not. The Google Contacts file rides along
+    unconditionally -- it has no format worth asking about, so there is
+    nothing a picker step would let the caller decide.
     """
     data = export.cohort_csv(viewer, people)
-    if not data:
-        return
-    await message.answer_document(
-        BufferedInputFile(data, filename=export.csv_filename(cohort))
-    )
+    if data:
+        await message.answer_document(
+            BufferedInputFile(data, filename=export.csv_filename(cohort))
+        )
+    contacts_data = export.cohort_google_contacts_csv(viewer, people)
+    if contacts_data:
+        await message.answer_document(
+            BufferedInputFile(contacts_data,
+                              filename=export.google_contacts_csv_filename(cohort))
+        )
 
 
 async def cb_pick(cb: CallbackQuery, principal: User, session, arg: str):

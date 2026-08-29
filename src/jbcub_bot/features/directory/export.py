@@ -30,6 +30,10 @@ def csv_filename(cohort: str) -> str:
     return f"cohort-{_UNSAFE.sub('_', cohort)}.csv"
 
 
+def google_contacts_csv_filename(cohort: str) -> str:
+    return f"cohort-{_UNSAFE.sub('_', cohort)}-google-contacts.csv"
+
+
 def _cell(value) -> str:
     if value is None:
         return ""
@@ -67,4 +71,53 @@ def cohort_csv(viewer: User, people: list[User]) -> bytes:
         writer.writerow([_cell(row.get(name)) for name in header])
     # utf-8-sig: `comment` and `citizenship` are free text an admin typed, and
     # Excel mojibakes a plain UTF-8 CSV.
+    return buffer.getvalue().encode("utf-8-sig")
+
+
+_GOOGLE_CONTACTS_HEADER = [
+    "Name", "Given Name", "Family Name",
+    "E-mail 1 - Type", "E-mail 1 - Value",
+    "E-mail 2 - Type", "E-mail 2 - Value",
+    "IM 1 - Service", "IM 1 - Value",
+    "Organization 1 - Name",
+]
+
+
+def cohort_google_contacts_csv(viewer: User, people: list[User]) -> bytes:
+    """A cohort as a CSV Google Contacts can import.
+
+    Fixed columns, not the profile's -- an address book wants a name, a way to
+    reach someone, and which cohort they're in, not `matriculation` or
+    `comment`. `gmail` leads E-mail 1 over `cubemail`: it is the address most
+    likely to already be the person's real Google account, so an import lands
+    on the contact Google itself would have suggested.
+    """
+    if not people:
+        return b""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(_GOOGLE_CONTACTS_HEADER)
+    for person in people:
+        fields = visible_fields(viewer, person, merged=False)
+        first = _cell(fields.get("first_name"))
+        last = _cell(fields.get("last_name"))
+        gmail = fields.get("gmail")
+        cubemail = fields.get("cubemail")
+        telegram = fields.get("telegram")
+        # gmail always leads: if it's missing, cubemail fills E-mail 1 rather
+        # than leaving it empty with the address stranded in E-mail 2.
+        primary, primary_type = (gmail, "Home") if gmail else (cubemail, "Work")
+        secondary, secondary_type = (cubemail, "Work") if gmail and cubemail else (None, "")
+        writer.writerow([
+            f"{first} {last}".strip(),
+            first,
+            last,
+            primary_type if primary else "",
+            _cell(primary),
+            secondary_type if secondary else "",
+            _cell(secondary),
+            "Telegram" if telegram else "",
+            _cell(telegram),
+            _cell(fields.get("primary_cohort")),
+        ])
     return buffer.getvalue().encode("utf-8-sig")

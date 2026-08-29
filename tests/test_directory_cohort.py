@@ -120,7 +120,7 @@ async def test_staff_with_no_argument_get_a_button_per_cohort(session):
     msg.answer_document.assert_not_awaited()
 
 
-async def test_staff_with_an_argument_get_the_list_and_one_document(session):
+async def test_staff_with_an_argument_get_the_list_and_two_documents(session):
     _seed(session)
     msg = _msg()
     await cmd_cohort(msg, principal=User(last_name="A", role=Role.ADMIN),
@@ -128,10 +128,12 @@ async def test_staff_with_an_argument_get_the_list_and_one_document(session):
     text = msg.answer.await_args.args[0]
     assert "2024" in text and "Ivan Ivanov" in text
     assert "Expelled" not in text  # even for an admin
-    document = msg.answer_document.await_args.args[0]
-    assert document.filename == "cohort-2024.csv"
-    assert b"Expelled" not in document.data
-    assert b"Ivanov" in document.data
+    documents = [call.args[0] for call in msg.answer_document.await_args_list]
+    filenames = [document.filename for document in documents]
+    assert filenames == ["cohort-2024.csv", "cohort-2024-google-contacts.csv"]
+    for document in documents:
+        assert b"Expelled" not in document.data
+        assert b"Ivanov" in document.data
 
 
 async def test_an_unknown_cohort_redraws_the_picker_with_a_note(session):
@@ -171,7 +173,7 @@ async def test_a_bootstrap_admin_with_no_row_is_served(session):
     cb = _cb()
     await cb_pick(cb, principal=User(last_name="Boot", role=Role.ADMIN),
                   session=session, arg="2024")
-    cb.message.answer_document.assert_awaited_once()
+    assert cb.message.answer_document.await_count == 2
 
 
 async def test_tapping_a_cohort_replaces_the_text_and_sends_the_file(session):
@@ -181,8 +183,9 @@ async def test_tapping_a_cohort_replaces_the_text_and_sends_the_file(session):
                   session=session, arg="2024")
     assert "Ivan Ivanov" in cb.message.edit_text.await_args.args[0]
     assert cb.message.edit_text.await_args.kwargs["reply_markup"] is not None
-    assert cb.message.answer_document.await_args.args[0].filename == \
-        "cohort-2024.csv"
+    filenames = [call.args[0].filename
+                for call in cb.message.answer_document.await_args_list]
+    assert filenames == ["cohort-2024.csv", "cohort-2024-google-contacts.csv"]
     cb.answer.assert_awaited()
 
 
@@ -197,7 +200,7 @@ async def test_tapping_the_open_cohort_again_only_resends_the_file(session):
     await cb_pick(same, principal=User(last_name="A", role=Role.ADMIN),
                   session=session, arg="2024")
     same.message.edit_text.assert_not_awaited()
-    same.message.answer_document.assert_awaited_once()
+    assert same.message.answer_document.await_count == 2
 
 
 async def test_a_cohort_name_too_long_for_a_button_is_named_in_the_text_instead(session):
@@ -222,4 +225,4 @@ async def test_a_cohort_name_too_long_for_a_button_is_named_in_the_text_instead(
     await cmd_cohort(msg2, principal=User(last_name="A", role=Role.ADMIN),
                      session=session, arg=long_name)
     assert "Ivan Ivanov" in msg2.answer.await_args.args[0]
-    msg2.answer_document.assert_awaited_once()
+    assert msg2.answer_document.await_count == 2

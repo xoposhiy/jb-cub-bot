@@ -2,7 +2,12 @@ import csv
 import io
 
 from jbcub_bot.core.models import Role, User
-from jbcub_bot.features.directory.export import cohort_csv, csv_filename
+from jbcub_bot.features.directory.export import (
+    cohort_csv,
+    cohort_google_contacts_csv,
+    csv_filename,
+    google_contacts_csv_filename,
+)
 
 
 def _person(**kw):
@@ -112,3 +117,76 @@ def test_a_provisional_person_keeps_the_matriculation_column_with_an_empty_cell(
     assert "matriculation" in header
     assert first[header.index("matriculation")] == ""
     assert second[header.index("matriculation")] == "30000001"
+
+
+# --- the Google Contacts CSV: a narrower, fixed-column sibling -------------
+
+def _gc_rows(viewer, people):
+    text = cohort_google_contacts_csv(viewer, people).decode("utf-8-sig")
+    return list(csv.reader(io.StringIO(text)))
+
+
+def test_gc_header_is_fixed_regardless_of_which_fields_are_set():
+    header = _gc_rows(User(last_name="A", role=Role.ADMIN), [_person()])[0]
+    assert header == [
+        "Name", "Given Name", "Family Name",
+        "E-mail 1 - Type", "E-mail 1 - Value",
+        "E-mail 2 - Type", "E-mail 2 - Value",
+        "IM 1 - Service", "IM 1 - Value",
+        "Organization 1 - Name",
+    ]
+
+
+def test_gc_drops_admin_only_and_staff_only_fields():
+    # comment/matriculation/telegram_id have no column at all -- an address
+    # book has no place for them, unlike the plain cohort_csv.
+    header = _gc_rows(User(last_name="A", role=Role.ADMIN), [_person()])[0]
+    for name in ("comment", "matriculation", "telegram_id", "role"):
+        assert name not in header
+
+
+def test_gc_name_splits_into_given_and_family():
+    header, row = _gc_rows(User(last_name="A", role=Role.ADMIN), [_person()])
+    assert row[header.index("Name")] == "Ivan Ivanov"
+    assert row[header.index("Given Name")] == "Ivan"
+    assert row[header.index("Family Name")] == "Ivanov"
+
+
+def test_gc_gmail_leads_email_1_with_cubemail_as_email_2():
+    people = [_person(gmail="ivan@gmail.com", cubemail="ivan@cub.edu")]
+    header, row = _gc_rows(User(last_name="A", role=Role.ADMIN), people)
+    assert row[header.index("E-mail 1 - Value")] == "ivan@gmail.com"
+    assert row[header.index("E-mail 2 - Value")] == "ivan@cub.edu"
+
+
+def test_gc_cubemail_fills_email_1_when_gmail_is_missing():
+    # gmail leading means "prefer it", not "reserve the first slot for it" --
+    # a missing gmail must not leave E-mail 1 empty while E-mail 2 holds
+    # the only address on file.
+    people = [_person(gmail=None, cubemail="ivan@cub.edu")]
+    header, row = _gc_rows(User(last_name="A", role=Role.ADMIN), people)
+    assert row[header.index("E-mail 1 - Value")] == "ivan@cub.edu"
+    assert row[header.index("E-mail 2 - Value")] == ""
+
+
+def test_gc_im_and_organization_come_from_telegram_and_cohort():
+    header, row = _gc_rows(User(last_name="A", role=Role.ADMIN), [_person()])
+    assert row[header.index("IM 1 - Service")] == "Telegram"
+    assert row[header.index("IM 1 - Value")] == "ivanov"
+    assert row[header.index("Organization 1 - Name")] == "2024"
+
+
+def test_gc_no_people_is_a_header_free_empty_file():
+    assert cohort_google_contacts_csv(User(last_name="A", role=Role.ADMIN), []) == b""
+
+
+def test_gc_a_formula_looking_name_is_neutralized():
+    people = [_person(first_name="=HYPERLINK(\"x\")")]
+    header, row = _gc_rows(User(last_name="A", role=Role.ADMIN), people)
+    assert row[header.index("Given Name")] == "'=HYPERLINK(\"x\")"
+
+
+def test_gc_filename_survives_a_hand_typed_cohort_name():
+    assert google_contacts_csv_filename("2024") == "cohort-2024-google-contacts.csv"
+    assert (google_contacts_csv_filename("BSc 2024/25")
+            == "cohort-BSc_2024_25-google-contacts.csv")
