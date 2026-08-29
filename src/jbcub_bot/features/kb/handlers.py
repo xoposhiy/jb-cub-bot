@@ -5,19 +5,14 @@ first on every free-text message -- `directory` at `pipeline.LOOKUP` -- and
 this feature sits behind it at `pipeline.AGENT`, so a name shows a person and
 everything else becomes a question, whether or not a conversation is already
 going. The one case code cannot separate is a name the roster does not carry,
-which looks exactly like a one-word question; that one is the agent's to
-decline, through `looks_like_a_person_name`, and the reader gets the same
-"No one found." the search itself would have given.
+which looks exactly like a one-word question; that one just reaches the agent
+as a question too, and `search_people` telling it nobody matches is what it
+answers back with -- there is no code-level decline for it to detour through.
 
-A question that names a specific person, rather than a bare name, still
-reaches the agent -- the deterministic search only catches a name on its own.
-`search_people` and `show_profile` are the agent's own version of what the
-roster search does for a bare name: this feature renders and sends the profile
-it picked and drops the conversation the same way a name verdict does.
-
-`/ask` is the way past the name check: it drops the conversation and bypasses
-both the search and the check, so a bare name that the roster does carry
-reaches search_people instead of being declined outright.
+A question that names a specific person, rather than a bare name, reaches the
+agent the same way. `search_people` and `show_profile` let it find and show a
+profile itself: this feature renders and sends the profile it picked and drops
+the conversation, the same way a bare name found on the chain would have.
 
 Both refusals on the chain -- an unconfigured runtime, an exhausted hourly
 budget -- decline rather than explain. Someone who mistyped a surname is not
@@ -50,6 +45,7 @@ from jbcub_bot.features.directory.render import (
     profile_keyboard,
     render_profile,
 )
+from jbcub_bot.features.help.render import render_help
 from jbcub_bot.features.kb import history
 from jbcub_bot.features.kb import pdf as pdf_mod
 from jbcub_bot.features.kb import render as render_mod
@@ -190,8 +186,7 @@ async def _attach_sources(bot, message: Message, live, snapshot,
 async def _show_profile(bot: Bot, target: Message, looking: Message,
                         principal: User, session, live, tg_user,
                         impersonator, question: str, result) -> None:
-    """Render the profile show_profile picked, and drop the conversation the
-    same way a name verdict does -- the reader has their answer either way.
+    """Render the profile show_profile picked, and drop the conversation.
 
     A second message rather than an edit of the placeholder: a profile carries
     a keyboard and a source hyperlink, and Telegram takes those through
@@ -312,6 +307,18 @@ def describe_asker(principal) -> str:
     if cohort:
         bits.append(f"cohort: {cohort}")
     return " · ".join(bits)
+
+
+def describe_bot(principal) -> str:
+    """/help rendered for this same caller, so the agent can answer "what can
+    you do?" from the bot's real commands rather than a guess.
+
+    Empty before `set_registry` has run -- a test that builds the agent
+    without one gets the same prompt as before this existed.
+    """
+    if _registry is None:
+        return ""
+    return render_help(_registry.features(), principal)
 
 
 # --- the rating pair ----------------------------------------------------------
@@ -510,19 +517,18 @@ async def answer_question(message: Message, principal: User, bot: Bot,
         await _log_rate_limit(bot, live, principal, message.from_user)
         return False
     await _put(message, principal, bot, session, live, message.text,
-               message.from_user, impersonator, check_names=True)
+               message.from_user, impersonator)
     return True
 
 
 async def cmd_ask(message: Message, principal: User, bot: Bot, session,
                   arg: str, impersonator):
-    """Start clean. The conversation goes, and so does the name check.
+    """Start clean, and say the honest reason when nothing runs.
 
-    Bypassing the check is what lets this ask about a bare name the chain
-    would otherwise decline outright: "Dr Weber" on the chain never reaches
-    search_people, because looks_like_a_person_name takes it first. A question
-    with a name inside it -- "who is Dr Weber" -- reaches search_people either
-    way, /ask or not.
+    Unlike the chain, which stays silent and lets the core's own "No one
+    found." speak instead, this was asked outright: an unconfigured runtime or
+    an exhausted budget gets the real reason rather than a refusal that reads
+    like a roster miss.
     """
     live = runtime()
     if live is None:
@@ -541,7 +547,7 @@ async def cmd_ask(message: Message, principal: User, bot: Bot, session,
         await _log_rate_limit(bot, live, principal, message.from_user)
         return
     await _put(message, principal, bot, session, live, question,
-               message.from_user, impersonator, check_names=False)
+               message.from_user, impersonator)
 
 
 async def cmd_kb_reload(message: Message, principal: User):
@@ -557,8 +563,7 @@ async def cmd_kb_reload(message: Message, principal: User):
 
 
 async def _put(target: Message, principal: User, bot: Bot, session, live,
-               question: str, tg_user, impersonator, *,
-               check_names: bool) -> None:
+               question: str, tg_user, impersonator) -> None:
     """One question to the agent, and whatever it says back."""
     chat_id = target.chat.id
     chat = history.conversation(chat_id)
@@ -566,17 +571,8 @@ async def _put(target: Message, principal: User, bot: Bot, session, live,
     snapshot = await live.store.get()
     result = await ask(live.agent, snapshot, question, history.as_input(chat),
                        about=describe_asker(principal),
-                       check_names=check_names, session=session,
+                       help_text=describe_bot(principal), session=session,
                        include_departed=is_admin(principal))
-
-    if result.person_name:
-        # Not an answer, so nothing here attaches, traces or remembers: the
-        # reader asked about a person and the roster does not have them.
-        await _reveal(bot, target, looking, NOTHING_MATCHED)
-        history.drop(chat_id)
-        await _log_miss(bot, live, principal, tg_user, impersonator, question,
-                        result)
-        return
 
     if result.profile_id is not None:
         await _show_profile(bot, target, looking, principal, session, live,

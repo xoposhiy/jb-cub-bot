@@ -2,9 +2,8 @@
 
 The agent itself is covered in test_kb_agent.py and the conversation in
 test_kb_history.py. What needs proving here is that anything the roster search
-declined reaches the agent with no tap in between, that a name the roster does
-not carry comes back as "No one found.", and that the two refusals on the chain
-say nothing at all.
+declined reaches the agent with no tap in between, and that the two refusals
+on the chain say nothing at all.
 """
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -150,27 +149,20 @@ _STATS = kb_agent.AskStats(
 
 def _install_runtime(monkeypatch, answer=_ANSWER, pdfs=(_PDF,), complaints=(),
                      log_chat_id="", admin_ids=(), rate_limit=100,
-                     rate_window_seconds=3600, verdict="", profile_id=None):
+                     rate_window_seconds=3600, profile_id=None):
     """A runtime whose agent is a function, and a record of what it was given.
 
-    `verdict` makes that function decline the way the real one does when the
-    message was a name -- but only while the name check is on, so a test can
-    watch /ask switch it off. `profile_id` makes it pick a profile instead,
-    the way show_profile would -- unconditionally, since the real tool is on
-    the list whether or not /ask switched the name check off.
+    `profile_id` makes it pick a profile, the way show_profile would.
     """
     store = FakeStore()
-    run = SimpleNamespace(asked=[], carried=[], checks=[])
+    run = SimpleNamespace(asked=[], carried=[])
 
     async def fake_ask(agent, snapshot, question, history_, about="",
-                       check_names=True, now=None, session=None,
+                       help_text="", now=None, session=None,
                        include_departed=False):
         run.asked.append(question)
         run.carried.append(list(history_))
-        run.checks.append(check_names)
         stamped = kb_agent.stamp(question, now)
-        if verdict and check_names:
-            return kb_agent.Answer("", stamped, _STATS, person_name=verdict)
         if profile_id is not None:
             return kb_agent.Answer("", stamped, _STATS, profile_id=profile_id)
         return kb_agent.Answer(text=answer, question=stamped, stats=_STATS,
@@ -347,7 +339,7 @@ async def test_the_agent_is_told_the_asker_role_and_cohort(monkeypatch):
     store = FakeStore()
 
     async def fake_ask(agent, snapshot, question, history_, about="",
-                       check_names=True, now=None, session=None,
+                       help_text="", now=None, session=None,
                        include_departed=False):
         seen.append(about)
         return kb_agent.Answer("ok", question, kb_agent.AskStats())
@@ -360,6 +352,30 @@ async def test_the_agent_is_told_the_asker_role_and_cohort(monkeypatch):
     await _say(dp, bot, QUESTION)
 
     assert seen == ["role: Teacher"], "a teacher has no cohort to pass on"
+
+
+async def test_the_agent_is_given_this_callers_own_help_text(monkeypatch):
+    """So it can answer "what can you do?" from the real command list rather
+    than a guess -- see `describe_bot`."""
+    seen: list[str] = []
+    factory = _session_factory()
+    _seed(factory)
+    store = FakeStore()
+
+    async def fake_ask(agent, snapshot, question, history_, about="",
+                       help_text="", now=None, session=None,
+                       include_departed=False):
+        seen.append(help_text)
+        return kb_agent.Answer("ok", question, kb_agent.AskStats())
+
+    monkeypatch.setattr(kb, "ask", fake_ask)
+    kb.set_runtime(kb_agent.KbRuntime(agent=object(), store=store,
+                                      repo="xoposhiy/cub-kb"))
+    dp, bot = build_dispatcher(session_factory=factory), FakeBot()
+
+    await _say(dp, bot, QUESTION)
+
+    assert "/ask" in seen[0], "the caller's own /help, not an empty string"
 
 
 def test_a_students_cohort_is_what_picks_the_programme():
@@ -419,56 +435,12 @@ async def test_nothing_of_the_run_is_carried_but_the_words(monkeypatch):
     assert "kb/policies/exams.md" not in str(run.carried[-1])
 
 
-# --- the name the roster does not carry -------------------------------------------
-
-async def test_a_name_verdict_edits_the_placeholder_into_no_one_found(
-        monkeypatch):
-    dp, bot, _, _ = _setup(monkeypatch, verdict="Егоров")
-
-    await _say(dp, bot, "Егоров")
-
-    assert _texts(bot)[-1] == NOTHING_MATCHED
-    assert "Policies" not in "".join(_texts(bot)), "no answer went out"
-
-
-async def test_a_name_verdict_drops_the_conversation(monkeypatch):
-    """The reader was asking about a person, so whatever came before is over."""
-    dp, bot, _, run = _setup(monkeypatch, verdict="Егоров")
-
-    await _say(dp, bot, "Егоров")
-
-    assert history.as_input(history.conversation(TEACHER_ID)) == []
-    assert run.carried[-1] == []
-
-
-async def test_a_name_verdict_attaches_nothing_and_traces_nothing(monkeypatch):
-    dp, bot, _, _ = _setup(monkeypatch, verdict="Егоров")
-
-    await _say(dp, bot, "Егоров", telegram_id=ADMIN_ID)
-
-    assert bot.documents == []
-    assert not any("read_note" in text for text in _texts(bot))
-
-
 LOG_CHAT = "-1009999"
 
 
 def _logged(fake_bot) -> list[str]:
     return [m.text for m in fake_bot.sent
             if str(getattr(m, "chat_id", "")) == LOG_CHAT]
-
-
-async def test_a_name_verdict_is_logged_as_a_miss_with_the_runs_cost(
-        monkeypatch):
-    dp, bot, _, _ = _setup(monkeypatch, verdict="Егоров", log_chat_id=LOG_CHAT)
-
-    await _say(dp, bot, "Егоров")
-
-    [entry] = _logged(bot)
-    assert "Nothing matched" in entry
-    assert "«Егоров»" in entry
-    assert NOTHING_MATCHED in entry
-    assert "1.2k in / 310 out" in entry, "the miss cost a model turn"
 
 
 # --- the agent found a specific person: search_people and show_profile --------
@@ -557,25 +529,6 @@ async def test_ask_with_a_question_bypasses_the_search(monkeypatch):
 
     assert run.asked == ["Ivanov"]
     assert not any("Ivan Ivanov" in text for text in _texts(bot))
-
-
-async def test_ask_turns_the_name_check_off(monkeypatch):
-    """Which is what makes it the only way to ask the agent about a person by
-    name: on the chain the same words would come back "No one found."."""
-    dp, bot, _, run = _setup(monkeypatch, verdict="Dr Weber")
-
-    await _say(dp, bot, "/ask who supervises Dr Weber's students?")
-
-    assert run.checks == [False]
-    assert _texts(bot)[-1] == _ANSWER
-
-
-async def test_the_chain_leaves_the_name_check_on(monkeypatch):
-    dp, bot, _, run = _setup(monkeypatch)
-
-    await _say(dp, bot, QUESTION)
-
-    assert run.checks == [True]
 
 
 async def test_ask_drops_whatever_conversation_was_going(monkeypatch):
@@ -713,15 +666,6 @@ async def test_a_bootstrap_admins_question_is_not_logged(monkeypatch):
                            admin_ids=(TEACHER_ID,))
 
     await _say(dp, bot, QUESTION)
-
-    assert _logged(bot) == []
-
-
-async def test_a_bootstrap_admins_name_verdict_is_not_logged(monkeypatch):
-    dp, bot, _, _ = _setup(monkeypatch, verdict="Егоров", log_chat_id=LOG_CHAT,
-                           admin_ids=(TEACHER_ID,))
-
-    await _say(dp, bot, "Егоров")
 
     assert _logged(bot) == []
 

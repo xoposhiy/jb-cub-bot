@@ -4,11 +4,9 @@ The framework owns the tool cycle and the schemas it derives from these
 functions' signatures, so this module holds the tools, the prompts and the two
 follow-up questions — nothing else.
 
-The agent is given a way to decline the response if it looks like a person's name rather than a question
-`looks_like_a_person_name` — and calling it ends the run. It can also find and
-show a profile itself, through `search_people` and `show_profile`, for a
-question that names one specific person rather than a bare name; `show_profile`
-ends the run the same way.
+The agent can find and show a profile itself, through `search_people` and
+`show_profile`: once it knows who is meant and a profile is the actual answer,
+`show_profile` ends the run — nothing it writes afterwards reaches the reader.
 
 What the agent writes is what the reader gets. There is no rendering step and
 nothing here edits its prose: the prompt says how to cite and `validate` says
@@ -73,36 +71,16 @@ CUT_SHORT = ("I had to stop searching before I found a grounded answer — the "
 # The knowledge base documents how to search itself; this prompt states the
 # rules that are about *this* caller rather than about the base.
 SYSTEM_RULES = """\
-You answer questions about the university programs from a knowledge base you \
-read through three tools: list_notes, search_notes and read_note. The rest are \
-not about the base: current_datetime, for when the answer turns on what day it \
-is; looks_like_a_person_name, for the rare message that is somebody's name \
-rather than a question; search_people and show_profile, for a question that is \
-really about one specific person; and choose_sources, which belongs to a \
-question that comes after your answer — leave that one alone until you are \
-asked.
+You are part of a Telegram bot for students that helps find information about \
+the university, its programs, and other people on the program.
 
-When the message is a name and not a question:
-- The same box the reader types a question into also finds people by name, and \
-a name nobody on the roster carries reaches you instead. Call \
-looks_like_a_person_name when the whole message is nothing but a person's \
-name. That ends your turn; you are not answering that one, and the reader is \
-told the roster has nobody by that name.
-- A question with a name inside it is a question, and so is a request about \
-somebody — that one is search_people's and show_profile's to answer below, not \
-looks_like_a_person_name's.
-- A bare word naming a course, a document, a place or a programme is not a \
-person, however unfamiliar it looks. Search for it.
-- When you are unsure, answer. A wrong verdict costs the reader their answer, \
-where a needless search costs a few seconds.
+* Knowledge base tools: list_notes, search_notes, read_note.
+* People search tools: search_people, show_profile.
 
-Finding a specific person:
-- A person can be on the roster, documented in the base, in both, or in \
-neither. Try both search_people and the base (list_notes, search_notes) \
-before answering about somebody, and before telling the reader nobody exists \
-or that the base says nothing about them — never guess either from your own \
-knowledge.
-- show_profile shows the reader that person's roster profile and ends your \
+When a question is about a person, look in both the knowledge base and with \
+search_people.
+
+- show_profile shows the reader a person's roster profile and ends your \
 turn; nothing you write afterwards reaches them. Call it once you know who is \
 meant and a profile is the actual answer. When the base already answered the \
 question — their role, what they teach, who to contact — write that instead.
@@ -195,6 +173,10 @@ class Ask:
     courses are in my programme" becomes answerable without a clarifying
     question.
 
+    `help_text` is /help rendered for this same caller — the bot's own
+    commands, exactly as they would see them. It is how "what can you do?"
+    gets answered from the bot's real command list instead of a guess.
+
     `session` and `include_departed` are what `search_people` needs to read the
     same roster the deterministic search reads, and nothing more -- the tool
     never touches the caller's own row or writes anything.
@@ -205,22 +187,17 @@ class Ask:
     `options` is empty until the question is put, which is what tells
     choose_sources that it has been called too early.
 
-    `check_names` is how /ask switches the name check off. Through the context
-    rather than through a second set of instructions, which is the same trick
-    the empty `options` above plays: the prompt is the prefix the provider
-    caches on, and two versions of it would be two prefixes to pay for.
-    `person_name` and `profile_id` are where the two verdicts land, and the
-    reason this dataclass is not frozen -- the two lists above are mutated in
-    place, but a string or an int cannot be.
+    `profile_id` is where show_profile's pick lands, and the reason this
+    dataclass is not frozen -- the two lists above are mutated in place, but
+    an int cannot be.
     """
     snapshot: Snapshot
     session: Session | None = None
     about: str = ""
+    help_text: str = ""
     include_departed: bool = False
     options: list[str] = field(default_factory=list)
     chosen: list[tools.SourceRef] = field(default_factory=list)
-    check_names: bool = True
-    person_name: str = ""
     profile_id: int | None = None
 
 
@@ -266,44 +243,17 @@ def current_datetime() -> str:
     return tools.current_datetime(datetime.now(UTC))
 
 
-VERDICT_TAKEN = ("Understood — that is a name, not a question. Nothing further "
-                 "is needed from you; the reader is being told the roster has "
-                 "nobody by it.")
-VERDICT_REFUSED = ("That does not apply here: this message was put to you as a "
-                   "question, whatever it looks like. Answer it from the base.")
+async def _stop_after_show_profile(ctx: RunContextWrapper[Ask],
+                                   results) -> ToolsToFinalOutputResult:
+    """End the run the moment show_profile picks somebody, and never otherwise.
 
-
-@function_tool(strict_mode=False)
-def looks_like_a_person_name(ctx: RunContextWrapper[Ask], name: str) -> str:
-    """Say this message is somebody's name rather than a question. Ends the run.
-
-    Only for a message that is nothing but a person's name. A question with a
-    name inside it is a question, and a bare word naming a course, a document,
-    a place or a programme is not a person. When unsure, answer instead.
-
-    Args:
-        name: the name, as the message wrote it.
+    A profile pick is not an answer, so there is nothing left to write: letting
+    the loop go round once more would buy a closing sentence nobody reads. It
+    has to be this rather than the framework's `StopAtTools`, which stops on
+    the call itself -- show_profile is also called with an id that turns out
+    to be wrong, and that call must leave the run going.
     """
-    if not ctx.context.check_names:
-        return VERDICT_REFUSED
-    # A verdict with no name in it is still a verdict: the caller answers "no
-    # one found" either way, and only the ops log ever reads this string.
-    ctx.context.person_name = name.strip() or "(unnamed)"
-    return VERDICT_TAKEN
-
-
-async def _stop_on_a_verdict(ctx: RunContextWrapper[Ask],
-                             results) -> ToolsToFinalOutputResult:
-    """End the run the moment the agent declines or picks a profile, and never
-    otherwise.
-
-    Neither a verdict nor a profile pick is an answer, so there is nothing
-    left to write: letting the loop go round once more would buy a closing
-    sentence nobody reads. It has to be this rather than the framework's
-    `StopAtTools`, which stops on the call itself and cannot see that /ask
-    turned the name check off — that refusal has to leave the run going.
-    """
-    if ctx.context.person_name or ctx.context.profile_id is not None:
+    if ctx.context.profile_id is not None:
         return ToolsToFinalOutputResult(is_final_output=True, final_output="")
     return ToolsToFinalOutputResult(is_final_output=False)
 
@@ -411,6 +361,11 @@ def instructions(ctx: RunContextWrapper[Ask], agent: Agent) -> str:
             "something else. Example: 2025-2028 means that by default the user is interested in the handbook of year 2025; "
             "but Role=Admin means that the user might be interested in any handbook versions."
         )
+    if ctx.context.help_text:
+        parts.append(
+            "This bot's commands, exactly as this caller would see them from "
+            f"/help:\n\n{ctx.context.help_text}"
+        )
     parts.append("Folders in the base — one per source document:\n\n"
                  f"{ctx.context.snapshot.map_text}")
     return "\n\n".join(parts)
@@ -453,12 +408,11 @@ def build_agent(model_name: str, client, model=None,
         name="kb-search",
         instructions=instructions,
         tools=[list_notes, search_notes, read_note, current_datetime,
-               looks_like_a_person_name, search_people, show_profile,
-               choose_sources],
+               search_people, show_profile, choose_sources],
         model=model or OpenAIResponsesModel(model=model_name,
                                             openai_client=client),
         model_settings=_model_settings(reasoning_effort),
-        tool_use_behavior=_stop_on_a_verdict,
+        tool_use_behavior=_stop_after_show_profile,
     )
 
 
@@ -540,12 +494,8 @@ class Answer:
     what the conversation has to keep -- an old question's stamp is the time it
     was asked, not the time it is read back.
 
-    `person_name` is non-empty when the agent declined instead of answering.
-    Then `text` is empty and there is nothing else here to use: the caller says
-    "No one found." and drops the conversation.
-
-    `profile_id` is set instead when the agent found the person and called
-    show_profile. `text` is empty here too -- the caller renders that person's
+    `profile_id` is set when the agent found the person and called
+    show_profile. `text` is empty then -- the caller renders that person's
     profile and drops the conversation, the same way a bare name found on the
     chain would have.
     """
@@ -554,7 +504,6 @@ class Answer:
     stats: AskStats
     sources: tuple[tools.SourceRef, ...] = ()
     complaints: tuple[str, ...] = ()  # what the check said, for the admin trace
-    person_name: str = ""
     profile_id: int | None = None
 
 
@@ -586,7 +535,7 @@ def notes_read(calls: tuple[ToolCall, ...]) -> list[str]:
 
 
 async def ask(agent: Agent, snapshot: Snapshot, question: str, history: list,
-              about: str = "", check_names: bool = True,
+              about: str = "", help_text: str = "",
               now: datetime | None = None, session: Session | None = None,
               include_departed: bool = False) -> Answer:
     """One question, checked once, taken as it stands, then asked what it used.
@@ -602,10 +551,10 @@ async def ask(agent: Agent, snapshot: Snapshot, question: str, history: list,
     same conversation, so the provider's cache carries the history for nearly
     nothing.
 
-    A verdict, or a profile picked with show_profile, short-circuits both of
-    those. There is nothing to check in an answer that was never written and
-    nothing to attach to it, so the run ends at the tool call and its cost is
-    the whole of what comes back.
+    A profile picked with show_profile short-circuits both of those. There is
+    nothing to check in an answer that was never written and nothing to
+    attach to it, so the run ends at the tool call and its cost is the whole
+    of what comes back.
 
     An exhausted turn budget answers with a fixed line. Its statistics still
     come back -- a run that cost every turn and produced nothing is exactly the
@@ -621,13 +570,10 @@ async def ask(agent: Agent, snapshot: Snapshot, question: str, history: list,
     -- need not supply one.
     """
     context = Ask(snapshot=snapshot, session=session, about=about,
-                  include_departed=include_departed, check_names=check_names)
+                  help_text=help_text, include_departed=include_departed)
     asked = stamp(question, now)
     first = await _run(agent, list(history) + [{"role": "user",
                                                "content": asked}], context)
-    if context.person_name:
-        return Answer("", asked, first.stats,
-                      person_name=context.person_name)
     if context.profile_id is not None:
         return Answer("", asked, first.stats, profile_id=context.profile_id)
     if first.cut_short:

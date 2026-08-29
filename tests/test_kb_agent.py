@@ -329,72 +329,40 @@ async def test_an_anonymous_run_says_nothing_about_the_asker():
     assert "The person asking" not in kb_agent.instructions(ctx, None)
 
 
-# --- the verdict: this was a name, not a question ------------------------------
+async def test_the_callers_help_text_reaches_the_prompt():
+    ctx = RunContextWrapper(kb_agent.Ask(
+        snapshot=_snapshot(),
+        help_text="📒 Directory — Find classmates.\n  /me — Show your profile."))
 
-def _declines(name: str) -> StubModel:
-    return StubModel([
-        [_call("looks_like_a_person_name", '{"name": "%s"}' % name)],
-        # Scripted but never reached when the verdict takes: the run ends at
-        # the call. It is here so the test can tell "ended" from "answered".
-        [_text("I looked and found nothing.")],
-    ])
+    text = kb_agent.instructions(ctx, None)
 
-
-async def test_a_name_the_roster_does_not_carry_is_declined_not_answered():
-    out = await kb_agent.ask(_agent(_declines("Егоров")), _snapshot(),
-                             "Егоров", [])
-
-    assert out.person_name == "Егоров"
-    assert out.text == "", "a verdict is not an answer"
+    assert "/me — Show your profile." in text
 
 
-async def test_the_verdict_ends_the_run_before_the_checking_and_the_sources():
-    """`ask` short-circuits: there is nothing to check in an answer that was
-    never written, and nothing to attach to it."""
-    model = _declines("Егоров")
+async def test_a_run_with_no_help_text_carries_no_command_listing():
+    ctx = RunContextWrapper(kb_agent.Ask(snapshot=_snapshot()))
 
-    out = await kb_agent.ask(_agent(model), _sourced(), "Егоров", [])
-
-    assert model.calls == 1, "the tool call was the whole run"
-    assert (out.sources, out.complaints) == ((), ())
-
-
-async def test_a_verdict_still_reports_what_it_cost():
-    out = await kb_agent.ask(_agent(_declines("Егоров")), _snapshot(),
-                             "Егоров", [])
-
-    assert out.stats.tool_calls == 1
-    assert out.stats.input_tokens == 600
-
-
-async def test_ask_turns_the_check_off_and_the_run_goes_on_to_answer():
-    """`/ask` is the only way to ask the agent *about* a person by name, and
-    that works by refusing the tool rather than by hiding it: the tool list is
-    part of the prefix the provider caches on."""
-    model = _declines("Dr Weber")
-
-    out = await kb_agent.ask(_agent(model), _snapshot(), "who is Dr Weber?", [],
-                             check_names=False)
-
-    assert out.person_name == "", "refused, so no verdict"
-    assert out.text == "I looked and found nothing.", "and it answered instead"
-    assert model.calls == 2
-
-
-def test_the_prompt_says_what_a_bare_name_is_and_what_it_is_not():
-    """Each line of this is a way the verdict goes wrong: a question with a
-    name in it, an unfamiliar course code, or a guess made under doubt."""
-    rules = " ".join(kb_agent.SYSTEM_RULES.split())
-
-    assert "looks_like_a_person_name when the whole message is nothing but a " \
-        "person's name" in rules
-    assert "A question with a name inside it is a question" in rules
-    assert "naming a course, a document, a place or a programme is not a " \
-        "person" in rules
-    assert "When you are unsure, answer" in rules
+    assert ("exactly as this caller would see them from /help"
+            not in kb_agent.instructions(ctx, None))
 
 
 # --- finding a specific person: search_people and show_profile -----------------
+
+async def test_a_name_the_roster_does_not_carry_is_answered_not_declined(
+        session):
+    """There is no separate decline path any more: the agent tries
+    search_people like it would for any other question about a person, and
+    writes its own answer from what that tool comes back with."""
+    model = StubModel([
+        [_call("search_people", '{"query": "Егоров"}')],
+        [_text("No one in the roster is named Egorov.")],
+    ])
+
+    out = await kb_agent.ask(_agent(model), _snapshot(), "Егоров", [],
+                             session=session)
+
+    assert out.profile_id is None
+    assert out.text == "No one in the roster is named Egorov."
 
 def _seed_person(session) -> User:
     person = User(first_name="Ivan", last_name="Petrov", role=Role.STUDENT,
@@ -408,7 +376,7 @@ def _picks_profile(person_id: int) -> StubModel:
     return StubModel([
         [_call("search_people", '{"query": "Ivan Petrov"}')],
         [_call("show_profile", '{"person_id": %d}' % person_id)],
-        # Scripted but never reached, same as `_declines` above.
+        # Scripted but never reached: the run ends at show_profile.
         [_text("never reached")],
     ])
 
@@ -491,16 +459,13 @@ def test_the_prompt_lists_the_two_person_lookup_tools():
 
 def test_the_prompt_says_a_person_may_be_findable_in_either_place():
     """The roster is not the only place a person shows up -- the handbook
-    documents faculty and course assignments too, so the agent must try both
-    before concluding nobody exists or that the base says nothing about them.
-    A prior, more elaborate version split by question phrasing ("who is X" vs
-    "does X teach this course") and that let a person only in the handbook,
-    not the roster, be declared nonexistent without the base ever being
-    searched."""
+    documents faculty and course assignments too, so the agent must look in
+    both before concluding nobody exists or that the base says nothing about
+    them."""
     rules = " ".join(kb_agent.SYSTEM_RULES.split())
 
-    assert "Try both search_people and the base" in rules
-    assert "before telling the reader nobody exists" in rules
+    assert ("look in both the knowledge base and with search_people"
+            in rules)
 
 
 def test_the_prompt_lets_a_base_answer_stand_in_for_a_profile():
