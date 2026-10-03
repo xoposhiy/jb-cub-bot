@@ -200,6 +200,7 @@ EXPECTED_KEYS = [
     ("dir:grades:30000001:-1", "cb_grades", "30000001:-1"),
     ("dir:grades_back:30000001", "cb_grades_back", "30000001"),
     ("dir:cohort:2024", "cb_pick", "2024"),
+    ("dir:person:7", "cb_person", "7"),
 ]
 
 

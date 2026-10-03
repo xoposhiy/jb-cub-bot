@@ -95,8 +95,8 @@ def test_find_impersonation_target_not_found(session):
 
 # --- rows the sheet has not numbered yet ------------------------------------
 
-def test_is_provisional_reads_the_prefix_whatever_case_it_is_typed_in():
-    for value in ("TMP-A1B2", "tmp-a1b2", "Tmp-Typed"):
+def test_is_provisional_holds_for_any_key_that_is_not_a_number():
+    for value in ("TMP-A1B2", "tmp-a1b2", "Tmp-Typed", "not in CN", "3000 1"):
         assert identity.is_provisional(User(matriculation=value)) is True
 
 
@@ -129,3 +129,10 @@ def test_no_invite_is_issued_for_a_provisional_target(session):
     _add(session, matriculation="TMP-A1B2", handle_sheet="nina")
     with pytest.raises(ValueError):
         issue_link_token(session, "TMP-A1B2", "secret")
+
+
+def test_only_digits_are_a_matriculation_number():
+    assert identity.is_matriculation_number("30000001")
+    assert identity.is_matriculation_number(" 30000001 ")
+    for value in ("", None, "not in CN", "TMP-1234", "3000-0001"):
+        assert not identity.is_matriculation_number(value)

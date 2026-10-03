@@ -193,7 +193,9 @@ def normalize_rows(rows: list[list[str]], mapping: dict) -> list[dict]:
         record = {}
         for field, column in mapping.items():
             i = index[column]
-            record[field] = row[i] if i < len(row) else ""
+            # Stripped: one cohort's "Artem " and another's "Artem" are the
+            # same person, and every sync would otherwise flip between them.
+            record[field] = row[i].strip() if i < len(row) else ""
         if _ends_the_roster(record):
             break
         if "handle_sheet" in record:
@@ -276,15 +278,51 @@ def record_key(record: dict, key: str = "matriculation") -> str:
 
 def assign_provisional_keys(records: list[dict], generate,
                             key: str = "matriculation") -> None:
-    """Key every record the sheet left unkeyed, so none of them is skipped.
+    """Key every record the sheet left without a number, so none is skipped.
+
+    A placeholder typed into the column counts as no number: keyed by it, the
+    row would turn departed when the real number arrives instead of being
+    replaced.
 
     `generate` is a parameter rather than a call in here, the way `today` is a
     parameter of `settle_absentees`: a test pins the keys instead of matching
     a pattern.
     """
     for record in records:
-        if not record_key(record, key):
+        if not identity.is_matriculation_number(record_key(record, key)):
             record[key] = generate()
+
+
+def cohort_start(cohort: str) -> int:
+    """The year a cohort started, read off its name; -1 when it has none."""
+    match = re.search(r"\d{4}", cohort)
+    return int(match.group()) if match else -1
+
+
+def assign_cohorts(roster: list[tuple[str, list[dict]]],
+                   key: str = "matriculation") -> None:
+    """Give a person every cohort that names them, the newest one as primary.
+
+    A student who moves from a bachelor cohort to a master cohort is on both
+    rosters under one number. Each cohort's pass would claim the row in turn,
+    and the cohort processed last would win -- so the other one would lose
+    the person's grades and list line without a word.
+
+    `roster` is `(cohort, records)` in index order; on equal years the later
+    cohort wins.
+    """
+    named_by: dict[str, list[str]] = {}
+    for cohort, records in roster:
+        for record in records:
+            if value := record_key(record, key):
+                named_by.setdefault(value, []).append(cohort)
+    for cohort, records in roster:
+        for record in records:
+            cohorts = named_by.get(record_key(record, key), [cohort])
+            primary = max(reversed(cohorts), key=cohort_start)
+            record["primary_cohort"] = primary
+            record["past_cohorts"] = sorted(c for c in set(cohorts)
+                                            if c != primary)
 
 
 def upsert_users(session, records: list[dict], key: str = "matriculation") -> None:

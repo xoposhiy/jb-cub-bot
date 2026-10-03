@@ -1,6 +1,6 @@
 """Who is on the roster, and what each of them chooses to show.
 
-Six commands, seventeen buttons, one dialog and one chain slot, all declared
+Every command, button, dialog and chain slot of this feature is declared
 here: the modules below hold the handlers and the rendering, and none of them
 knows how it is reached. That is what took `Router`, `F`, `StateFilter`,
 `CommandRegistrar` and `require_linked` out of this package -- an admin-only
@@ -28,6 +28,7 @@ from jbcub_bot.features.directory.render import (
     GRADES_CALLBACK,
     LINK_CALLBACK,
     PRIVACY_CALLBACK,
+    PERSON_CALLBACK,
     PROFILE_CALLBACK,
     RESET_CALLBACK,
     RESET_CANCEL_CALLBACK,
@@ -51,6 +52,8 @@ def register(bot) -> None:
     bot.message(at=LOOKUP, when=TEXT,
                 description="just type a name — search people",
                 )(handlers.name_search)
+    # Reached from the search results, so anyone the search answers may tap it.
+    bot.button(PERSON_CALLBACK)(handlers.cb_person)
 
     # Admin actions on somebody else's profile.
     bot.button(ADMIN_CALLBACK, role=Role.ADMIN)(handlers.cb_admin_open)

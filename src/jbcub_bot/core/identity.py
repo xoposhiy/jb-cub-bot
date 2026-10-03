@@ -1,3 +1,4 @@
+import re
 import secrets
 
 from sqlalchemy import select
@@ -5,9 +6,8 @@ from sqlalchemy import select
 from jbcub_bot.core.models import Role, User
 
 # A roster row the sheet has not numbered yet is keyed by the bot instead, so
-# `matriculation` stays a non-empty unique string everywhere. A constant rather
-# than a setting: a value drifting from what the rows hold would turn every
-# such person into an ordinary student and lift every restriction at once.
+# `matriculation` stays a non-empty unique string everywhere. Not a digit in
+# it, so `is_provisional` holds for it.
 PROVISIONAL_PREFIX = "TMP-"
 
 
@@ -21,6 +21,16 @@ def new_provisional_key() -> str:
     return PROVISIONAL_PREFIX + secrets.token_hex(4).upper()
 
 
+def is_matriculation_number(value: str | None) -> bool:
+    """True for a number the university issued, false for a placeholder.
+
+    Admins type placeholders like "not in CN" into the column by hand. Taken
+    for a key, such a row turns departed the day the real number arrives and
+    stays next to the new row for good.
+    """
+    return bool(re.fullmatch(r"[0-9]+", (value or "").strip()))
+
+
 def is_provisional(user: User | None) -> bool:
     """True while this row is a projection of the sheet, not a student's own.
 
@@ -28,13 +38,13 @@ def is_provisional(user: User | None) -> bool:
     and the next `/sync` throws it away and builds it again -- so nothing may
     be written to it and nothing may be keyed on it beyond that sync.
 
-    Case-insensitive: a prefix typed into a sheet by hand must leave the person
-    restricted rather than promote them.
+    Any key that is not a number counts, not only the bot's own prefix: a
+    placeholder typed into a sheet by hand must leave the person restricted
+    rather than promote them.
     """
     if user is None or not user.matriculation:
         return False
-    return user.matriculation.casefold().startswith(
-        PROVISIONAL_PREFIX.casefold())
+    return not is_matriculation_number(user.matriculation)
 
 
 def find_by_telegram_id(session, telegram_id: int) -> User | None:

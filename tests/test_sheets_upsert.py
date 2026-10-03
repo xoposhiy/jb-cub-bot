@@ -208,3 +208,37 @@ def test_the_rebuilt_row_is_claimed_again_by_the_same_handle(session):
     assert (rebuilt.matriculation, rebuilt.telegram_id) == ("TMP-BBB", None)
     assert identity.resolve(session, 555, "nina").id == rebuilt.id
     assert session.query(User).one().telegram_id == 555
+
+
+def test_a_placeholder_typed_into_the_number_column_is_replaced_by_a_key(session):
+    records = [{"matriculation": "not in CN"}, {"matriculation": "30000001"}]
+
+    sheets.assign_provisional_keys(records, lambda: "TMP-AAA")
+
+    assert [record["matriculation"] for record in records] == [
+        "TMP-AAA", "30000001",
+    ]
+
+
+def test_a_person_on_two_rosters_gets_the_newest_cohort_as_primary():
+    bachelor = [{"matriculation": "1"}, {"matriculation": "2"}]
+    master = [{"matriculation": "1"}]
+
+    sheets.assign_cohorts([("ast-2026-2028", master),
+                           ("sdt-2024-2027", bachelor)])
+
+    assert [(r["primary_cohort"], r["past_cohorts"])
+            for r in bachelor + master] == [
+        ("ast-2026-2028", ["sdt-2024-2027"]),
+        ("sdt-2024-2027", []),
+        ("ast-2026-2028", ["sdt-2024-2027"]),
+    ]
+
+
+def test_on_equal_years_the_later_cohort_is_primary():
+    first, second = [{"matriculation": "1"}], [{"matriculation": "1"}]
+
+    sheets.assign_cohorts([("a-2024", first), ("b-2024", second)])
+
+    assert first[0]["primary_cohort"] == "b-2024"
+    assert first[0]["past_cohorts"] == ["a-2024"]

@@ -2,6 +2,7 @@ from sqlalchemy import select
 
 from jbcub_bot.core.models import User
 from jbcub_bot.features.directory import matching
+from jbcub_bot.features.directory.visibility import cohorts_of
 
 
 def name_tokens(user: User) -> list[str]:
@@ -46,6 +47,11 @@ def classify(ranked: list[tuple[float, User]]) -> tuple[User | None, list[User]]
     One rule, so a name-shaped query is judged the same way wherever it is
     asked -- by the deterministic search on the chain and by the agent's own
     `search_people` tool.
+
+    A departed row does not stand in an active row's way: when exactly one row
+    among the leaders is active, it leads, and the departed leaders come back
+    beside it. Those are usually the same person under an older key, and an
+    admin must still be able to reach them.
     """
     if not ranked:
         return None, []
@@ -53,13 +59,22 @@ def classify(ranked: list[tuple[float, User]]) -> tuple[User | None, list[User]]
     runner_up = ranked[1][0] if len(ranked) > 1 else 0.0
     if best - runner_up >= matching.LEAD:
         return target, []
+    leaders = [user for score, user in ranked if best - score < matching.LEAD]
+    active = [user for user in leaders if not user.departed_at]
+    if len(active) == 1:
+        return active[0], [user for user in leaders if user.departed_at]
     return None, [user for score, user in ranked if best - score <= matching.SPREAD]
 
 
-def list_cohort(session, primary_cohort: str, *,
+def list_cohort(session, cohort: str, *,
                 include_departed: bool = False) -> list[User]:
-    stmt = select(User).where(User.primary_cohort == primary_cohort)
-    return list(session.scalars(_visible(stmt, include_departed)).all())
+    """Everyone the cohort's roster names, past cohorts included.
+
+    Filtered in Python: `past_cohorts` is a JSON list, and the roster is small.
+    """
+    stmt = _visible(select(User), include_departed)
+    return [user for user in session.scalars(stmt).all()
+            if cohort in cohorts_of(user)]
 
 
 def list_cohort_names(session) -> list[str]:

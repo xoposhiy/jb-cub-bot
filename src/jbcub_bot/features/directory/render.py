@@ -24,6 +24,7 @@ LINK_CALLBACK = "dir:link"
 RESET_CALLBACK = "dir:reset"
 RESET_DO_CALLBACK = "dir:reset_do"
 RESET_CANCEL_CALLBACK = "dir:reset_cancel"
+PERSON_CALLBACK = "dir:person"
 
 # first_name and last_name render as one "Name" line; every other label comes
 # from the field table.
@@ -105,6 +106,26 @@ def profile_keyboard(
         if admin is not None:
             rows.extend(admin.inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def person_row(viewer: User, user: User) -> list[InlineKeyboardButton]:
+    """A button that opens `user`'s profile, labelled to tell namesakes apart.
+
+    Keyed on the row id: staff rows carry no matriculation. The label reads
+    through `visible_fields`, so the departure date shows only to an admin.
+    """
+    fields = visible_fields(viewer, user)
+    bits = [user.full_name or "(no name)",
+            fields.get("primary_cohort") or user.role.value]
+    if fields.get("departed_at"):
+        bits.append(f"departed {fields['departed_at']}")
+    return [InlineKeyboardButton(text=" · ".join(bits),
+                                 callback_data=f"{PERSON_CALLBACK}:{user.id}")]
+
+
+def people_keyboard(viewer: User, users: list[User]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[person_row(viewer, user) for user in users])
 
 
 def _utf16_len(text: str) -> int:

@@ -141,3 +141,36 @@ def test_list_cohort_names_newest_first_and_only_where_someone_is_current(sessio
     ])
     session.commit()
     assert list_cohort_names(session) == ["2024", "2023"]
+
+
+def test_list_cohort_includes_a_member_whose_cohort_is_a_past_one(session):
+    session.add_all([
+        User(first_name="Artem", last_name="Telkov", primary_cohort="2026",
+             past_cohorts=["2024"]),
+        User(first_name="Anna", last_name="Smith", primary_cohort="2024"),
+    ])
+    session.commit()
+
+    assert {u.full_name for u in list_cohort(session, "2024")} ==         {"Artem Telkov", "Anna Smith"}
+
+
+def test_classify_prefers_the_one_active_row_among_equal_leaders():
+    # The same person under an old key and a new one.
+    old = User(first_name="Milan", last_name="P", departed_at="2026-08-28")
+    new = User(first_name="Milan", last_name="P")
+
+    target, close = classify([(1.0, old), (1.0, new)])
+
+    assert target is new
+    assert close == [old]
+
+
+def test_classify_keeps_the_shortlist_when_two_leaders_are_active():
+    a = User(first_name="Anna", last_name="Smith")
+    b = User(first_name="Anna", last_name="Smyth")
+    gone = User(first_name="Anna", last_name="Smit", departed_at="2026-01-01")
+
+    target, close = classify([(0.9, a), (0.9, b), (0.9, gone)])
+
+    assert target is None
+    assert set(close) == {a, b, gone}

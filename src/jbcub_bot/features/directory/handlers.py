@@ -22,10 +22,13 @@ from jbcub_bot.features.directory.render import (
     admin_actions_keyboard,
     invite_row,
     me_keyboard,
+    people_keyboard,
+    person_row,
     profile_entities,
     profile_keyboard,
     render_profile,
 )
+from jbcub_bot.features.directory.screens import EXPIRED
 from jbcub_bot.features.directory.search import classify, rank_users
 
 from jbcub_bot.core.sheets_client import build_credentials, fetch_rows
@@ -222,17 +225,45 @@ async def name_search(message: Message, principal: User, session) -> bool:
     if target is None and not close:
         return False
     if target is not None:
-        show = grades.has_grades(session, target.id) if target.id is not None else False
-        text = render_profile(principal, target)
-        await message.answer(
-            text,
-            reply_markup=profile_keyboard(principal, target, show_grades=show),
-            entities=profile_entities(principal, target, text),
-        )
+        await _send_profile(message, principal, session, target, also=close)
         return True
-    lines = [f"- {user.full_name}" for user in close[:20]]
-    await message.answer("Several people match:\n" + "\n".join(lines))
+    # Buttons, not names: typing a name again would land on the same list.
+    await message.answer("Several people match:",
+                         reply_markup=people_keyboard(principal, close[:20]))
     return True
+
+
+async def _send_profile(message: Message, viewer: User, session, target: User,
+                        also: list[User] = ()) -> None:
+    """`target`'s profile, with a button under it for each row in `also`."""
+    show = grades.has_grades(session, target.id) if target.id is not None else False
+    text = render_profile(viewer, target)
+    markup = profile_keyboard(viewer, target, show_grades=show)
+    rows = (markup.inline_keyboard if markup else []) + [
+        person_row(viewer, user) for user in also]
+    await message.answer(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None,
+        entities=profile_entities(viewer, target, text),
+    )
+
+
+async def cb_person(cb: CallbackQuery, principal: User, session, arg: str):
+    """Open the profile a shortlist button names, as a new message.
+
+    A new message so the list stays for the next pick. Departed rows are
+    checked again: the search showed them to an admin, and a keyboard outlives
+    the role that drew it.
+    """
+    target = session.get(User, int(arg)) if arg.isdigit() else None
+    if target is None or (target.departed_at and not is_admin(principal)):
+        await cb.answer("Not found.", show_alert=True)
+        return
+    if not isinstance(cb.message, Message):
+        await cb.answer(EXPIRED, show_alert=True)
+        return
+    await _send_profile(cb.message, principal, session, target)
+    await cb.answer()
 
 
 async def cb_admin_open(cb: CallbackQuery, principal: User, session,
@@ -470,7 +501,6 @@ async def cmd_sync(message: Message, principal: User, session):
             )
             return
         for record in records:
-            record["primary_cohort"] = entry["cohort"]
             record["source_link"] = entry["link"]
         # A first-year joins a month before the university issues numbers, so
         # their row arrives with the column empty -- and an empty key is a row
@@ -488,6 +518,8 @@ async def cmd_sync(message: Message, principal: User, session):
                 ignored_roster_rows,
             )
         )
+    sheets.assign_cohorts([(cohort_name, records)
+                           for cohort_name, records, *_ in parsed_cohorts])
 
     try:
         rights_rows = await read_rows(settings.rights_sheet_id, sa,
@@ -537,7 +569,13 @@ async def cmd_sync(message: Message, principal: User, session):
         ignored_roster_rows,
     ) in parsed_cohorts:
         try:
-            sheets.upsert_users(session, records)
+            # A person on several rosters is written by their primary cohort
+            # alone; otherwise the cohort processed last would decide their
+            # fields and source link. The others still name them as present.
+            sheets.upsert_users(session, [
+                record for record in records
+                if record["primary_cohort"] == cohort_name
+            ])
             # After the upsert, so anyone the roster names again is already back
             # before the ones it dropped get settled.
             settled = sheets.settle_absentees(session, cohort_name, records,

@@ -15,6 +15,8 @@ from sqlalchemy import delete, select
 from jbcub_bot.core import identity
 from jbcub_bot.core.models import Grade, User
 from jbcub_bot.features.directory import gradebook
+from jbcub_bot.features.directory.sheets import cohort_start
+from jbcub_bot.features.directory.visibility import cohorts_of
 from jbcub_bot.features.directory.render import (
     GRADES_BACK_CALLBACK,
     GRADES_CALLBACK,
@@ -75,9 +77,10 @@ def sync_cohort(
         if count > 1
     ]
 
-    candidates = session.scalars(
-        select(User).where(User.primary_cohort == cohort)
-    ).all()
+    # A master student is still matched against the bachelor Gradebook they
+    # came from.
+    candidates = [user for user in session.scalars(select(User)).all()
+                  if cohort in cohorts_of(user)]
     by_name: dict[tuple[str, str], list[User]] = {}
     for user in candidates:
         by_name.setdefault((fold(user.last_name), fold(user.first_name)), []).append(user)
@@ -165,9 +168,14 @@ _ACTIVE_TERM_MARK = "📍"
 
 
 def load_grades(session, user_id: int) -> list[Grade]:
-    return list(session.scalars(
-        select(Grade).where(Grade.user_id == user_id).order_by(Grade.position)
-    ).all())
+    """A person's grades in screen order.
+
+    `position` is only an order within one Gradebook, so a person with grades
+    from two cohorts gets the older cohort's first.
+    """
+    rows = session.scalars(select(Grade).where(Grade.user_id == user_id)).all()
+    return sorted(rows, key=lambda grade: (cohort_start(grade.cohort),
+                                           grade.cohort, grade.position))
 
 
 def group_by_term(rows: list[Grade]) -> dict[str, list[Grade]]:

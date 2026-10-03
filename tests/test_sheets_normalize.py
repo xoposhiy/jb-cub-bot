@@ -243,3 +243,9 @@ def test_identity_mapping_enforces_required_fields():
     with pytest.raises(MappingError) as err:
         identity_mapping(["first_name", "role"], required=("handle_sheet",))
     assert "handle_sheet" in str(err.value)
+
+
+def test_every_cell_is_stripped():
+    rows = [["First", "Last"], ["Artem ", " Telkov"]]
+
+    assert normalize_rows(rows, {"first_name": "First", "last_name": "Last"})         == [{"first_name": "Artem", "last_name": "Telkov"}]

@@ -191,3 +191,17 @@ def test_replace_is_bounded_to_cohort(session):
     assert {grade.label for grade in session.query(Grade).all()} == {
         "Other", "Math", "Physics"
     }
+
+
+def test_a_member_whose_cohort_is_a_past_one_still_gets_its_grades(session):
+    session.add(User(last_name="Telkov", first_name="Artem",
+                     primary_cohort="2026", past_cohorts=["2024"]))
+    session.commit()
+
+    report = sync_cohort(
+        session, "2024", _rows(["Active", "Telkov", "Artem", "91%", "", "pass"]),
+        MAPPING, matching.fold,
+    )
+
+    assert report.matched_people == 1
+    assert report.no_roster_match == []

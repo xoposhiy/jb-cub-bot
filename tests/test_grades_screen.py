@@ -174,3 +174,18 @@ async def test_bootstrap_admin_and_back_to_profile(session):
         for button in row
     ]
     assert "dir:grades:30000001:-1" in data
+
+
+def test_grades_from_two_cohorts_come_older_cohort_first(session):
+    user = User(first_name="Artem", last_name="Telkov", primary_cohort="ast-2026")
+    session.add(user)
+    session.commit()
+    session.add_all([
+        Grade(user_id=user.id, cohort="ast-2026", term="Fall 2026",
+              label="ML", value="A", position=1),
+        Grade(user_id=user.id, cohort="sdt-2024", term="Fall 2024",
+              label="Math", value="B", position=5),
+    ])
+    session.commit()
+
+    assert [g.term for g in grades.load_grades(session, user.id)] ==         ["Fall 2024", "Fall 2026"]

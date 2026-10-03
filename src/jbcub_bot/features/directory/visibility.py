@@ -95,7 +95,7 @@ def editable_column(spec: FieldSpec) -> str:
     return spec.sources[0] if spec.sources else spec.name
 
 
-def _cohorts(u: User) -> set:
+def cohorts_of(u: User) -> set:
     cohorts = set(u.past_cohorts or [])
     if u.primary_cohort:
         cohorts.add(u.primary_cohort)
@@ -103,7 +103,7 @@ def _cohorts(u: User) -> set:
 
 
 def are_cohort_mates(a: User, b: User) -> bool:
-    return bool(_cohorts(a) & _cohorts(b))
+    return bool(cohorts_of(a) & cohorts_of(b))
 
 
 def field_value(user: User, name: str, *, merged: bool = True):

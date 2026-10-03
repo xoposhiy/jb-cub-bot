@@ -8,7 +8,7 @@ that text which is not a name gets the fallback instead of a wrong person.
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from aiogram.types import Chat, Message, Update
+from aiogram.types import CallbackQuery, Chat, Message, Update
 from aiogram.types import User as TgUser
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -82,13 +82,17 @@ async def test_a_clear_winner_opens_a_profile():
     assert "Several people match" not in fake_bot.sent[0].text
 
 
-async def test_a_tie_lists_everyone_close():
+def _labels(method) -> list[str]:
+    return [button.text for row in method.reply_markup.inline_keyboard
+            for button in row]
+
+
+async def test_a_tie_lists_everyone_close_as_buttons():
     fake_bot = await _say("Михаил")
-    text = fake_bot.sent[0].text
-    assert text.startswith("Several people match:")
-    assert "Mikhail Redko" in text
-    assert "Mikhail Efremenko" in text
-    assert "Iaroslav Belozerov" not in text
+    assert fake_bot.sent[0].text == "Several people match:"
+    assert _labels(fake_bot.sent[0]) == [
+        "Mikhail Efremenko · 2024", "Mikhail Redko · 2024",
+    ]
 
 
 async def test_text_that_is_not_a_name_gets_the_fallback():
@@ -128,3 +132,78 @@ async def test_a_found_name_is_never_put_to_the_agent(monkeypatch):
 
     assert "Iaroslav Belozerov" in fake_bot.sent[0].text
     assert asked == []
+
+
+def _callback_update(fake_bot, data: str, telegram_id=222, update_id=2) -> Update:
+    msg = Message(
+        message_id=1, date=datetime.now(timezone.utc),
+        chat=Chat(id=telegram_id, type="private"), text="Several people match:",
+    ).as_(fake_bot)
+    callback = CallbackQuery(
+        id="1", chat_instance="1", data=data, message=msg,
+        from_user=TgUser(id=telegram_id, is_bot=False, first_name="tg"),
+    ).as_(fake_bot)
+    return Update(update_id=update_id, callback_query=callback).as_(fake_bot)
+
+
+def _seed_a_returned_person(factory):
+    """One person twice: the old row departed, the new one active."""
+    setup = factory()
+    setup.add_all([
+        User(last_name="Egorov", first_name="Egor", telegram_id=333,
+             role=Role.ADMIN, matriculation="30009999"),
+        User(last_name="Pliasovskikh", first_name="Milan", primary_cohort="2026",
+             matriculation="not in CN", departed_at="2026-08-28"),
+        User(last_name="Pliasovskikh", first_name="Milan", primary_cohort="2026",
+             matriculation="30010811"),
+    ])
+    setup.commit()
+    setup.close()
+
+
+async def test_an_admin_gets_the_active_row_with_the_departed_one_beneath():
+    factory = _session_factory()
+    _seed(factory)
+    _seed_a_returned_person(factory)
+    dp = build_dispatcher(session_factory=factory)
+    fake_bot = FakeBot()
+
+    await dp.feed_update(fake_bot, _message_update(fake_bot, "Milan", 333),
+                         dispatcher=dp)
+
+    [profile] = fake_bot.sent
+    assert "Departed" not in profile.text
+    assert _labels(profile)[-1] ==         "Milan Pliasovskikh · 2026 · departed 2026-08-28"
+
+
+async def test_a_shortlist_button_opens_that_profile():
+    factory = _session_factory()
+    _seed(factory)
+    dp = build_dispatcher(session_factory=factory)
+    fake_bot = FakeBot()
+    await dp.feed_update(fake_bot, _message_update(fake_bot, "Михаил"),
+                         dispatcher=dp)
+    data = fake_bot.sent[0].reply_markup.inline_keyboard[1][0].callback_data
+
+    await dp.feed_update(fake_bot, _callback_update(fake_bot, data),
+                         dispatcher=dp)
+
+    assert "Mikhail Redko" in fake_bot.sent[1].text
+
+
+async def test_a_student_cannot_open_a_departed_row_by_its_button():
+    factory = _session_factory()
+    _seed(factory)
+    _seed_a_returned_person(factory)
+    dp = build_dispatcher(session_factory=factory)
+    fake_bot = FakeBot()
+    setup = factory()
+    departed = setup.query(User).filter_by(matriculation="not in CN").one().id
+    setup.close()
+
+    await dp.feed_update(
+        fake_bot, _callback_update(fake_bot, f"dir:person:{departed}"),
+        dispatcher=dp)
+
+    [answer] = fake_bot.sent
+    assert (answer.text, answer.show_alert) == ("Not found.", True)

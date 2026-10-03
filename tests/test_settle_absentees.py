@@ -163,3 +163,20 @@ def test_the_prefix_is_matched_whatever_case_the_sheet_used(session):
 
     assert len(report.removed) == 1
     assert session.query(User).count() == 0
+
+
+def test_a_row_keyed_by_a_typed_placeholder_is_removed_once_the_number_arrives(session):
+    # An admin typed "not in CN" where the number goes; marking that row
+    # departed would leave it beside the real one for good.
+    session.add_all([
+        User(matriculation="not in CN", first_name="Milan",
+             last_name="Pliasovskikh", primary_cohort="2024"),
+        User(matriculation="1", first_name="Milan", last_name="Pliasovskikh",
+             primary_cohort="2024"),
+    ])
+    session.commit()
+
+    report = _settle(session)
+
+    assert report.marked == []
+    assert [u.matriculation for u in session.query(User).all()] == ["1"]

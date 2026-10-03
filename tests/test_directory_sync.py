@@ -1713,3 +1713,37 @@ async def test_sync_stores_cohort_and_rights_source_links(session, monkeypatch):
     )
     assert session.query(User).filter_by(last_name="Ivanov").one().source_link == "AAA"
     assert session.query(User).filter_by(last_name="Sidorov").one().source_link == "RIGHTS"
+
+
+async def test_a_person_on_two_rosters_is_one_row_owned_by_the_newer_cohort(
+        session, monkeypatch):
+    # A bachelor who went on to a master's: both rosters carry one number.
+    def fake_fetch(sheet_id, sa, range_="A:Z"):
+        if range_ == "Cohorts!A:Z":
+            return [COHORTS_HEADER, _cohorts_row("ast-2026", "MMM"),
+                    _cohorts_row("sdt-2024", "BBB")]
+        if sheet_id == "MMM" and range_ == "A:Z":
+            return [COHORT_HEADER, _cohort_row("30000001", "Telkov", "Artem ", "tk")]
+        if sheet_id == "BBB" and range_ == "A:Z":
+            return [COHORT_HEADER, _cohort_row("30000001", "Telkov", "Artem", "tk"),
+                    _cohort_row("30000002", "Ivanov", "Ivan", "ivan")]
+        if sheet_id == "BBB":
+            return _gradebook_rows(["Telkov", "Artem", "A"])
+        if range_ == "Rights!A:Z":
+            return [RIGHTS_HEADER]
+        return []
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.fetch_rows", fake_fetch)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.get_settings", _settings)
+    monkeypatch.setattr("jbcub_bot.features.directory.handlers.build_credentials",
+                        lambda *a: None)
+    msg = SimpleNamespace(answer=AsyncMock())
+
+    for _ in range(2):
+        await cmd_sync(msg, principal=User(last_name="A", role=Role.ADMIN),
+                       session=session)
+
+    u = session.query(User).filter_by(matriculation="30000001").one()
+    assert (u.primary_cohort, u.past_cohorts, u.source_link, u.departed_at) ==         ("ast-2026", ["sdt-2024"], "MMM", None)
+    assert u.first_name == "Artem"
+    assert [(g.cohort, g.value) for g in
+            session.query(Grade).filter_by(user_id=u.id)] == [("sdt-2024", "A")]
