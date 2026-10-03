@@ -55,3 +55,62 @@ def test_build_credentials_falls_back_to_file(monkeypatch):
     assert result == "creds-from-file"
     assert captured["path"] == "sa.json"
     assert captured["scopes"] == sheets_client._SCOPES
+
+
+class _FakeRequest:
+    def __init__(self, captured, values):
+        self._captured = captured
+        self._values = values
+
+    def execute(self, num_retries=0):
+        self._captured["num_retries"] = num_retries
+        return {"values": self._values} if self._values is not None else {}
+
+
+class _FakeValues:
+    def __init__(self, captured, values):
+        self._captured = captured
+        self._values = values
+
+    def get(self, spreadsheetId=None, range=None):
+        self._captured["sheet_id"] = spreadsheetId
+        self._captured["range"] = range
+        return _FakeRequest(self._captured, self._values)
+
+
+class _FakeService:
+    def __init__(self, captured, values):
+        self._captured = captured
+        self._values = values
+
+    def spreadsheets(self):
+        return self
+
+    def values(self):
+        return _FakeValues(self._captured, self._values)
+
+
+def _patch_build(monkeypatch, captured, values):
+    monkeypatch.setattr(
+        sheets_client, "build", lambda *a, **k: _FakeService(captured, values)
+    )
+
+
+def test_fetch_rows_retries_transient_failures(monkeypatch):
+    captured = {}
+    _patch_build(monkeypatch, captured, [["a"]])
+
+    rows = sheets_client.fetch_rows("sheet-1", "creds", "Cohorts!A:Z")
+
+    assert rows == [["a"]]
+    assert captured["num_retries"] == 2
+    assert captured["sheet_id"] == "sheet-1"
+    assert captured["range"] == "Cohorts!A:Z"
+
+
+def test_fetch_rows_returns_empty_list_for_an_empty_tab(monkeypatch):
+    captured = {}
+    _patch_build(monkeypatch, captured, None)
+
+    assert sheets_client.fetch_rows("sheet-1", "creds") == []
+    assert captured["range"] == "A:Z"

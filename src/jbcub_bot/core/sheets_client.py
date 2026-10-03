@@ -24,6 +24,14 @@ def build_credentials(credentials_file: str, credentials_json: str) -> Credentia
     return Credentials.from_service_account_file(credentials_file, scopes=_SCOPES)
 
 
+# Sheets answers 503 now and then, and one /sync makes a read per cohort, so
+# one transient error would abort it. Two retries cost at most ~6s of backoff --
+# far inside the caller's read timeout. Only transient failures are retried
+# (5xx, 429, rate-limit 403s, dropped connections), so a missing tab or a
+# revoked service account still fails at once.
+_NUM_RETRIES = 2
+
+
 def fetch_rows(
     sheet_id: str, credentials: Credentials, range_: str = "A:Z"
 ) -> list[list[str]]:
@@ -32,6 +40,6 @@ def fetch_rows(
         service.spreadsheets()
         .values()
         .get(spreadsheetId=sheet_id, range=range_)
-        .execute()
+        .execute(num_retries=_NUM_RETRIES)
     )
     return result.get("values", [])
